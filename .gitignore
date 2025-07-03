@@ -1,0 +1,7 @@
+.git
+.venv
+.pytest_cache
+**/__pycache__/
+**/__marimo__/
+**/*.egg-info/
+*.pyc

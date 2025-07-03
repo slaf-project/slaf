@@ -1,0 +1,472 @@
+{
+  "pbmc3k_processed": {
+    "scanpy_preprocessing": [
+      {
+        "scenario_type": "scanpy_preprocessing",
+        "scenario_description": "Calculate QC metrics",
+        "h5ad_total_time": 233.95204544067383,
+        "h5ad_load_time": 46.85521125793457,
+        "h5ad_query_time": 187.09683418273926,
+        "slaf_total_time": 70.49322128295898,
+        "slaf_init_time": 15.2130126953125,
+        "slaf_query_time": 55.280208587646484,
+        "total_speedup": 3.318787837792133,
+        "query_speedup": 3.3845175147285884,
+        "load_speedup": 3.079942953861585,
+        "h5ad_result_size": [
+          2695,
+          1863
+        ],
+        "slaf_result_size": 2,
+        "results_match": false,
+        "h5ad_load_memory_mb": 3.8575258255004883,
+        "h5ad_query_memory_mb": 3.991948127746582,
+        "h5ad_total_memory_mb": 7.84947395324707,
+        "slaf_load_memory_mb": 9.1552734375e-05,
+        "slaf_query_memory_mb": 5.340576171875e-05,
+        "slaf_total_memory_mb": 0.00014495849609375
+      },
+      {
+        "scenario_type": "scanpy_preprocessing",
+        "scenario_description": "Filter cells (min_counts=500, min_genes=200)",
+        "h5ad_total_time": 45.82691192626953,
+        "h5ad_load_time": 37.338972091674805,
+        "h5ad_query_time": 8.487939834594727,
+        "slaf_total_time": 36.42559051513672,
+        "slaf_init_time": 12.840032577514648,
+        "slaf_query_time": 23.58555793762207,
+        "total_speedup": 1.2580966095038617,
+        "query_speedup": 0.3598786959818044,
+        "load_speedup": 2.9080122551295142,
+        "h5ad_result_size": [
+          2,
+          1863
+        ],
+        "slaf_result_size": [
+          2695,
+          1863
+        ],
+        "results_match": false,
+        "h5ad_load_memory_mb": 3.8575258255004883,
+        "h5ad_query_memory_mb": 0.3847084045410156,
+        "h5ad_total_memory_mb": 4.242234230041504,
+        "slaf_load_memory_mb": 9.1552734375e-05,
+        "slaf_query_memory_mb": 4.57763671875e-05,
+        "slaf_total_memory_mb": 0.0001373291015625
+      },
+      {
+        "scenario_type": "scanpy_preprocessing",
+        "scenario_description": "Filter cells (min_counts=1000, min_genes=500)",
+        "h5ad_total_time": 40.37594795227051,
+        "h5ad_load_time": 35.11214256286621,
+        "h5ad_query_time": 5.263805389404297,
+        "slaf_total_time": 31.838178634643555,
+        "slaf_init_time": 14.01209831237793,
+        "slaf_query_time": 17.826080322265625,
+        "total_speedup": 1.2681613611005025,
+        "query_speedup": 0.29528675369141877,
+        "load_speedup": 2.5058447193343656,
+        "h5ad_result_size": [
+          0,
+          1863
+        ],
+        "slaf_result_size": null,
+        "results_match": false,
+        "h5ad_load_memory_mb": 3.8575258255004883,
+        "h5ad_query_memory_mb": 0.37743186950683594,
+        "h5ad_total_memory_mb": 4.234957695007324,
+        "slaf_load_memory_mb": 9.1552734375e-05,
+        "slaf_query_memory_mb": 0.0,
+        "slaf_total_memory_mb": 9.1552734375e-05
+      },
+      {
+        "scenario_type": "scanpy_preprocessing",
+        "scenario_description": "Filter cells (max_counts=5000, max_genes=2500)",
+        "h5ad_total_time": 66.65611267089844,
+        "h5ad_load_time": 37.5370979309082,
+        "h5ad_query_time": 29.119014739990234,
+        "slaf_total_time": 38.220882415771484,
+        "slaf_init_time": 13.408899307250977,
+        "slaf_query_time": 24.811983108520508,
+        "total_speedup": 1.7439710560788473,
+        "query_speedup": 1.1735867549414332,
+        "load_speedup": 2.7994167955761813,
+        "h5ad_result_size": [
+          2695,
+          1863
+        ],
+        "slaf_result_size": [
+          2695,
+          1863
+        ],
+        "results_match": true,
+        "h5ad_load_memory_mb": 3.8575258255004883,
+        "h5ad_query_memory_mb": 3.8675546646118164,
+        "h5ad_total_memory_mb": 7.725080490112305,
+        "slaf_load_memory_mb": 9.1552734375e-05,
+        "slaf_query_memory_mb": 4.57763671875e-05,
+        "slaf_total_memory_mb": 0.0001373291015625
+      },
+      {
+        "scenario_type": "scanpy_preprocessing",
+        "scenario_description": "Filter genes (min_counts=10, min_cells=5)",
+        "h5ad_total_time": 59.162139892578125,
+        "h5ad_load_time": 42.272090911865234,
+        "h5ad_query_time": 16.89004898071289,
+        "slaf_total_time": 50.0338077545166,
+        "slaf_init_time": 18.16391944885254,
+        "slaf_query_time": 31.869888305664062,
+        "total_speedup": 1.1824432828068636,
+        "query_speedup": 0.52996887904722,
+        "load_speedup": 2.3272560215265474,
+        "h5ad_result_size": [
+          2695,
+          1842
+        ],
+        "slaf_result_size": [
+          2695,
+          1863
+        ],
+        "results_match": false,
+        "h5ad_load_memory_mb": 3.8575258255004883,
+        "h5ad_query_memory_mb": 3.860116958618164,
+        "h5ad_total_memory_mb": 7.717642784118652,
+        "slaf_load_memory_mb": 9.1552734375e-05,
+        "slaf_query_memory_mb": 4.57763671875e-05,
+        "slaf_total_memory_mb": 0.0001373291015625
+      },
+      {
+        "scenario_type": "scanpy_preprocessing",
+        "scenario_description": "Filter genes (min_counts=50, min_cells=10)",
+        "h5ad_total_time": 50.09603500366211,
+        "h5ad_load_time": 36.76009178161621,
+        "h5ad_query_time": 13.335943222045898,
+        "slaf_total_time": 32.9279899597168,
+        "slaf_init_time": 13.396024703979492,
+        "slaf_query_time": 19.531965255737305,
+        "total_speedup": 1.5213815074940265,
+        "query_speedup": 0.6827752889908817,
+        "load_speedup": 2.7441045081602504,
+        "h5ad_result_size": [
+          2695,
+          1504
+        ],
+        "slaf_result_size": [
+          2695,
+          1863
+        ],
+        "results_match": false,
+        "h5ad_load_memory_mb": 3.8575258255004883,
+        "h5ad_query_memory_mb": 3.735690116882324,
+        "h5ad_total_memory_mb": 7.5932159423828125,
+        "slaf_load_memory_mb": 9.1552734375e-05,
+        "slaf_query_memory_mb": 4.57763671875e-05,
+        "slaf_total_memory_mb": 0.0001373291015625
+      },
+      {
+        "scenario_type": "scanpy_preprocessing",
+        "scenario_description": "Normalize total (target_sum=1e4)",
+        "h5ad_total_time": 45.1204776763916,
+        "h5ad_load_time": 36.48829460144043,
+        "h5ad_query_time": 8.632183074951172,
+        "slaf_total_time": 103.09505462646484,
+        "slaf_init_time": 12.588024139404297,
+        "slaf_query_time": 90.50703048706055,
+        "total_speedup": 0.4376589918873667,
+        "query_speedup": 0.09537582913169694,
+        "load_speedup": 2.8986514640706087,
+        "h5ad_result_size": [
+          2695,
+          1863
+        ],
+        "slaf_result_size": [
+          2695,
+          1863
+        ],
+        "results_match": true,
+        "h5ad_load_memory_mb": 3.8575258255004883,
+        "h5ad_query_memory_mb": 3.857541084289551,
+        "h5ad_total_memory_mb": 7.715066909790039,
+        "slaf_load_memory_mb": 9.1552734375e-05,
+        "slaf_query_memory_mb": 4.57763671875e-05,
+        "slaf_total_memory_mb": 0.0001373291015625
+      },
+      {
+        "scenario_type": "scanpy_preprocessing",
+        "scenario_description": "Normalize total (target_sum=1e6)",
+        "h5ad_total_time": 35.80904006958008,
+        "h5ad_load_time": 34.995079040527344,
+        "h5ad_query_time": 0.8139610290527344,
+        "slaf_total_time": 102.38814353942871,
+        "slaf_init_time": 13.019323348999023,
+        "slaf_query_time": 89.36882019042969,
+        "total_speedup": 0.34973815162290106,
+        "query_speedup": 0.009107886031373386,
+        "load_speedup": 2.687933781383339,
+        "h5ad_result_size": [
+          2695,
+          1863
+        ],
+        "slaf_result_size": [
+          2695,
+          1863
+        ],
+        "results_match": true,
+        "h5ad_load_memory_mb": 3.8575258255004883,
+        "h5ad_query_memory_mb": 3.857541084289551,
+        "h5ad_total_memory_mb": 7.715066909790039,
+        "slaf_load_memory_mb": 9.1552734375e-05,
+        "slaf_query_memory_mb": 4.57763671875e-05,
+        "slaf_total_memory_mb": 0.0001373291015625
+      },
+      {
+        "scenario_type": "scanpy_preprocessing",
+        "scenario_description": "Log1p transformation",
+        "h5ad_total_time": 37.63103485107422,
+        "h5ad_load_time": 34.44719314575195,
+        "h5ad_query_time": 3.1838417053222656,
+        "slaf_total_time": 13.267993927001953,
+        "slaf_init_time": 13.260841369628906,
+        "slaf_query_time": 0.007152557373046875,
+        "total_speedup": 2.8362264150943397,
+        "query_speedup": 445.1333333333333,
+        "load_speedup": 2.5976627112549444,
+        "h5ad_result_size": null,
+        "slaf_result_size": [
+          2695,
+          1863
+        ],
+        "results_match": false,
+        "h5ad_load_memory_mb": 3.8575258255004883,
+        "h5ad_query_memory_mb": 1.52587890625e-05,
+        "h5ad_total_memory_mb": 3.857541084289551,
+        "slaf_load_memory_mb": 9.1552734375e-05,
+        "slaf_query_memory_mb": 4.57763671875e-05,
+        "slaf_total_memory_mb": 0.0001373291015625
+      },
+      {
+        "scenario_type": "scanpy_preprocessing",
+        "scenario_description": "Find highly variable genes",
+        "h5ad_total_time": 46.46778106689453,
+        "h5ad_load_time": 34.17491912841797,
+        "h5ad_query_time": 12.292861938476562,
+        "slaf_total_time": 37.46914863586426,
+        "slaf_init_time": 12.427091598510742,
+        "slaf_query_time": 25.042057037353516,
+        "total_speedup": 1.2401611127725778,
+        "query_speedup": 0.490888664622884,
+        "load_speedup": 2.750033574429714,
+        "h5ad_result_size": [
+          2695,
+          1863
+        ],
+        "slaf_result_size": [
+          1863,
+          5
+        ],
+        "results_match": false,
+        "h5ad_load_memory_mb": 3.8575258255004883,
+        "h5ad_query_memory_mb": 3.857541084289551,
+        "h5ad_total_memory_mb": 7.715066909790039,
+        "slaf_load_memory_mb": 9.1552734375e-05,
+        "slaf_query_memory_mb": 0.15593624114990234,
+        "slaf_total_memory_mb": 0.15602779388427734
+      },
+      {
+        "scenario_type": "scanpy_preprocessing",
+        "scenario_description": "Find top 2000 highly variable genes",
+        "h5ad_total_time": 42.22512245178223,
+        "h5ad_load_time": 34.20400619506836,
+        "h5ad_query_time": 8.021116256713867,
+        "slaf_total_time": 36.28802299499512,
+        "slaf_init_time": 12.620925903320312,
+        "slaf_query_time": 23.667097091674805,
+        "total_speedup": 1.1636104413185022,
+        "query_speedup": 0.3389142413893842,
+        "load_speedup": 2.710102765603748,
+        "h5ad_result_size": [
+          2695,
+          1863
+        ],
+        "slaf_result_size": [
+          1863,
+          5
+        ],
+        "results_match": false,
+        "h5ad_load_memory_mb": 3.8575258255004883,
+        "h5ad_query_memory_mb": 3.857541084289551,
+        "h5ad_total_memory_mb": 7.715066909790039,
+        "slaf_load_memory_mb": 9.1552734375e-05,
+        "slaf_query_memory_mb": 0.15593624114990234,
+        "slaf_total_memory_mb": 0.15602779388427734
+      },
+      {
+        "scenario_type": "scanpy_preprocessing",
+        "scenario_description": "QC metrics + cell filtering + gene filtering",
+        "h5ad_total_time": 61.34915351867676,
+        "h5ad_load_time": 37.12320327758789,
+        "h5ad_query_time": 24.225950241088867,
+        "slaf_total_time": 189.73684310913086,
+        "slaf_init_time": 12.594938278198242,
+        "slaf_query_time": 177.14190483093262,
+        "total_speedup": 0.3233381166956098,
+        "query_speedup": 0.13676013173850957,
+        "load_speedup": 2.9474700437276393,
+        "h5ad_result_size": [
+          2,
+          0
+        ],
+        "slaf_result_size": [
+          2695,
+          1863
+        ],
+        "results_match": false,
+        "h5ad_load_memory_mb": 3.8575258255004883,
+        "h5ad_query_memory_mb": 0.0009250640869140625,
+        "h5ad_total_memory_mb": 3.8584508895874023,
+        "slaf_load_memory_mb": 9.1552734375e-05,
+        "slaf_query_memory_mb": 4.57763671875e-05,
+        "slaf_total_memory_mb": 0.0001373291015625
+      },
+      {
+        "scenario_type": "scanpy_preprocessing",
+        "scenario_description": "Normalize total + slice 100x50 submatrix (lazy)",
+        "h5ad_total_time": 38.725852966308594,
+        "h5ad_load_time": 36.49163246154785,
+        "h5ad_query_time": 2.234220504760742,
+        "slaf_total_time": 102.01430320739746,
+        "slaf_init_time": 13.135194778442383,
+        "slaf_query_time": 88.87910842895508,
+        "total_speedup": 0.3796119931102017,
+        "query_speedup": 0.025137746589195945,
+        "load_speedup": 2.7781569346377943,
+        "h5ad_result_size": [
+          100,
+          50
+        ],
+        "slaf_result_size": [
+          100,
+          50
+        ],
+        "results_match": true,
+        "h5ad_load_memory_mb": 3.8575258255004883,
+        "h5ad_query_memory_mb": 0.003574371337890625,
+        "h5ad_total_memory_mb": 3.861100196838379,
+        "slaf_load_memory_mb": 9.1552734375e-05,
+        "slaf_query_memory_mb": 4.57763671875e-05,
+        "slaf_total_memory_mb": 0.0001373291015625
+      },
+      {
+        "scenario_type": "scanpy_preprocessing",
+        "scenario_description": "Log1p + slice 200x100 submatrix (lazy)",
+        "h5ad_total_time": 39.25919532775879,
+        "h5ad_load_time": 34.590959548950195,
+        "h5ad_query_time": 4.668235778808594,
+        "slaf_total_time": 12.82501220703125,
+        "slaf_init_time": 12.769937515258789,
+        "slaf_query_time": 0.05507469177246094,
+        "total_speedup": 3.061142920880428,
+        "query_speedup": 84.76190476190476,
+        "load_speedup": 2.7087806426317655,
+        "h5ad_result_size": [
+          200,
+          100
+        ],
+        "slaf_result_size": [
+          200,
+          100
+        ],
+        "results_match": true,
+        "h5ad_load_memory_mb": 3.8575258255004883,
+        "h5ad_query_memory_mb": 0.012996673583984375,
+        "h5ad_total_memory_mb": 3.8705224990844727,
+        "slaf_load_memory_mb": 9.1552734375e-05,
+        "slaf_query_memory_mb": 4.57763671875e-05,
+        "slaf_total_memory_mb": 0.0001373291015625
+      },
+      {
+        "scenario_type": "scanpy_preprocessing",
+        "scenario_description": "Normalize + Log1p + slice 500x250 submatrix (lazy)",
+        "h5ad_total_time": 40.36307334899902,
+        "h5ad_load_time": 34.690141677856445,
+        "h5ad_query_time": 5.672931671142578,
+        "slaf_total_time": 101.84717178344727,
+        "slaf_init_time": 13.433218002319336,
+        "slaf_query_time": 88.41395378112793,
+        "total_speedup": 0.3963102032408036,
+        "query_speedup": 0.06416330713120391,
+        "load_speedup": 2.582414851889321,
+        "h5ad_result_size": [
+          500,
+          250
+        ],
+        "slaf_result_size": [
+          500,
+          250
+        ],
+        "results_match": true,
+        "h5ad_load_memory_mb": 3.8575258255004883,
+        "h5ad_query_memory_mb": 0.08915328979492188,
+        "h5ad_total_memory_mb": 3.94667911529541,
+        "slaf_load_memory_mb": 9.1552734375e-05,
+        "slaf_query_memory_mb": 4.57763671875e-05,
+        "slaf_total_memory_mb": 0.0001373291015625
+      },
+      {
+        "scenario_type": "scanpy_preprocessing",
+        "scenario_description": "Normalize + Log1p + mean per gene (lazy)",
+        "h5ad_total_time": 39.10183906555176,
+        "h5ad_load_time": 34.33394432067871,
+        "h5ad_query_time": 4.767894744873047,
+        "slaf_total_time": 108.12950134277344,
+        "slaf_init_time": 12.488842010498047,
+        "slaf_query_time": 95.64065933227539,
+        "total_speedup": 0.3616204512180064,
+        "query_speedup": 0.049852173522857014,
+        "load_speedup": 2.749169562063304,
+        "h5ad_result_size": [
+          1,
+          1863
+        ],
+        "slaf_result_size": [
+          1,
+          1863
+        ],
+        "results_match": true,
+        "h5ad_load_memory_mb": 3.8575258255004883,
+        "h5ad_query_memory_mb": 0.007106781005859375,
+        "h5ad_total_memory_mb": 3.8646326065063477,
+        "slaf_load_memory_mb": 9.1552734375e-05,
+        "slaf_query_memory_mb": 0.01421356201171875,
+        "slaf_total_memory_mb": 0.01430511474609375
+      },
+      {
+        "scenario_type": "scanpy_preprocessing",
+        "scenario_description": "Normalize + Log1p + variance per cell (lazy)",
+        "h5ad_total_time": 38.336992263793945,
+        "h5ad_load_time": 34.22093391418457,
+        "h5ad_query_time": 4.116058349609375,
+        "slaf_total_time": 111.44900321960449,
+        "slaf_init_time": 12.963056564331055,
+        "slaf_query_time": 98.48594665527344,
+        "total_speedup": 0.34398685637639026,
+        "query_speedup": 0.04179335721894064,
+        "load_speedup": 2.639881554505159,
+        "h5ad_result_size": [
+          1
+        ],
+        "slaf_result_size": [
+          2695,
+          1
+        ],
+        "results_match": false,
+        "h5ad_load_memory_mb": 3.8575258255004883,
+        "h5ad_query_memory_mb": 7.62939453125e-06,
+        "h5ad_total_memory_mb": 3.8575334548950195,
+        "slaf_load_memory_mb": 9.1552734375e-05,
+        "slaf_query_memory_mb": 0.02056121826171875,
+        "slaf_total_memory_mb": 0.02065277099609375
+      }
+    ]
+  }
+}
