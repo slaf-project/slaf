@@ -37,6 +37,8 @@ dependencies = [
 dev = [
     # Development tools
     "pytest>=8.0.0",
+    "ruff>=0.3.0",
+    "mypy>=1.8.0",
 
     # Marimo for demo
     "marimo>=0.14.0",
@@ -100,4 +102,4 @@ ignore = [
 "__init__.py" = ["F401"]
 
 [dependency-groups]
-dev = ["pre-commit>=4.2.0"]
+dev = ["pre-commit>=4.2.0", "ruff>=0.3.0", "mypy>=1.8.0"]
