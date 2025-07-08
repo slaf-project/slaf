@@ -33,6 +33,20 @@ class SLAFConverter:
         adata = sc.read_h5ad(h5ad_path)
         print(f"Loaded: {adata.n_obs} cells × {adata.n_vars} genes")
 
+        # Convert the loaded AnnData object
+        self._convert_anndata(adata, output_path)
+
+    def convert_anndata(self, adata, output_path: str):
+        """Convert AnnData object to SLAF format with COO-style expression table"""
+        print("Converting AnnData object to SLAF format...")
+        print(f"Optimizations: int_keys={self.use_integer_keys}")
+        print(f"Loaded: {adata.n_obs} cells × {adata.n_vars} genes")
+
+        # Convert the AnnData object
+        self._convert_anndata(adata, output_path)
+
+    def _convert_anndata(self, adata, output_path: str):
+        """Internal method to convert AnnData object to SLAF format"""
         # Create output directory
         output_path_obj = Path(output_path)
         output_path_obj.mkdir(exist_ok=True)

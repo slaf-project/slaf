@@ -1,3 +1,4 @@
+import duckdb
 import pandas as pd
 import pytest
 
@@ -219,7 +220,7 @@ class TestSLAFArray:
     def test_error_handling(self, tiny_slaf):
         """Test error handling for invalid operations"""
 
-        with pytest.raises(KeyError):
+        with pytest.raises(duckdb.CatalogException):
             tiny_slaf.query("SELECT * FROM nonexistent_table")
 
         with pytest.raises(ValueError):

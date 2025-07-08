@@ -181,7 +181,7 @@ class SLAFTokenizer:
                 value,
                 ROW_NUMBER() OVER (
                     PARTITION BY cell_id
-                    ORDER BY value DESC
+                    ORDER BY value DESC, gene_id ASC
                 ) as gene_rank
             FROM expression
             WHERE cell_integer_id BETWEEN {start} AND {end - 1}
@@ -197,6 +197,7 @@ class SLAFTokenizer:
             array_agg(value ORDER BY gene_rank) as expr_sequence
         FROM limited_genes
         GROUP BY cell_id
+        ORDER BY cell_id
         """
 
         batch_data = self.slaf_array.query(sql)
@@ -257,7 +258,7 @@ class SLAFTokenizer:
                 ) as expr_bin,
                 ROW_NUMBER() OVER (
                     PARTITION BY cell_id
-                    ORDER BY value DESC
+                    ORDER BY value DESC, gene_id ASC
                 ) as gene_rank
             FROM expression
             WHERE cell_integer_id BETWEEN {start} AND {end - 1}
@@ -269,6 +270,7 @@ class SLAFTokenizer:
         FROM ranked_genes
         WHERE gene_rank <= {max_genes}
         GROUP BY cell_id
+        ORDER BY cell_id
         """
 
         batch_data = self.slaf_array.query(sql)
@@ -378,7 +380,7 @@ class SLAFTokenizer:
                 value,
                 RANK() OVER (
                     PARTITION BY cell_id
-                    ORDER BY value DESC
+                    ORDER BY value DESC, gene_id ASC
                 ) as expression_rank
             FROM expression
             WHERE cell_integer_id BETWEEN {start} AND {end - 1}
@@ -389,6 +391,7 @@ class SLAFTokenizer:
         FROM ranked_expression
         WHERE expression_rank <= {max_genes}
         GROUP BY cell_id
+        ORDER BY cell_id
         """
 
         batch_data = self.slaf_array.query(sql)
@@ -440,7 +443,7 @@ class SLAFTokenizer:
                 value,
                 RANK() OVER (
                     PARTITION BY cell_id
-                    ORDER BY value DESC
+                    ORDER BY value DESC, gene_id ASC
                 ) as final_rank
             FROM cell_percentiles
             WHERE expr_percentile >= {min_percentile}
@@ -451,6 +454,7 @@ class SLAFTokenizer:
         FROM filtered_genes
         WHERE final_rank <= {max_genes}
         GROUP BY cell_id
+        ORDER BY cell_id
         """
 
         batch_data = self.slaf_array.query(sql)
