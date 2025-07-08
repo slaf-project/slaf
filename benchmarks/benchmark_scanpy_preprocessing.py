@@ -1,16 +1,17 @@
-import scanpy as sc
 import time
+
 import numpy as np
+import scanpy as sc
+
+# Import shared utilities
+from benchmark_utils import (
+    clear_caches,
+    get_object_memory_usage,
+)
 
 from slaf.core.slaf import SLAFArray
 from slaf.integrations.anndata import LazyAnnData
 from slaf.integrations.scanpy import pp
-
-# Import shared utilities
-from benchmark_utils import (
-    get_object_memory_usage,
-    clear_caches,
-)
 
 
 def demo_realistic_scanpy_preprocessing():

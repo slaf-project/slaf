@@ -2,7 +2,7 @@
 
 ## Interactive Example
 
-<iframe src="01-getting-started.html" width="100%" height="800px" style="border:1px solid #ccc; border-radius:8px;"></iframe>
+<iframe src="../01-getting-started.html" width="100%" height="800px" style="border:1px solid #ccc; border-radius:8px;"></iframe>
 
 This page shows how to work with the SLAF getting started examples.
 

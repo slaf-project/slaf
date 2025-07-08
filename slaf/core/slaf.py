@@ -1,17 +1,18 @@
-import lance
-import duckdb
-import pandas as pd
-from pathlib import Path
 import json
-from typing import List, Union
-import numpy as np
+from pathlib import Path
+from typing import Any
+
+import duckdb
+import lance
+import pandas as pd
+
 from .query_optimizer import QueryOptimizer
 
 
 class SLAFArray:
     """SLAF (Sparse Lazy Array Format) for efficient single-cell data storage and querying"""
 
-    def __init__(self, slaf_path: Union[str, Path]):
+    def __init__(self, slaf_path: str | Path):
         """
         Initialize SLAF array from path
 
@@ -25,7 +26,7 @@ class SLAFArray:
         if not config_path.exists():
             raise FileNotFoundError(f"SLAF config not found at {config_path}")
 
-        with open(config_path, "r") as f:
+        with open(config_path) as f:
             self.config = json.load(f)
 
         # Initialize shape
@@ -134,7 +135,7 @@ class SLAFArray:
         duckdb.query("SET enable_progress_bar = true;")
         return duckdb.query(sql).fetchdf()
 
-    def filter_cells(self, **filters) -> pd.DataFrame:
+    def filter_cells(self, **filters: Any) -> pd.DataFrame:
         """
         Filter cells based on metadata columns
 
@@ -173,7 +174,7 @@ class SLAFArray:
 
         return self.query(sql)
 
-    def filter_genes(self, **filters) -> pd.DataFrame:
+    def filter_genes(self, **filters: Any) -> pd.DataFrame:
         """
         Filter genes based on metadata columns
 
@@ -213,8 +214,8 @@ class SLAFArray:
         return self.query(sql)
 
     def _normalize_entity_ids(
-        self, entity_ids: Union[str, List[str]], entity_type: str
-    ) -> List[int]:
+        self, entity_ids: str | list[str], entity_type: str
+    ) -> list[int]:
         """Convert string entity IDs to integer IDs using metadata mappings"""
         if entity_type == "cell":
             metadata = self.obs
@@ -237,7 +238,7 @@ class SLAFArray:
 
         return integer_ids
 
-    def get_cell_expression(self, cell_ids: Union[str, List[str]]) -> pd.DataFrame:
+    def get_cell_expression(self, cell_ids: str | list[str]) -> pd.DataFrame:
         """Get expression data for specific cells using optimized query strategies"""
         # Convert to integer IDs
         integer_ids = self._normalize_entity_ids(cell_ids, "cell")
@@ -247,7 +248,7 @@ class SLAFArray:
 
         return self.query(sql)
 
-    def get_gene_expression(self, gene_ids: Union[str, List[str]]) -> pd.DataFrame:
+    def get_gene_expression(self, gene_ids: str | list[str]) -> pd.DataFrame:
         """Get expression data for specific genes using optimized query strategies"""
         # Convert to integer IDs
         integer_ids = self._normalize_entity_ids(gene_ids, "gene")
@@ -257,7 +258,9 @@ class SLAFArray:
 
         return self.query(sql)
 
-    def get_submatrix(self, cell_selector=None, gene_selector=None) -> pd.DataFrame:
+    def get_submatrix(
+        self, cell_selector: Any | None = None, gene_selector: Any | None = None
+    ) -> pd.DataFrame:
         """
         Get expression data using cell/gene selectors that work with obs/var DataFrames
 

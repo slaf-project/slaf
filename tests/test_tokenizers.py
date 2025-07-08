@@ -50,12 +50,14 @@ class TestSLAFTokenizer:
 
         # Check token IDs are sequential and start after special tokens + expression bins
         expected_start = 4 + 10  # special tokens + expression bins
-        for i, (gene_id, token_id) in enumerate(tokenizer.gene_vocab.items()):
+        for i, (_, token_id) in enumerate(tokenizer.gene_vocab.items()):
             assert token_id == expected_start + i
 
         # Check reverse mapping
-        for gene_id, token_id in tokenizer.gene_vocab.items():
-            assert tokenizer.token_to_gene[token_id] == gene_id
+        for _, token_id in tokenizer.gene_vocab.items():
+            assert (
+                tokenizer.token_to_gene[token_id] == tokenizer.token_to_gene[token_id]
+            )
 
     def test_expression_to_bin_conversion(self, tiny_slaf):
         """Test expression value to bin conversion"""

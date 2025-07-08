@@ -181,5 +181,5 @@ print(high_expr_cells)
 ## Getting Help
 
 - 📖 **Documentation**: This site contains comprehensive guides
-- 💬 **GitHub Issues**: Report bugs on [GitHub](https://github.com/pavanramkumar/slaf)
+- 💬 **GitHub Issues**: Report bugs on [GitHub](https://github.com/slaf-project/slaf)
 - 📧 **Email**: Contact pavan.ramkumar@gmail.com for questions

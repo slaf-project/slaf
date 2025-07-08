@@ -1,12 +1,12 @@
-import scanpy as sc
-import pandas as pd
-import numpy as np
-from typing import Optional, Tuple, Literal
-from pathlib import Path
-import requests
-import tempfile
 import shutil
+import tempfile
+from pathlib import Path
+from typing import Any, Literal
 
+import numpy as np
+import pandas as pd
+import requests
+import scanpy as sc
 
 DatasetType = Literal["pbmc3k", "pbmc_68k", "heart_10k", "synthetic", "tiny_sample"]
 
@@ -17,7 +17,7 @@ DEFAULT_DATASET_DIR = str(
 
 def download_dataset(
     dataset_type: DatasetType, output_dir: str = DEFAULT_DATASET_DIR
-) -> Optional[str]:
+) -> str | None:
     """Download dataset and return path to h5ad file"""
     output_path = Path(output_dir)
     output_path.mkdir(exist_ok=True)
@@ -138,9 +138,9 @@ def create_dataset(
 
 def prepare_dataset(
     dataset_type: DatasetType,
-    raw_h5ad_path: Optional[str] = None,
+    raw_h5ad_path: str | None = None,
     output_dir: str = DEFAULT_DATASET_DIR,
-) -> Tuple[str, sc.AnnData]:
+) -> tuple[str, sc.AnnData]:
     """Prepare dataset with analysis and return (processed_path, adata)"""
 
     if raw_h5ad_path is None:
@@ -214,7 +214,7 @@ def prepare_dataset(
     return str(processed_filename), adata
 
 
-def _find_mitochondrial_column(columns: pd.Index) -> Optional[str]:
+def _find_mitochondrial_column(columns: pd.Index) -> str | None:
     """Find mitochondrial percentage column"""
     for col in columns:
         if "mt" in col.lower() and "pct" in col.lower():
@@ -222,7 +222,7 @@ def _find_mitochondrial_column(columns: pd.Index) -> Optional[str]:
     return None
 
 
-def _run_full_analysis_pipeline(adata: sc.AnnData, mt_col: Optional[str]) -> sc.AnnData:
+def _run_full_analysis_pipeline(adata: sc.AnnData, mt_col: str | None) -> sc.AnnData:
     """Run full scanpy analysis pipeline"""
 
     # Normalization and log transform (for clustering)
@@ -272,8 +272,8 @@ def get_or_create_dataset(
     force_download: bool = False,
     force_prepare: bool = False,
     output_dir: str = DEFAULT_DATASET_DIR,
-    **create_kwargs,
-) -> Tuple[str, str]:
+    **create_kwargs: Any,
+) -> tuple[str, str]:
     """
     Get or create dataset, returning (raw_path, processed_path)
 
@@ -384,7 +384,7 @@ def create_tiny_sample_from_pbmc3k(output_dir: str = DEFAULT_DATASET_DIR) -> boo
             print(f"Removing existing dataset at {output_path}")
             shutil.rmtree(output_path)
 
-        print(f"Converting to SLAF format...")
+        print("Converting to SLAF format...")
         from slaf.data.converter import SLAFConverter
 
         converter = SLAFConverter()
@@ -518,7 +518,7 @@ if __name__ == "__main__":
 
         if dataset_type_typed == "tiny_sample":
             # Create tiny sample dataset
-            print(f"\n📊 Creating tiny sample dataset...")
+            print("\n📊 Creating tiny sample dataset...")
             try:
                 success = create_tiny_sample_from_pbmc3k(output_dir=args.output_dir)
                 if success:
@@ -585,7 +585,7 @@ if __name__ == "__main__":
             try:
                 adata = sc.read_h5ad(path, backed="r")  # Don't load into memory
                 print(f"  • {name}: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
-            except:
+            except Exception:
                 print(f"  • {name}: {path}")
 
         print("\n🎯 Ready for SLAF conversion and benchmarking!")

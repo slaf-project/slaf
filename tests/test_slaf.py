@@ -1,5 +1,5 @@
-import pytest
 import pandas as pd
+import pytest
 
 
 class TestSLAFArray:
@@ -180,7 +180,7 @@ class TestSLAFArray:
 
         # Complex query with joins
         complex_query = """
-        SELECT 
+        SELECT
             c.cell_type,
             COUNT(*) as cell_count,
             AVG(c.total_counts) as avg_counts
@@ -200,7 +200,7 @@ class TestSLAFArray:
 
         # Query that joins metadata with expression data
         query = """
-        SELECT 
+        SELECT
             c.cell_id,
             c.cell_type,
             COUNT(e.value) as expressed_genes
@@ -219,12 +219,10 @@ class TestSLAFArray:
     def test_error_handling(self, tiny_slaf):
         """Test error handling for invalid operations"""
 
-        # Test invalid SQL query
-        with pytest.raises(Exception):
+        with pytest.raises(KeyError):
             tiny_slaf.query("SELECT * FROM nonexistent_table")
 
-        # Test invalid filter column - should raise exception
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             tiny_slaf.filter_cells(nonexistent_column="value")
 
     def test_boolean_filtering(self, tiny_slaf):

@@ -1,11 +1,12 @@
-import lance
-import pandas as pd
-import scanpy as sc
-from pathlib import Path
 import json
-from typing import List, Dict, Any, Tuple, Optional
+from pathlib import Path
+from typing import Any
+
+import lance
 import numpy as np
+import pandas as pd
 import pyarrow as pa
+import scanpy as sc
 
 
 class SLAFConverter:
@@ -76,7 +77,7 @@ class SLAFConverter:
         self._save_config(output_path_obj, adata.shape)
         print(f"Conversion complete! Saved to {output_path}")
 
-    def _create_id_mapping(self, entity_ids, entity_type: str) -> List[Dict[str, Any]]:
+    def _create_id_mapping(self, entity_ids, entity_type: str) -> list[dict[str, Any]]:
         """Create mapping from original entity IDs to integer indices"""
         # Direct assignment using pandas operations
         df = pd.DataFrame()
@@ -144,7 +145,7 @@ class SLAFConverter:
         self,
         df: pd.DataFrame,
         entity_id_col: str,
-        integer_mapping: Optional[List[Dict[str, Any]]] = None,
+        integer_mapping: list[dict[str, Any]] | None = None,
     ) -> pa.Table:
         result_df = df.copy()
         # Assign entity ID column using index directly to avoid misalignment
@@ -175,7 +176,7 @@ class SLAFConverter:
         return table
 
     def _write_lance_tables(
-        self, output_path: Path, table_configs: List[Tuple[str, pa.Table]]
+        self, output_path: Path, table_configs: list[tuple[str, pa.Table]]
     ):
         """Write multiple Lance tables with consistent naming"""
         for table_name, table in table_configs:

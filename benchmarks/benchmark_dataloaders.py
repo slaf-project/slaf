@@ -1,21 +1,23 @@
+import argparse
+import gc
+import multiprocessing as mp
 import time
+
 import numpy as np
-from slaf.core.slaf import SLAFArray
-from slaf.ml.tokenizers import SLAFTokenizer
-from slaf.ml.dataloaders import SLAFDataLoader
 from benchmark_utils import get_object_memory_usage
 from rich.console import Console
 from rich.table import Table
-import gc
-import multiprocessing as mp
-import argparse
+
+from slaf.core.slaf import SLAFArray
+from slaf.ml.dataloaders import SLAFDataLoader
+from slaf.ml.tokenizers import SLAFTokenizer
 
 
 # Global worker functions for multiprocessing
 def worker_h5ad(worker_id, h5ad_path, scenario, result_queue):
     """Worker function for h5ad multi-process benchmark"""
-    import scanpy as sc
     import numpy as np
+    import scanpy as sc
     from benchmark_utils import get_object_memory_usage
 
     # Each process loads the full h5ad file
@@ -122,7 +124,7 @@ def worker_h5ad(worker_id, h5ad_path, scenario, result_queue):
             # Fallback if X is not available
             _ = adata.obs.iloc[worker_start:worker_end]
             token_array = np.array([], dtype=np.int64)
-    except Exception as e:
+    except Exception:
         # If any processing fails, just continue
         token_array = np.array([], dtype=np.int64)
 
@@ -157,9 +159,10 @@ def worker_h5ad(worker_id, h5ad_path, scenario, result_queue):
 
 def worker_slaf(worker_id, slaf_path, scenario, result_queue):
     """Worker function for SLAF multi-process benchmark"""
+    from benchmark_utils import get_object_memory_usage
+
     from slaf.core.slaf import SLAFArray
     from slaf.ml.dataloaders import SLAFDataLoader
-    from benchmark_utils import get_object_memory_usage
 
     # Each process opens SLAF independently (concurrent disk reads)
     slaf = SLAFArray(slaf_path)
@@ -238,8 +241,8 @@ def benchmark_multi_process_scaling(
     console = Console()
 
     if verbose:
-        console.print(f"[bold blue]Multi-Process Scaling Benchmark[/bold blue]")
-        console.print(f"Testing 1, 4, and 8 processes\n")
+        console.print("[bold blue]Multi-Process Scaling Benchmark[/bold blue]")
+        console.print("Testing 1, 4, and 8 processes\n")
 
     # Test scenarios
     scenarios = [
@@ -497,7 +500,7 @@ def print_multi_process_results_table_simple(results):
 
     if speedups:
         avg_speedup = np.mean(speedups)
-        console.print(f"\n[bold]Summary:[/bold]")
+        console.print("\n[bold]Summary:[/bold]")
         console.print(f"Average speedup: {avg_speedup:.1f}x")
 
         if avg_speedup > 1.5:
@@ -806,7 +809,7 @@ def print_dataloader_results_table(results):
     avg_overhead = np.mean([r["overhead_percent"] for r in results])
     avg_speedup = np.mean([r["total_speedup"] for r in results])
 
-    console.print(f"\n[bold]Summary:[/bold]")
+    console.print("\n[bold]Summary:[/bold]")
     console.print(f"Average overhead: {avg_overhead:.1f}%")
     console.print(f"Average speedup: {avg_speedup:.2f}x")
 
@@ -845,7 +848,7 @@ def benchmark_data_vs_tokenization_timing(
 
     if verbose:
         console.print(
-            f"[bold blue]Data Loading vs Tokenization Timing Analysis[/bold blue]\n"
+            "[bold blue]Data Loading vs Tokenization Timing Analysis[/bold blue]\n"
         )
 
     # Test scenario
@@ -895,7 +898,7 @@ def benchmark_data_vs_tokenization_timing(
             h5ad_results["tokenization_time_ms"] / slaf_results["tokenization_time_ms"]
         )
 
-        console.print(f"\n[bold]Analysis:[/bold]")
+        console.print("\n[bold]Analysis:[/bold]")
         if data_ratio < 0.7:
             console.print(
                 f"🔍 h5ad data loading is {1/data_ratio:.1f}x faster - SLAF query optimization opportunity"
@@ -925,9 +928,10 @@ def benchmark_data_vs_tokenization_timing(
 
 def _benchmark_h5ad_timing_breakdown(h5ad_path: str, scenario: dict) -> dict:
     """Break down h5ad timing into data loading vs tokenization"""
-    import scanpy as sc
     import time
+
     import numpy as np
+    import scanpy as sc
 
     # Load data (this is the data loading phase)
     start_data = time.time()
@@ -991,10 +995,12 @@ def _benchmark_h5ad_timing_breakdown(h5ad_path: str, scenario: dict) -> dict:
 
 def _benchmark_slaf_timing_breakdown(slaf_path: str, scenario: dict) -> dict:
     """Break down SLAF timing into data loading vs tokenization"""
+    import time
+
+    import numpy as np
+
     from slaf.core.slaf import SLAFArray
     from slaf.ml.tokenizers import SLAFTokenizer
-    import time
-    import numpy as np
 
     # Data loading phase (SLAF initialization and query)
     start_data = time.time()
@@ -1007,12 +1013,12 @@ def _benchmark_slaf_timing_breakdown(slaf_path: str, scenario: dict) -> dict:
     # Query expression data sorted by expression
     sql = f"""
     WITH ranked_genes AS (
-        SELECT 
+        SELECT
             cell_id,
             gene_id,
             value,
             ROW_NUMBER() OVER (
-                PARTITION BY cell_id 
+                PARTITION BY cell_id
                 ORDER BY value DESC
             ) as gene_rank
         FROM expression
@@ -1020,10 +1026,10 @@ def _benchmark_slaf_timing_breakdown(slaf_path: str, scenario: dict) -> dict:
     ),
     limited_genes AS (
         SELECT cell_id, gene_id, value
-        FROM ranked_genes 
+        FROM ranked_genes
         WHERE gene_rank <= {max_genes}
     )
-    SELECT 
+    SELECT
         cell_id,
         array_agg(gene_id ORDER BY value DESC) as gene_sequence,
         array_agg(value ORDER BY value DESC) as expr_sequence

@@ -1,10 +1,11 @@
-import pytest
 import numpy as np
-from slaf.integrations.scanpy import pp
-from slaf.integrations.anndata import LazyAnnData, LazyExpressionMatrix
+import pytest
+import scanpy as sc
+
 from slaf.core.slaf import SLAFArray
 from slaf.data.converter import SLAFConverter
-import scanpy as sc
+from slaf.integrations.anndata import LazyAnnData, LazyExpressionMatrix
+from slaf.integrations.scanpy import pp
 
 
 class TestLazyPreprocessingCorrectness:
@@ -134,7 +135,7 @@ class TestLazyPreprocessingCorrectness:
             f"""
             SELECT cell_id, total_counts, n_genes_by_counts
             FROM (
-                SELECT 
+                SELECT
                     cell_id,
                     COUNT(DISTINCT gene_id) as n_genes_by_counts,
                     SUM(value) as total_counts
@@ -204,9 +205,6 @@ class TestLazyPreprocessingCorrectness:
     def test_filter_genes_basic(self, tiny_slaf, tiny_adata):
         """Test basic gene filtering with numerical comparison"""
         lazy_adata = LazyAnnData(tiny_slaf)
-
-        # Get original gene count
-        original_genes = lazy_adata.n_vars
 
         # Apply gene filtering with lazy implementation
         min_counts = 5
@@ -1064,7 +1062,6 @@ class TestTransformationPerformanceAndConsistency:
 
     def test_transformation_with_different_target_sums(self, tiny_slaf):
         """Test normalize_total with different target sums"""
-        lazy_adata = LazyAnnData(tiny_slaf)
 
         # Test with different target sums
         target_sums = [1e3, 1e4, 1e5, 1e6]

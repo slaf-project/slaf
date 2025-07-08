@@ -1,16 +1,15 @@
-import scanpy as sc
 import time
-import sys
+
 import numpy as np
-from slaf.core.slaf import SLAFArray
-from slaf.integrations.anndata import LazyAnnData
+import scanpy as sc
 
 # Import shared utilities
 from benchmark_utils import (
-    get_object_memory_usage,
-    get_sparse_matrix_size,
     clear_caches,
+    get_object_memory_usage,
 )
+
+from slaf.core.slaf import SLAFArray
 
 
 def demo_realistic_anndata_ops():
@@ -73,38 +72,6 @@ def demo_realistic_anndata_ops():
         },
     ]
     return scenarios
-
-
-def get_object_memory_usage(obj):
-    """Get memory usage of a Python object in MB"""
-    # For pandas objects with memory_usage method
-    if hasattr(obj, "memory_usage"):
-        memory_usage = obj.memory_usage(deep=True)
-        if hasattr(memory_usage, "sum"):  # If it's a Series, sum it
-            return memory_usage.sum() / 1024 / 1024
-        else:  # If it's already a scalar
-            return memory_usage / 1024 / 1024
-    # For numpy arrays and similar
-    elif hasattr(obj, "nbytes"):
-        return obj.nbytes / 1024 / 1024
-    # For sparse matrices, use comprehensive size calculation
-    elif hasattr(obj, "getnnz"):
-        total_bytes = get_sparse_matrix_size(obj)
-        return total_bytes / 1024 / 1024
-    else:
-        # Fallback to sys.getsizeof
-        return sys.getsizeof(obj) / 1024 / 1024
-
-
-def get_sparse_matrix_size(sparse_matrix):
-    """Get the total memory size of a sparse matrix in bytes"""
-    total = 0
-    for attr in ["data", "indices", "indptr", "row", "col", "offsets"]:
-        if hasattr(sparse_matrix, attr):
-            attr_data = getattr(sparse_matrix, attr)
-            if attr_data is not None:
-                total += attr_data.nbytes
-    return total
 
 
 def _measure_h5ad_anndata_op(h5ad_path: str, scenario: dict):
@@ -197,10 +164,10 @@ def _measure_h5ad_anndata_op(h5ad_path: str, scenario: dict):
     elif hasattr(result, "__len__"):
         result_size = len(result)
     else:
-        result_size = 1
+        result_size = None
 
     # Clean up
-    del adata, result
+    del adata
     gc.collect()
 
     return {
@@ -221,62 +188,65 @@ def _measure_slaf_anndata_op(slaf_path: str, scenario: dict):
     # slaf load
     start = time.time()
     slaf = SLAFArray(slaf_path)
-    lazy_adata = LazyAnnData(slaf)
     slaf_init_time = time.time() - start
 
     # Measure memory footprint of loaded data
     slaf_load_memory = get_object_memory_usage(slaf)
 
-    # slaf AnnData operation using numpy-style slicing
+    # slaf operation
     start = time.time()
 
     if scenario["type"] == "expression_slicing":
         if scenario["operation"] == "single_cell":
             cell_id = scenario["cell_id"]
-            result = lazy_adata.X[cell_id : cell_id + 1, :]
+            result = slaf.get_cell_expression(cell_id)
         elif scenario["operation"] == "single_gene":
             gene_id = scenario["gene_id"]
-            result = lazy_adata.X[:, gene_id : gene_id + 1]
+            result = slaf.get_gene_expression(gene_id)
         elif scenario["operation"] == "submatrix":
             cell_start, cell_end = scenario["cell_range"]
             gene_start, gene_end = scenario["gene_range"]
-            result = lazy_adata.X[cell_start:cell_end, gene_start:gene_end]
+            result = slaf.get_expression_submatrix(
+                cell_start, cell_end, gene_start, gene_end
+            )
 
     elif scenario["type"] == "metadata":
         if scenario["operation"] == "obs_access":
-            result = lazy_adata.obs
+            result = slaf.get_cells()
         elif scenario["operation"] == "var_access":
-            result = lazy_adata.var
+            result = slaf.get_genes()
         elif scenario["operation"] == "obs_subset":
             columns = scenario["columns"]
-            result = lazy_adata.obs[columns]
+            result = slaf.get_cells(columns=columns)
         elif scenario["operation"] == "var_subset":
             columns = scenario["columns"]
-            result = lazy_adata.var[columns]
+            result = slaf.get_genes(columns=columns)
 
     elif scenario["type"] == "expression":
         if scenario["operation"] == "shape":
-            result = {"shape": lazy_adata.shape}
+            result = slaf.shape
         elif scenario["operation"] == "nnz":
-            nnz_query = slaf.query("SELECT COUNT(*) as nnz FROM expression")
-            result = {"nnz": nnz_query.iloc[0]["nnz"]}
+            result = slaf.get_nnz()
         elif scenario["operation"] == "density":
-            nnz_query = slaf.query("SELECT COUNT(*) as nnz FROM expression")
-            cell_count = slaf.query("SELECT COUNT(*) as count FROM cells")
-            gene_count = slaf.query("SELECT COUNT(*) as count FROM genes")
-            total_elements = cell_count.iloc[0]["count"] * gene_count.iloc[0]["count"]
-            density = (
-                nnz_query.iloc[0]["nnz"] / total_elements if total_elements > 0 else 0
-            )
-            result = {"density": density}
+            nnz = slaf.get_nnz()
+            shape = slaf.shape
+            result = nnz / (shape[0] * shape[1])
     else:
         raise ValueError(f"Unknown scenario type: {scenario['type']}")
 
     slaf_query_time = time.time() - start
     slaf_query_memory = get_object_memory_usage(result)
 
+    # Get result size for comparison
+    if hasattr(result, "shape"):
+        result_size = result.shape
+    elif hasattr(result, "__len__"):
+        result_size = len(result)
+    else:
+        result_size = None
+
     # Clean up
-    del slaf, lazy_adata
+    del slaf
     gc.collect()
 
     return {
@@ -284,6 +254,7 @@ def _measure_slaf_anndata_op(slaf_path: str, scenario: dict):
         "slaf_query_time": slaf_query_time,
         "slaf_init_memory": float(slaf_load_memory),
         "slaf_query_memory": float(slaf_query_memory),
+        "result_size": result_size,
     }
 
 
@@ -317,7 +288,7 @@ def benchmark_anndata_op_scenario(
     )
 
     return {
-        "scenario_type": "anndata_op",
+        "scenario_type": "anndata_ops",
         "scenario_description": scenario["description"],
         "h5ad_total_time": 1000 * h5ad_total_time,
         "h5ad_load_time": 1000 * h5ad_result["h5ad_load_time"],
@@ -328,9 +299,6 @@ def benchmark_anndata_op_scenario(
         "total_speedup": total_speedup,
         "query_speedup": query_speedup,
         "load_speedup": load_speedup,
-        "h5ad_result_size": h5ad_result["result_size"],
-        "slaf_result_size": h5ad_result["result_size"],
-        "results_match": h5ad_result["result_size"] == h5ad_result["result_size"],
         # Memory breakdown
         "h5ad_load_memory_mb": h5ad_result["h5ad_load_memory"],
         "h5ad_query_memory_mb": h5ad_result["h5ad_query_memory"],
@@ -340,6 +308,9 @@ def benchmark_anndata_op_scenario(
         "slaf_query_memory_mb": slaf_result["slaf_query_memory"],
         "slaf_total_memory_mb": slaf_result["slaf_init_memory"]
         + slaf_result["slaf_query_memory"],
+        # Result comparison
+        "h5ad_result_size": h5ad_result["result_size"],
+        "slaf_result_size": slaf_result["result_size"],
     }
 
 
@@ -363,35 +334,21 @@ def benchmark_anndata_ops(
 
         # For the first scenario, do a burn-in run to eliminate cold start effects
         if i == 0:
-            if verbose:
-                print("  Running burn-in for first scenario...")
+            # Run the scenario once without timing to warm up
+            try:
+                _measure_h5ad_anndata_op(h5ad_path, scenario)
+                _measure_slaf_anndata_op(slaf_path, scenario)
+            except Exception as e:
+                if verbose:
+                    print(f"  Warning: Burn-in failed: {e}")
 
-            # Create a temporary SLAF instance for burn-in
-            temp_slaf = SLAFArray(slaf_path)
-
-            # Use centralized warm-up system
-            from benchmark_utils import warm_up_slaf_database
-
-            warm_up_slaf_database(temp_slaf, verbose=verbose)
-
-            # Clear caches again after burn-in
-            clear_caches()
-
-            # Clean up temporary instances
-            del temp_slaf
-
+        # Run the actual benchmark
         try:
-            # Always include loading time for each scenario
             result = benchmark_anndata_op_scenario(h5ad_path, slaf_path, scenario)
-
             results.append(result)
-
-            if verbose:
-                print(f"  ✓ Completed: {result['total_speedup']:.1f}x speedup")
-
         except Exception as e:
             if verbose:
-                print(f"  ✗ Error: {e}")
+                print(f"  ❌ Failed: {e}")
             continue
 
     return results

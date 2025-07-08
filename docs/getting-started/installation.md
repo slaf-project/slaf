@@ -36,7 +36,7 @@ conda install -c conda-forge slaf
 ### From source
 
 ```bash
-git clone https://github.com/pavanramkumar/slaf.git
+git clone https://github.com/slaf-project/slaf.git
 cd slaf
 uv pip install -e .
 ```
@@ -239,7 +239,7 @@ For better performance:
 If you encounter issues:
 
 1. Check the [troubleshooting guide](../user-guide/troubleshooting.md)
-2. Search [GitHub issues](https://github.com/pavanramkumar/slaf/issues)
+2. Search [GitHub issues](https://github.com/slaf-project/slaf/issues)
 3. Open a new issue with:
    - Python version
    - Operating system
@@ -253,4 +253,4 @@ After installation:
 1. Read the [Quick Start](quickstart.md) guide
 2. Explore the [Examples](../examples/getting-started.md)
 3. Check the [API Reference](../api/core.md)
-4. Join the [community](https://github.com/pavanramkumar/slaf/discussions)
+4. Join the [community](https://github.com/slaf-project/slaf/discussions)

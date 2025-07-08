@@ -4,9 +4,10 @@ Test script to demonstrate the SQL aggregation fix for mean calculations.
 This script shows the difference between the old and new behavior.
 """
 
+import json
+
 import numpy as np
 import pandas as pd
-import json
 import pytest
 
 
@@ -31,7 +32,7 @@ class MockSLAFArray:
 
             sparse_data = {
                 str(gene_id): float(expr)
-                for gene_id, expr in zip(gene_ids, expression_values)
+                for gene_id, expr in zip(gene_ids, expression_values, strict=False)
             }
             data.append({"cell_id": cell_id, "sparse_data": json.dumps(sparse_data)})
         return data
@@ -131,7 +132,7 @@ class MockLazySparseMixin:
             if operation.upper() == "AVG":
                 # New behavior: include all cells
                 sql = f"""
-                SELECT 
+                SELECT
                     cell_id,
                     COALESCE(SUM(CAST(j.value AS FLOAT)), 0.0) / {self.shape[1]} as result
                 FROM expression AS e, LATERAL json_each(e.sparse_data) AS j
@@ -140,7 +141,7 @@ class MockLazySparseMixin:
                 """
             else:
                 sql = f"""
-                SELECT 
+                SELECT
                     cell_id,
                     COALESCE({operation.upper()}(CAST(j.value AS FLOAT)), 0.0) as result
                 FROM expression AS e, LATERAL json_each(e.sparse_data) AS j

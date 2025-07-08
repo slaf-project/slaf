@@ -1,15 +1,17 @@
+import time
+
 import pandas as pd
 import scanpy as sc
-import time
-from slaf.core.slaf import SLAFArray
 
 # Import shared utilities
 from benchmark_utils import (
+    clear_caches,
     get_object_memory_usage,
     parse_filter_for_h5ad,
     parse_filter_for_slaf,
-    clear_caches,
 )
+
+from slaf.core.slaf import SLAFArray
 
 
 def demo_realistic_cell_queries():
@@ -71,13 +73,16 @@ def demo_realistic_cell_queries():
         {
             "type": "filtering",
             "operation": "filter_cells",
-            "filters": {"total_counts": ">=800", "total_counts": "<=2000"},
+            "filters": {"total_counts": ">=800", "total_counts_upper": "<=2000"},
             "description": "Cells with 800-2000 total counts",
         },
         {
             "type": "filtering",
             "operation": "filter_cells",
-            "filters": {"n_genes_by_counts": ">=200", "n_genes_by_counts": "<=1500"},
+            "filters": {
+                "n_genes_by_counts": ">=200",
+                "n_genes_by_counts_upper": "<=1500",
+            },
             "description": "Cells with 200-1500 genes",
         },
     ]

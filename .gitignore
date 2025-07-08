@@ -5,3 +5,5 @@
 **/__marimo__/
 **/*.egg-info/
 *.pyc
+site
+.ruff_cache

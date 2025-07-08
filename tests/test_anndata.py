@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import scanpy as sc
+
 from slaf.integrations.anndata import LazyAnnData, LazyExpressionMatrix, read_slaf
 from slaf.integrations.scanpy import pp
 

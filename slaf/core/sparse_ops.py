@@ -1,6 +1,7 @@
+from typing import Any
+
 import numpy as np
 import pandas as pd
-from typing import Tuple, Optional, Any
 import scipy
 
 
@@ -18,17 +19,17 @@ class LazySparseMixin:
     """
 
     # Type hints for required attributes that implementing classes must provide
-    shape: Tuple[int, int]
+    shape: tuple[int, int]
     slaf_array: Any
-    obs_names: Optional[pd.Index]
-    var_names: Optional[pd.Index]
+    obs_names: pd.Index | None
+    var_names: pd.Index | None
 
     def __init__(self):
         """Initialize the mixin"""
         # Implementing classes will set the required attributes
         pass
 
-    def _parse_key(self, key) -> Tuple[Any, Any]:
+    def _parse_key(self, key) -> tuple[Any, Any]:
         """Parse numpy-style indexing key into cell and gene selectors"""
         if not isinstance(key, tuple):
             return key, slice(None)
@@ -81,21 +82,22 @@ class LazySparseMixin:
                 indices = list(range(start, stop, step))
                 return f"{entity_id_col} IN ({','.join(map(str, indices))})"
 
-        elif isinstance(selector, (list, np.ndarray)):
-            if len(selector) == 0:
-                return "FALSE"
-
-            # Handle boolean indexing
+        elif isinstance(selector, list | np.ndarray):
             if isinstance(selector, np.ndarray) and selector.dtype == bool:
-                indices = np.where(selector)[0]
-                if len(indices) == 0:
+                # Boolean mask - get the range of True indices
+                true_indices = np.where(selector)[0]
+                if len(true_indices) == 0:
                     return "FALSE"
-                return f"{entity_id_col} IN ({','.join(map(str, indices))})"
+                elif len(true_indices) == len(selector):
+                    return "TRUE"
+                else:
+                    # Use IN clause for efficiency
+                    return f"{entity_id_col} IN ({','.join(map(str, true_indices))})"
 
             # Handle integer indexing
             return f"{entity_id_col} IN ({','.join(map(str, selector))})"
 
-        elif isinstance(selector, (int, np.integer)):
+        elif isinstance(selector, int | np.integer):
             return f"{entity_id_col} = {selector}"
 
         else:
@@ -115,7 +117,7 @@ class LazySparseMixin:
 
         return sub_matrix
 
-    def _selector_to_range(self, selector, axis: int) -> Tuple[int, int]:
+    def _selector_to_range(self, selector, axis: int) -> tuple[int, int]:
         """Convert selector to integer range for LanceDB queries"""
         if selector is None or (
             isinstance(selector, slice) and selector == slice(None)
@@ -134,7 +136,7 @@ class LazySparseMixin:
 
             return start, stop
 
-        elif isinstance(selector, (list, np.ndarray)):
+        elif isinstance(selector, list | np.ndarray):
             if isinstance(selector, np.ndarray) and selector.dtype == bool:
                 # Boolean mask - get the range of True indices
                 true_indices = np.where(selector)[0]
@@ -147,7 +149,7 @@ class LazySparseMixin:
                     return 0, 0
                 return int(min(selector)), int(max(selector) + 1)
 
-        elif isinstance(selector, (int, np.integer)):
+        elif isinstance(selector, int | np.integer):
             return int(selector), int(selector) + 1
 
         else:
@@ -166,12 +168,12 @@ class LazySparseMixin:
             step = selector.step or 1
             return len(range(start, stop, step))
 
-        elif isinstance(selector, (list, np.ndarray)):
+        elif isinstance(selector, list | np.ndarray):
             if isinstance(selector, np.ndarray) and selector.dtype == bool:
                 return np.sum(selector)
             return len(selector)
 
-        elif isinstance(selector, (int, np.integer)):
+        elif isinstance(selector, int | np.integer):
             return 1
 
         return self.shape[axis]
@@ -202,12 +204,12 @@ class LazySparseMixin:
                 indices = list(range(start, stop, step))
                 return f"{entity_col} IN ({','.join(map(str, indices))})"
 
-        elif isinstance(selector, (list, np.ndarray)):
+        elif isinstance(selector, list | np.ndarray):
             if len(selector) == 0:
                 return "FALSE"
             return f"{entity_col} IN ({','.join(map(str, selector))})"
 
-        elif isinstance(selector, (int, np.integer)):
+        elif isinstance(selector, int | np.integer):
             return f"{entity_col} = {selector}"
 
         else:
@@ -258,9 +260,9 @@ class LazySparseMixin:
             output_cell_ids = np.arange(start, stop, step)
         elif isinstance(cell_selector, np.ndarray) and cell_selector.dtype == bool:
             output_cell_ids = np.where(cell_selector)[0]
-        elif isinstance(cell_selector, (list, np.ndarray)):
+        elif isinstance(cell_selector, list | np.ndarray):
             output_cell_ids = np.array(cell_selector)
-        elif isinstance(cell_selector, (int, np.integer)):
+        elif isinstance(cell_selector, int | np.integer):
             output_cell_ids = np.array([cell_selector])
         else:
             output_cell_ids = np.arange(self.slaf_array.shape[0])
@@ -288,9 +290,9 @@ class LazySparseMixin:
             output_gene_ids = np.arange(start, stop, step)
         elif isinstance(gene_selector, np.ndarray) and gene_selector.dtype == bool:
             output_gene_ids = np.where(gene_selector)[0]
-        elif isinstance(gene_selector, (list, np.ndarray)):
+        elif isinstance(gene_selector, list | np.ndarray):
             output_gene_ids = np.array(gene_selector)
-        elif isinstance(gene_selector, (int, np.integer)):
+        elif isinstance(gene_selector, int | np.integer):
             output_gene_ids = np.array([gene_selector])
         else:
             output_gene_ids = np.arange(self.slaf_array.shape[1])
@@ -355,14 +357,14 @@ class LazySparseMixin:
                 mapping[db_id] = i
             return mapping
 
-        elif isinstance(selector, (list, np.ndarray)):
+        elif isinstance(selector, list | np.ndarray):
             # Arbitrary list - map each ID to its position in the list
             mapping = {}
             for i, db_id in enumerate(selector):
                 mapping[db_id] = i
             return mapping
 
-        elif isinstance(selector, (int, np.integer)):
+        elif isinstance(selector, int | np.integer):
             # Single index - map the ID to position 0
             return {selector: 0}
 
@@ -370,7 +372,7 @@ class LazySparseMixin:
             # Fallback - empty mapping
             return {}
 
-    def _get_result_shape(self, cell_selector, gene_selector) -> Tuple[int, int]:
+    def _get_result_shape(self, cell_selector, gene_selector) -> tuple[int, int]:
         """Calculate the shape of the result matrix"""
         if not hasattr(self, "shape"):
             raise AttributeError("Implementing class must provide 'shape' attribute")
@@ -390,12 +392,12 @@ class LazySparseMixin:
             stop = max(0, min(stop, self.shape[0]))
 
             n_cells = len(range(start, stop, step))
-        elif isinstance(cell_selector, (list, np.ndarray)):
+        elif isinstance(cell_selector, list | np.ndarray):
             if isinstance(cell_selector, np.ndarray) and cell_selector.dtype == bool:
                 n_cells = np.sum(cell_selector)
             else:
                 n_cells = len(cell_selector)
-        elif isinstance(cell_selector, (int, np.integer)):
+        elif isinstance(cell_selector, int | np.integer):
             n_cells = 1
         else:
             n_cells = self.shape[0]
@@ -415,21 +417,19 @@ class LazySparseMixin:
             stop = max(0, min(stop, self.shape[1]))
 
             n_genes = len(range(start, stop, step))
-        elif isinstance(gene_selector, (list, np.ndarray)):
+        elif isinstance(gene_selector, list | np.ndarray):
             if isinstance(gene_selector, np.ndarray) and gene_selector.dtype == bool:
                 n_genes = np.sum(gene_selector)
             else:
                 n_genes = len(gene_selector)
-        elif isinstance(gene_selector, (int, np.integer)):
+        elif isinstance(gene_selector, int | np.integer):
             n_genes = 1
         else:
             n_genes = self.shape[1]
 
         return (n_cells, n_genes)
 
-    def _sql_aggregation(
-        self, operation: str, axis: Optional[int] = None
-    ) -> np.ndarray:
+    def _sql_aggregation(self, operation: str, axis: int | None = None) -> np.ndarray:
         """Perform aggregation operations via SQL with optimized performance"""
         if not hasattr(self, "shape"):
             raise AttributeError("Implementing class must provide 'shape' attribute")
@@ -452,12 +452,12 @@ class LazySparseMixin:
             # For other operations, use the optimized approach
             return self._sql_other_aggregation(operation, axis)
 
-    def _sql_mean_aggregation(self, axis: Optional[int] = None) -> np.ndarray:
+    def _sql_mean_aggregation(self, axis: int | None = None) -> np.ndarray:
         """Optimized mean aggregation with vectorized operations"""
         if axis == 0:  # Gene-wise aggregation
             # Single optimized query with proper ordering
             sql = """
-            SELECT 
+            SELECT
                 gene_integer_id,
                 SUM(value) as total_sum
             FROM expression
@@ -487,7 +487,7 @@ class LazySparseMixin:
         elif axis == 1:  # Cell-wise aggregation
             # Single optimized query with proper ordering
             sql = """
-            SELECT 
+            SELECT
                 cell_integer_id,
                 SUM(value) as total_sum
             FROM expression
@@ -527,12 +527,12 @@ class LazySparseMixin:
             else:
                 return np.array([0.0])
 
-    def _sql_variance_aggregation(self, axis: Optional[int] = None) -> np.ndarray:
+    def _sql_variance_aggregation(self, axis: int | None = None) -> np.ndarray:
         """Optimized variance aggregation with vectorized operations"""
         if axis == 0:  # Gene-wise aggregation
             # Single optimized query with all needed statistics
             sql = """
-            SELECT 
+            SELECT
                 gene_integer_id,
                 SUM(value) as total_sum,
                 SUM(value * value) as sum_squares
@@ -569,7 +569,7 @@ class LazySparseMixin:
         elif axis == 1:  # Cell-wise aggregation
             # Single optimized query with all needed statistics
             sql = """
-            SELECT 
+            SELECT
                 cell_integer_id,
                 SUM(value) as total_sum,
                 SUM(value * value) as sum_squares
@@ -606,7 +606,7 @@ class LazySparseMixin:
         else:  # Global aggregation
             # Optimized global variance query
             sql = """
-            SELECT 
+            SELECT
                 SUM(value) as total_sum,
                 SUM(value * value) as sum_squares
             FROM expression
@@ -628,12 +628,12 @@ class LazySparseMixin:
                 return np.array([0.0])
 
     def _sql_other_aggregation(
-        self, operation: str, axis: Optional[int] = None
+        self, operation: str, axis: int | None = None
     ) -> np.ndarray:
         """Optimized non-mean aggregation operations with vectorized operations"""
         if axis == 0:  # Gene-wise aggregation
             sql = f"""
-            SELECT 
+            SELECT
                 gene_integer_id,
                 {operation.upper()}(value) as result
             FROM expression
@@ -659,7 +659,7 @@ class LazySparseMixin:
 
         elif axis == 1:  # Cell-wise aggregation
             sql = f"""
-            SELECT 
+            SELECT
                 cell_integer_id,
                 {operation.upper()}(value) as result
             FROM expression
@@ -692,9 +692,7 @@ class LazySparseMixin:
                 else np.array([0.0])
             )
 
-    def _sql_multi_aggregation(
-        self, operations: list, axis: Optional[int] = None
-    ) -> dict:
+    def _sql_multi_aggregation(self, operations: list, axis: int | None = None) -> dict:
         """Optimized multi-aggregation in a single query for better performance"""
         if not hasattr(self, "shape"):
             raise AttributeError("Implementing class must provide 'shape' attribute")
@@ -718,7 +716,7 @@ class LazySparseMixin:
                     agg_clauses.append(f"{op.upper()}(value) as {op.lower()}_result")
 
             sql = f"""
-            SELECT 
+            SELECT
                 gene_integer_id,
                 {', '.join(agg_clauses)}
             FROM expression
@@ -797,7 +795,7 @@ class LazySparseMixin:
                     agg_clauses.append(f"{op.upper()}(value) as {op.lower()}_result")
 
             sql = f"""
-            SELECT 
+            SELECT
                 cell_integer_id,
                 {', '.join(agg_clauses)}
             FROM expression

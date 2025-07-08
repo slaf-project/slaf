@@ -177,11 +177,11 @@
   .grid.cards {
     grid-template-columns: 1fr;
   }
-  
+
   .hero h1 {
     font-size: 2rem;
   }
-  
+
   .hero p {
     font-size: 1rem;
   }
@@ -282,4 +282,105 @@
 .md-nav__source {
   background: var(--md-primary-fg-color);
   color: var(--md-primary-bg-color);
-} 
+}
+
+/* Ensure TOC is properly integrated on the left */
+.md-sidebar--primary {
+  order: 1;
+}
+
+.md-sidebar--secondary {
+  order: 2;
+}
+
+/* Customize the navigation drawer */
+.md-nav__drawer {
+  background-color: var(--md-primary-fg-color);
+}
+
+/* Ensure proper spacing */
+.md-content {
+  margin-left: 0;
+}
+
+/* Customize the hamburger menu button */
+.md-nav__button {
+  color: var(--md-primary-fg-color);
+}
+
+/* Ensure TOC follows properly */
+.md-sidebar__scrollwrap {
+  scrollbar-width: thin;
+}
+
+/* Custom styling for the heart and code icons on homepage */
+.heart {
+  color: #e91e63;
+}
+
+.code {
+  color: #2196f3;
+}
+
+/* Ensure iframe examples display properly */
+iframe {
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+/* Custom styling for cards on homepage */
+.grid.cards {
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1rem;
+}
+
+.grid.cards > * {
+  display: flex;
+  flex-direction: column;
+  padding: 1rem;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 8px;
+  background-color: var(--md-default-bg-color);
+  transition: all 0.2s ease;
+}
+
+.grid.cards > *:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+/* Ensure proper spacing for navigation */
+.md-nav__list {
+  margin: 0;
+  padding: 0;
+}
+
+.md-nav__item {
+  margin: 0;
+}
+
+/* Custom styling for the main content area */
+.md-main__inner {
+  margin-top: 0;
+}
+
+/* Ensure proper layout on mobile */
+@media (max-width: 76.1875em) {
+  .md-sidebar--primary {
+    display: none;
+  }
+
+  .md-sidebar--secondary {
+    display: none;
+  }
+}
+
+/* Hide the right Table of Contents sidebar */
+.md-sidebar--secondary {
+  display: none !important;
+}
+
+/* Ensure the left sidebar (navigation) is always visible */
+.md-sidebar--primary {
+  display: block !important;
+}

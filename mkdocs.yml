@@ -1,5 +1,5 @@
 site_name: SLAF Documentation
-site_description: Sparse Lance Array Format - High-performance single-cell data storage and analysis
+site_description: Sparse Lazy Array Format - High-performance single-cell data storage and analysis
 site_author: Pavan Ramkumar
 site_url: https://pavanramkumar.github.io/slaf/
 
@@ -19,59 +19,24 @@ theme:
 
   # Color palette
   palette:
-    # Palette toggle for automatic mode
-    - media: "(prefers-color-scheme)"
-      toggle:
-        icon: material/brightness-auto
-        name: Switch to light mode
-    # Palette toggle for light mode
-    - media: "(prefers-color-scheme: light)"
-      scheme: default
-      toggle:
-        icon: material/brightness-7
-        name: Switch to dark mode
-    # Palette toggle for dark mode
-    - media: "(prefers-color-scheme: dark)"
-      scheme: slate
+    # Light mode (default)
+    - scheme: default
+      primary: indigo
+      accent: indigo
       toggle:
         icon: material/brightness-4
-        name: Switch to system preference
+        name: Switch to dark mode
+    # Dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to light mode
 
   # Features
   features:
-    - announce.dismiss
-    - content.action.edit
-    - content.action.view
-    - content.code.annotate
-    - content.code.copy
-    - content.code.select
-    - content.tabs.link
-    - content.tooltips
-    - header.autohide
-    - navigation.expand
-    - navigation.footer
-    - navigation.indexes
-    - navigation.instant
-    - navigation.instant.prefetch
-    - navigation.instant.progress
-    - navigation.instant.result
-    - navigation.instant.suggest
-    - navigation.instant.tracking
-    - navigation.instant.worker
-    - navigation.instant.worker.offline
-    - navigation.prune
     - navigation.sections
-    - navigation.tabs
-    - navigation.tabs.sticky
-    - navigation.top
-    - navigation.tracking
-    - navigation.tracking.instant
-    - navigation.tracking.instant.worker
-    - navigation.tracking.instant.worker.offline
-    - search.highlight
-    - search.share
-    - search.suggest
-    - toc.follow
 
   # Social
   social:
@@ -89,9 +54,8 @@ plugins:
       minify_html: true
   - redirects:
       redirect_maps:
-        index.md: getting-started/
+        index.md: getting-started/quickstart.md
   - autorefs
-  - section-index
   - mkdocstrings:
       handlers:
         python:
@@ -108,6 +72,7 @@ plugins:
             show_root_toc_entry: true
             docstring_style: google
   - awesome-pages
+  - section-index
 
 # Extensions
 markdown_extensions:
@@ -160,6 +125,7 @@ extra_css:
 
 extra_javascript:
   - javascripts/mathjax.js
+  - javascripts/theme-reset.js
   - https://polyfill.io/v3/polyfill.min.js?features=es6
   - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 
@@ -172,13 +138,20 @@ nav:
   - User Guide:
       - Core Concepts: user-guide/core-concepts.md
       - Command Line Interface: user-guide/cli.md
+      - Data Loading: user-guide/data-loading.md
+      - SQL Queries: user-guide/sql-queries.md
+      - Troubleshooting: user-guide/troubleshooting.md
   - Examples:
       - Getting Started: examples/getting-started.md
+      - Lazy Processing: examples/lazy-processing.md
+      - ML Training: examples/ml-training.md
   - API Reference:
       - Core: api/core.md
       - Data: api/data.md
       - Integrations: api/integrations.md
       - ML: api/ml.md
+  - Development:
+      - Contributing: DEVELOPMENT.md
 
 # Extra
 extra:

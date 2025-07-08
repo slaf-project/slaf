@@ -5,8 +5,8 @@ Note: We use the default backend for all tests to ensure consistency
 """
 
 import numpy as np
-import pandas as pd
 import pytest
+
 from slaf.integrations.anndata import LazyAnnData, LazyExpressionMatrix
 from tests.test_anndata import compare_metadata_essentials
 
@@ -604,8 +604,9 @@ class TestLazyAnnDataValueComparison:
         native_adata = tiny_adata.copy()
 
         # Apply transformations
-        from slaf.integrations.scanpy import pp
         import scanpy as sc
+
+        from slaf.integrations.scanpy import pp
 
         pp.normalize_total(lazy_adata, target_sum=1e4)
         pp.log1p(lazy_adata)
@@ -699,7 +700,7 @@ class TestUnifiedLazySystemConsistency:
                 pass
             elif matrix1.data.size == 0 or matrix2.data.size == 0:
                 # One empty, other not - this is an error
-                assert False, f"One matrix empty, other not for {name}"
+                raise AssertionError()
             else:
                 # Both have data - compare values
                 diff = abs(matrix1.data - matrix2.data).max()

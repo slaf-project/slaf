@@ -8,15 +8,16 @@ This module contains optimized query strategies including:
 - Selector-based query building for submatrix operations
 """
 
+from typing import Any
+
 import numpy as np
-from typing import List, Optional, Union, Tuple
 
 
 class QueryOptimizer:
     """Optimized query strategies for SLAF operations"""
 
     @staticmethod
-    def is_consecutive(ids: List[int]) -> bool:
+    def is_consecutive(ids: list[int]) -> bool:
         """Check if integer IDs form a consecutive sequence"""
         if len(ids) <= 1:
             return True
@@ -27,8 +28,8 @@ class QueryOptimizer:
 
     @staticmethod
     def adaptive_batch_ids(
-        integer_ids: List[int], max_batch_size: int = 100, gap_threshold: int = 10
-    ) -> List[List[int]]:
+        integer_ids: list[int], max_batch_size: int = 100, gap_threshold: int = 10
+    ) -> list[list[int]]:
         """
         Create optimal batches based on ID distribution patterns
 
@@ -68,7 +69,7 @@ class QueryOptimizer:
 
     @staticmethod
     def build_optimized_query(
-        entity_ids: List[int],
+        entity_ids: list[int],
         entity_type: str,
         use_adaptive_batching: bool = True,
         max_batch_size: int = 100,
@@ -101,7 +102,7 @@ class QueryOptimizer:
                     min_id, max_id = min(batch), max(batch)
                     union_queries.append(
                         f"""
-                    SELECT * FROM expression 
+                    SELECT * FROM expression
                     WHERE {entity_type}_integer_id BETWEEN {min_id} AND {max_id}
                     """
                     )
@@ -109,7 +110,7 @@ class QueryOptimizer:
                     ids_str = ",".join(map(str, batch))
                     union_queries.append(
                         f"""
-                    SELECT * FROM expression 
+                    SELECT * FROM expression
                     WHERE {entity_type}_integer_id IN ({ids_str})
                     """
                     )
@@ -121,20 +122,20 @@ class QueryOptimizer:
             if QueryOptimizer.is_consecutive(integer_ids):
                 min_id, max_id = min(integer_ids), max(integer_ids)
                 return f"""
-                SELECT * FROM expression 
+                SELECT * FROM expression
                 WHERE {entity_type}_integer_id BETWEEN {min_id} AND {max_id}
                 """
             else:
                 ids_str = ",".join(map(str, integer_ids))
                 return f"""
-                SELECT * FROM expression 
+                SELECT * FROM expression
                 WHERE {entity_type}_integer_id IN ({ids_str})
                 """
 
     @staticmethod
     def _normalize_slice_indices(
         selector: slice, max_size: int
-    ) -> Tuple[int, int, int]:
+    ) -> tuple[int, int, int]:
         """
         Normalize slice indices, handling negative indices and bounds
 
@@ -201,7 +202,7 @@ class QueryOptimizer:
 
     @staticmethod
     def _build_list_condition(
-        selector: Union[List, np.ndarray], entity_type: str, max_size: int
+        selector: list | np.ndarray, entity_type: str, max_size: int
     ) -> str:
         """
         Build SQL condition for list/array-based selection
@@ -264,10 +265,10 @@ class QueryOptimizer:
 
     @staticmethod
     def build_submatrix_query(
-        cell_selector=None,
-        gene_selector=None,
-        cell_count: Optional[int] = None,
-        gene_count: Optional[int] = None,
+        cell_selector: Any | None = None,
+        gene_selector: Any | None = None,
+        cell_count: int | None = None,
+        gene_count: int | None = None,
     ) -> str:
         """
         Build an optimized SQL query for submatrix selection
@@ -293,7 +294,7 @@ class QueryOptimizer:
             cell_condition = QueryOptimizer._build_slice_condition(
                 start, stop, step, "cell"
             )
-        elif isinstance(cell_selector, (list, np.ndarray)):
+        elif isinstance(cell_selector, list | np.ndarray):
             if cell_count is None:
                 raise ValueError("cell_count must be provided for list/array selectors")
             cell_condition = QueryOptimizer._build_list_condition(
@@ -319,7 +320,7 @@ class QueryOptimizer:
             gene_condition = QueryOptimizer._build_slice_condition(
                 start, stop, step, "gene"
             )
-        elif isinstance(gene_selector, (list, np.ndarray)):
+        elif isinstance(gene_selector, list | np.ndarray):
             if gene_count is None:
                 raise ValueError("gene_count must be provided for list/array selectors")
             gene_condition = QueryOptimizer._build_list_condition(
@@ -338,7 +339,7 @@ class QueryOptimizer:
         return f"SELECT * FROM expression WHERE {where_clause}"
 
     @staticmethod
-    def build_cte_query(entity_ids: List[int], entity_type: str) -> str:
+    def build_cte_query(entity_ids: list[int], entity_type: str) -> str:
         """
         Build a CTE-optimized query for large scattered ID sets
 
@@ -353,7 +354,7 @@ class QueryOptimizer:
 
         return f"""
         WITH filtered_expression AS (
-            SELECT * FROM expression 
+            SELECT * FROM expression
             WHERE {entity_type}_integer_id IN ({ids_str})
         )
         SELECT * FROM filtered_expression
@@ -361,7 +362,7 @@ class QueryOptimizer:
 
     @staticmethod
     def estimate_query_strategy(
-        entity_ids: List[int],
+        entity_ids: list[int],
         consecutive_threshold: int = 50,
         batching_threshold: int = 100,
     ) -> str:
@@ -410,7 +411,7 @@ class PerformanceMetrics:
         self.query_times[key].append(query_time)
         self.query_counts[key] += 1
 
-    def get_average_time(self, strategy: str, entity_count: int) -> Optional[float]:
+    def get_average_time(self, strategy: str, entity_count: int) -> float | None:
         """Get average query time for a strategy and entity count"""
         key = f"{strategy}_{entity_count}"
         if key in self.query_times and self.query_times[key]:

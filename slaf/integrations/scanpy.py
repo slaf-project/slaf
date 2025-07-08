@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from typing import Optional, Union
+
 from slaf.integrations.anndata import LazyAnnData
 
 
@@ -11,10 +11,10 @@ class LazyPreprocessing:
     @staticmethod
     def calculate_qc_metrics(
         adata: LazyAnnData,
-        percent_top: Optional[Union[int, list]] = None,
+        percent_top: int | list | None = None,
         log1p: bool = True,
         inplace: bool = True,
-    ) -> Optional[tuple]:
+    ) -> tuple | None:
         """
         Lazy version of scanpy.pp.calculate_qc_metrics
 
@@ -23,7 +23,7 @@ class LazyPreprocessing:
 
         # Calculate cell-level metrics via SQL using simple aggregation (no JOINs)
         cell_qc_sql = """
-        SELECT 
+        SELECT
             cell_id,
             COUNT(DISTINCT gene_id) as n_genes_by_counts,
             SUM(value) as total_counts
@@ -41,7 +41,7 @@ class LazyPreprocessing:
 
         # Calculate gene-level metrics via SQL using simple aggregation (no JOINs)
         gene_qc_sql = """
-        SELECT 
+        SELECT
             gene_id,
             COUNT(DISTINCT cell_id) AS n_cells_by_counts,
             SUM(value) AS total_counts
@@ -98,13 +98,13 @@ class LazyPreprocessing:
 
             # Update obs
             adata._obs = None  # Clear cache
-            for _, row in cell_qc.iterrows():
+            for _ in cell_qc.iterrows():
                 # Would need to implement metadata updates
                 pass
 
             # Update var
             adata._var = None  # Clear cache
-            for _, row in gene_qc_complete.iterrows():
+            for _ in gene_qc_complete.iterrows():
                 # Would need to implement metadata updates
                 pass
 
@@ -115,12 +115,12 @@ class LazyPreprocessing:
     @staticmethod
     def filter_cells(
         adata: LazyAnnData,
-        min_counts: Optional[int] = None,
-        min_genes: Optional[int] = None,
-        max_counts: Optional[int] = None,
-        max_genes: Optional[int] = None,
+        min_counts: int | None = None,
+        min_genes: int | None = None,
+        max_counts: int | None = None,
+        max_genes: int | None = None,
         inplace: bool = True,
-    ) -> Optional[LazyAnnData]:
+    ) -> LazyAnnData | None:
         """
         Lazy version of scanpy.pp.filter_cells
 
@@ -148,7 +148,7 @@ class LazyPreprocessing:
         filter_sql = f"""
         SELECT cell_id
         FROM (
-            SELECT 
+            SELECT
                 cell_id,
                 COUNT(DISTINCT gene_id) as n_genes_by_counts,
                 SUM(value) as total_counts
@@ -183,12 +183,12 @@ class LazyPreprocessing:
     @staticmethod
     def filter_genes(
         adata: LazyAnnData,
-        min_counts: Optional[int] = None,
-        min_cells: Optional[int] = None,
-        max_counts: Optional[int] = None,
-        max_cells: Optional[int] = None,
+        min_counts: int | None = None,
+        min_cells: int | None = None,
+        max_counts: int | None = None,
+        max_cells: int | None = None,
         inplace: bool = True,
-    ) -> Optional[LazyAnnData]:
+    ) -> LazyAnnData | None:
         """
         Lazy version of scanpy.pp.filter_genes
 
@@ -216,7 +216,7 @@ class LazyPreprocessing:
         filter_sql = f"""
         SELECT gene_id
         FROM (
-            SELECT 
+            SELECT
                 gene_id,
                 COUNT(DISTINCT cell_id) AS n_cells_by_counts,
                 SUM(value) AS total_counts
@@ -250,12 +250,12 @@ class LazyPreprocessing:
     @staticmethod
     def normalize_total(
         adata: LazyAnnData,
-        target_sum: Optional[float] = 1e4,
+        target_sum: float | None = 1e4,
         exclude_highly_expressed: bool = False,
         max_fraction: float = 0.05,
-        key_added: Optional[str] = None,
+        key_added: str | None = None,
         inplace: bool = True,
-    ) -> Optional[LazyAnnData]:
+    ) -> LazyAnnData | None:
         """
         Lazy version of scanpy.pp.normalize_total
 
@@ -270,7 +270,7 @@ class LazyPreprocessing:
 
         # Get cell totals for normalization using only the expression table
         cell_totals_sql = """
-        SELECT 
+        SELECT
             cell_id,
             SUM(value) as total_counts,
             cell_integer_id
@@ -323,7 +323,7 @@ class LazyPreprocessing:
             return new_adata
 
     @staticmethod
-    def log1p(adata: LazyAnnData, inplace: bool = True) -> Optional[LazyAnnData]:
+    def log1p(adata: LazyAnnData, inplace: bool = True) -> LazyAnnData | None:
         """
         Lazy version of scanpy.pp.log1p
 
@@ -355,9 +355,9 @@ class LazyPreprocessing:
         max_mean: float = 3,
         min_disp: float = 0.5,
         max_disp: float = np.inf,
-        n_top_genes: Optional[int] = None,
+        n_top_genes: int | None = None,
         inplace: bool = True,
-    ) -> Optional[pd.DataFrame]:
+    ) -> pd.DataFrame | None:
         """
         Lazy version of scanpy.pp.highly_variable_genes
 
@@ -442,7 +442,7 @@ pp = LazyPreprocessing()
 
 
 def apply_transformations(
-    adata: LazyAnnData, transformations: Optional[list] = None
+    adata: LazyAnnData, transformations: list | None = None
 ) -> LazyAnnData:
     """
     Apply a list of transformations to the data.
@@ -475,7 +475,7 @@ def apply_transformations(
 
 def clear_transformations(
     adata: LazyAnnData, inplace: bool = False
-) -> Optional[LazyAnnData]:
+) -> LazyAnnData | None:
     """
     Clear all transformations from the data.
 

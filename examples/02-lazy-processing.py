@@ -6,10 +6,12 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
-    import marimo as mo
-    from slaf.integrations.anndata import read_slaf
-    from slaf.integrations import scanpy as slaf_scanpy
     import time
+
+    import marimo as mo
+
+    from slaf.integrations import scanpy as slaf_scanpy
+    from slaf.integrations.anndata import read_slaf
 
     return mo, read_slaf, slaf_scanpy, time
 
@@ -220,7 +222,7 @@ def _(mo):
 def _(read_slaf):
     # Load fresh data for transformation examples
     adata_fresh = read_slaf("../slaf-datasets/pbmc3k_processed.slaf")
-    print(f"✅ Loaded fresh dataset for transformations")
+    print("✅ Loaded fresh dataset for transformations")
     return (adata_fresh,)
 
 
@@ -473,7 +475,7 @@ def _(adata, slaf_scanpy, time):
         print(f"   ✅ Pipeline built in {build_time:.4f}s")
         print(f"   Final object: {type(final_slice)}")
         print(
-            f"   Expected shape: (500, 200)"
+            "   Expected shape: (500, 200)"
         )  # Avoid accessing .shape on transformed slice
         print(
             f"   Transformations: {list(final_slice._transformations.keys()) if hasattr(final_slice, '_transformations') else 'None'}"
@@ -515,8 +517,9 @@ def _(read_slaf):
     print("💾 Memory Efficiency Comparison")
     print("=" * 35)
 
-    import psutil
     import gc
+
+    import psutil
 
     def get_memory_usage():
         """Get current memory usage in MB"""
@@ -534,7 +537,7 @@ def _(read_slaf):
     print("\n2. Memory after computing full dataset:")
     gc.collect()
     start_memory = get_memory_usage()
-    native_adata = adata_mem.compute()
+    _ = adata_mem.compute()
     end_memory = get_memory_usage()
     print(f"   Eager loading: {end_memory:.1f} MB")
     print(f"   Memory increase: {end_memory - start_memory:.1f} MB")
@@ -542,7 +545,7 @@ def _(read_slaf):
     print("\n3. Memory after computing small slice:")
     gc.collect()
     slice_memory_before = get_memory_usage()
-    small_slice = adata_mem[:100, :50].compute()
+    _ = adata_mem[:100, :50].compute()
     slice_memory_after = get_memory_usage()
     print(f"   Small slice: {slice_memory_after:.1f} MB")
     print(f"   Memory increase: {slice_memory_after - slice_memory_before:.1f} MB")
@@ -643,7 +646,7 @@ def _(adata, slaf_scanpy, time):
 
         start_time = time.time()
         # Use .X.compute() to avoid the metadata mismatch issue
-        lazy_result = lazy_slice.X.compute()
+        _ = lazy_slice.X.compute()
         lazy_compute_time = time.time() - start_time
 
         print(f"   Build time: {lazy_build_time:.4f}s")
@@ -654,18 +657,18 @@ def _(adata, slaf_scanpy, time):
         print("\n2. Eager approach (simulated):")
 
         start_time = time.time()
-        eager_result = adata.compute()
+        _ = adata.compute()
         eager_load_time = time.time() - start_time
 
         # Simulate eager transformations (this would be done in memory)
         print(f"   Load time: {eager_load_time:.4f}s")
-        print(f"   Transformations would be done in memory (slower for large datasets)")
+        print("   Transformations would be done in memory (slower for large datasets)")
 
-        print(f"\n3. Key benefits:")
-        print(f"   - Lazy: Build complex pipelines instantly")
-        print(f"   - Lazy: Only compute what you need")
-        print(f"   - Lazy: Memory efficient")
-        print(f"   - Lazy: SQL-level performance for operations")
+        print("\n3. Key benefits:")
+        print("   - Lazy: Build complex pipelines instantly")
+        print("   - Lazy: Only compute what you need")
+        print("   - Lazy: Memory efficient")
+        print("   - Lazy: SQL-level performance for operations")
 
     compare_lazy_vs_eager_performance(adata)
     return

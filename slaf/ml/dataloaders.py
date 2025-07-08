@@ -1,5 +1,5 @@
 import numpy as np
-from typing import List, Tuple
+
 from .tokenizers import SLAFTokenizer
 
 # Try to import torch, but make it optional
@@ -98,7 +98,7 @@ class SLAFDataLoader:
         # Pre-compute cell integer ID ranges for efficient batching
         self.cell_integer_ranges = self._get_cell_integer_ranges()
 
-    def _get_cell_integer_ranges(self) -> List[Tuple[int, int]]:
+    def _get_cell_integer_ranges(self) -> list[tuple[int, int]]:
         """Get cell integer ID ranges for batching"""
         # Get the maximum cell integer ID from the obs DataFrame
         max_cell_id = int(self.slaf_array.obs["cell_integer_id"].astype(int).max())

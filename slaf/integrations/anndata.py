@@ -1,7 +1,9 @@
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pandas as pd
 import scipy.sparse
-from typing import Union, Optional, Tuple, TYPE_CHECKING
+
 from slaf.core.slaf import SLAFArray
 from slaf.core.sparse_ops import LazySparseMixin
 
@@ -15,7 +17,7 @@ class LazyExpressionMatrix(LazySparseMixin):
     def __init__(self, slaf_array: SLAFArray):
         super().__init__()
         self.slaf_array = slaf_array
-        self.parent_adata: Optional["LazyAnnData"] = None
+        self.parent_adata: "LazyAnnData" | None = None
         # Store slicing selectors
         self._cell_selector = None
         self._gene_selector = None
@@ -77,11 +79,11 @@ class LazyExpressionMatrix(LazySparseMixin):
             stop = max(0, min(stop, self.slaf_array.shape[axis]))
 
             return len(range(start, stop, step))
-        elif isinstance(selector, (list, np.ndarray)):
+        elif isinstance(selector, list | np.ndarray):
             if isinstance(selector, np.ndarray) and selector.dtype == bool:
                 return np.sum(selector)
             return len(selector)
-        elif isinstance(selector, (int, np.integer)):
+        elif isinstance(selector, int | np.integer):
             return 1
         else:
             return self.slaf_array.shape[axis]
@@ -161,13 +163,13 @@ class LazyExpressionMatrix(LazySparseMixin):
                 # Apply the new slice to the old range
                 result_indices = old_range[new_start:new_stop:new_step]
                 return result_indices
-            elif isinstance(new, (int, np.integer)):
+            elif isinstance(new, int | np.integer):
                 # Single index into the old range
                 if 0 <= new < len(old_range):
                     return [old_range[new]]
                 else:
                     return []
-            elif isinstance(new, (list, np.ndarray)):
+            elif isinstance(new, list | np.ndarray):
                 # List of indices into the old range
                 result = []
                 for idx in new:
@@ -178,7 +180,7 @@ class LazyExpressionMatrix(LazySparseMixin):
                 return new
 
         # If old is a list of indices, apply new to those indices
-        elif isinstance(old, (list, np.ndarray)):
+        elif isinstance(old, list | np.ndarray):
             if isinstance(new, slice):
                 # Apply slice to the old list
                 new_start = new.start or 0
@@ -196,13 +198,13 @@ class LazyExpressionMatrix(LazySparseMixin):
                 new_stop = max(0, min(new_stop, len(old)))
 
                 return old[new_start:new_stop:new_step]
-            elif isinstance(new, (int, np.integer)):
+            elif isinstance(new, int | np.integer):
                 # Single index into the old list
                 if 0 <= new < len(old):
                     return [old[new]]
                 else:
                     return []
-            elif isinstance(new, (list, np.ndarray)):
+            elif isinstance(new, list | np.ndarray):
                 # List of indices into the old list
                 result = []
                 for idx in new:
@@ -259,7 +261,7 @@ class LazyExpressionMatrix(LazySparseMixin):
 
     def _apply_sql_transformations(
         self, cell_selector, gene_selector, transformations
-    ) -> Optional[pd.DataFrame]:
+    ) -> pd.DataFrame | None:
         """Apply transformations at SQL level when possible"""
         # Check if we can apply all transformations in SQL
         sql_applicable = []
@@ -329,7 +331,7 @@ class LazyExpressionMatrix(LazySparseMixin):
     def _apply_sql_normalize_total(self, query: str, transform_data: dict) -> str:
         """Apply normalize_total transformation in SQL"""
         cell_factors = transform_data["cell_factors"]
-        target_sum = transform_data["target_sum"]
+        # target_sum = transform_data["target_sum"]  # Removed unused variable
 
         # Create a CASE statement for cell factors
         case_statements = []
@@ -340,7 +342,7 @@ class LazyExpressionMatrix(LazySparseMixin):
 
         # Wrap the query to apply normalization
         return f"""
-        SELECT 
+        SELECT
             cell_id,
             gene_id,
             value * {factor_case} as value
@@ -350,7 +352,7 @@ class LazyExpressionMatrix(LazySparseMixin):
     def _apply_sql_log1p(self, query: str) -> str:
         """Apply log1p transformation in SQL, only to nonzero values (sparse semantics)"""
         return f"""
-        SELECT 
+        SELECT
             cell_id,
             gene_id,
             CASE WHEN value != 0 THEN LN(1 + value) ELSE 0 END as value
@@ -389,7 +391,7 @@ class LazyExpressionMatrix(LazySparseMixin):
         obs_names = None
         if hasattr(self, "parent_adata") and self.parent_adata is not None:
             obs_names = getattr(self.parent_adata, "obs_names", None)
-        if obs_names is None or not isinstance(obs_names, (list, np.ndarray, pd.Index)):
+        if obs_names is None or not isinstance(obs_names, list | np.ndarray | pd.Index):
             obs_names_local = [f"cell_{i}" for i in range(matrix.shape[0])]
         else:
             obs_names_local = list(obs_names)
@@ -407,7 +409,7 @@ class LazyExpressionMatrix(LazySparseMixin):
             start = max(0, min(start, len(obs_names_local)))
             stop = max(0, min(stop, len(obs_names_local)))
             selected_cell_names = obs_names_local[start:stop:step]
-        elif isinstance(cell_selector, (list, np.ndarray)):
+        elif isinstance(cell_selector, list | np.ndarray):
             if len(obs_names_local) > 0:
                 if (
                     isinstance(cell_selector, np.ndarray)
@@ -422,12 +424,12 @@ class LazyExpressionMatrix(LazySparseMixin):
                     selected_cell_names = [
                         obs_names_local[i]
                         for i in cell_selector
-                        if isinstance(i, (int, np.integer))
+                        if isinstance(i, int | np.integer)
                         and 0 <= i < len(obs_names_local)
                     ]
             else:
                 selected_cell_names = []
-        elif isinstance(cell_selector, (int, np.integer)):
+        elif isinstance(cell_selector, int | np.integer):
             if 0 <= cell_selector < len(obs_names_local):
                 selected_cell_names = [obs_names_local[cell_selector]]
             else:
@@ -483,19 +485,19 @@ class LazyExpressionMatrix(LazySparseMixin):
             matrix = self.compute()
             return func(matrix, *args[1:], **kwargs)
 
-    def mean(self, axis: Optional[int] = None) -> Union[float, np.ndarray]:
+    def mean(self, axis: int | None = None) -> float | np.ndarray:
         """Compute mean along axis via SQL aggregation"""
         return self._sql_aggregation("avg", axis)
 
-    def sum(self, axis: Optional[int] = None) -> Union[float, np.ndarray]:
+    def sum(self, axis: int | None = None) -> float | np.ndarray:
         """Compute sum along axis via SQL aggregation"""
         return self._sql_aggregation("sum", axis)
 
-    def var(self, axis: Optional[int] = None) -> Union[float, np.ndarray]:
+    def var(self, axis: int | None = None) -> float | np.ndarray:
         """Compute variance along axis via SQL aggregation"""
         return self._sql_aggregation("variance", axis)
 
-    def std(self, axis: Optional[int] = None) -> Union[float, np.ndarray]:
+    def std(self, axis: int | None = None) -> float | np.ndarray:
         """Compute standard deviation along axis"""
         return self._sql_aggregation("stddev", axis)
 
@@ -659,7 +661,7 @@ class LazyAnnData(LazySparseMixin):
         return self.shape[1]
 
     @property
-    def shape(self) -> Tuple[int, int]:
+    def shape(self) -> tuple[int, int]:
         """Get the shape of the data, accounting for any applied filters"""
         if self._cell_selector is not None or self._gene_selector is not None:
             # Calculate the shape based on selectors
@@ -702,11 +704,11 @@ class LazyAnnData(LazySparseMixin):
             stop = max(0, min(stop, self.slaf.shape[axis]))
 
             return len(range(start, stop, step))
-        elif isinstance(selector, (list, np.ndarray)):
+        elif isinstance(selector, list | np.ndarray):
             if isinstance(selector, np.ndarray) and selector.dtype == bool:
                 return np.sum(selector)
             return len(selector)
-        elif isinstance(selector, (int, np.integer)):
+        elif isinstance(selector, int | np.integer):
             return 1
         else:
             return self.slaf.shape[axis]
@@ -780,10 +782,10 @@ class LazyAnnData(LazySparseMixin):
                         else:
                             mask = cell_selector[: len(obs_df)]
                         obs_df = obs_df[mask]
-                elif isinstance(cell_selector, (list, np.ndarray)):
+                elif isinstance(cell_selector, list | np.ndarray):
                     # Integer indices
                     obs_df = obs_df.iloc[cell_selector]
-                elif isinstance(cell_selector, (int, np.integer)):
+                elif isinstance(cell_selector, int | np.integer):
                     obs_df = obs_df.iloc[[int(cell_selector)]]
                 else:
                     obs_df = obs_df
@@ -834,10 +836,10 @@ class LazyAnnData(LazySparseMixin):
                         else:
                             mask = gene_selector[: len(var_df)]
                         var_df = var_df[mask]
-                elif isinstance(gene_selector, (list, np.ndarray)):
+                elif isinstance(gene_selector, list | np.ndarray):
                     # Integer indices
                     var_df = var_df.iloc[gene_selector]
-                elif isinstance(gene_selector, (int, np.integer)):
+                elif isinstance(gene_selector, int | np.integer):
                     var_df = var_df.iloc[[int(gene_selector)]]
                 else:
                     var_df = var_df

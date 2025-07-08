@@ -1,6 +1,7 @@
+from typing import Any
+
 import numpy as np
-import pandas as pd
-from typing import List, Dict, Any, Optional, Tuple
+
 from slaf.core.slaf import SLAFArray
 
 
@@ -112,7 +113,7 @@ class SLAFTokenizer:
             dtype=int,
         )
 
-    def _chunk_range(self, start: int, end: int) -> List[Tuple[int, int]]:
+    def _chunk_range(self, start: int, end: int) -> list[tuple[int, int]]:
         """Split a range into chunks"""
         chunks = []
         for i in range(start, end, self.chunk_size):
@@ -122,10 +123,10 @@ class SLAFTokenizer:
 
     def tokenize_scgpt(
         self,
-        cell_integer_id_range: Tuple[int, int],
+        cell_integer_id_range: tuple[int, int],
         max_genes: int = 1024,
         use_sql_binning: bool = False,
-    ) -> List[List[int]]:
+    ) -> list[list[int]]:
         """Tokenize cells using scGPT format: [CLS] gene1 expr1 gene2 expr2 ... [SEP]
 
         Args:
@@ -147,8 +148,8 @@ class SLAFTokenizer:
             return self._tokenize_scgpt_sequential(chunks, max_genes, use_sql_binning)
 
     def _tokenize_scgpt_sequential(
-        self, chunks: List[Tuple[int, int]], max_genes: int, use_sql_binning: bool
-    ) -> List[List[int]]:
+        self, chunks: list[tuple[int, int]], max_genes: int, use_sql_binning: bool
+    ) -> list[list[int]]:
         """Process scGPT tokenization sequentially across chunks"""
         all_tokens = []
         for chunk in chunks:
@@ -157,8 +158,8 @@ class SLAFTokenizer:
         return all_tokens
 
     def _tokenize_scgpt_chunk(
-        self, chunk_range: Tuple[int, int], max_genes: int, use_sql_binning: bool
-    ) -> List[List[int]]:
+        self, chunk_range: tuple[int, int], max_genes: int, use_sql_binning: bool
+    ) -> list[list[int]]:
         """Tokenize a single chunk of cells using scGPT format"""
         if use_sql_binning:
             return self._tokenize_scgpt_sql_binning(chunk_range, max_genes)
@@ -166,20 +167,20 @@ class SLAFTokenizer:
             return self._tokenize_scgpt_python_binning(chunk_range, max_genes)
 
     def _tokenize_scgpt_python_binning(
-        self, cell_integer_id_range: Tuple[int, int], max_genes: int
-    ) -> List[List[int]]:
+        self, cell_integer_id_range: tuple[int, int], max_genes: int
+    ) -> list[list[int]]:
         """scGPT tokenization with Python-based expression binning"""
         start, end = cell_integer_id_range
 
         # Query expression data sorted by expression
         sql = f"""
         WITH ranked_genes AS (
-            SELECT 
+            SELECT
                 cell_id,
                 gene_id,
                 value,
                 ROW_NUMBER() OVER (
-                    PARTITION BY cell_id 
+                    PARTITION BY cell_id
                     ORDER BY value DESC
                 ) as gene_rank
             FROM expression
@@ -187,10 +188,10 @@ class SLAFTokenizer:
         ),
         limited_genes AS (
             SELECT cell_id, gene_id, value, gene_rank
-            FROM ranked_genes 
+            FROM ranked_genes
             WHERE gene_rank <= {max_genes}
         )
-        SELECT 
+        SELECT
             cell_id,
             array_agg(gene_id ORDER BY gene_rank) as gene_sequence,
             array_agg(value ORDER BY gene_rank) as expr_sequence
@@ -234,15 +235,15 @@ class SLAFTokenizer:
         return token_sequences
 
     def _tokenize_scgpt_sql_binning(
-        self, cell_integer_id_range: Tuple[int, int], max_genes: int
-    ) -> List[List[int]]:
+        self, cell_integer_id_range: tuple[int, int], max_genes: int
+    ) -> list[list[int]]:
         """scGPT tokenization with SQL-based expression binning"""
         start, end = cell_integer_id_range
 
         # Calculate expression bins and create tokens in SQL
         sql = f"""
         WITH ranked_genes AS (
-            SELECT 
+            SELECT
                 cell_id,
                 gene_id,
                 value,
@@ -250,22 +251,22 @@ class SLAFTokenizer:
                 LEAST(
                     {self.n_expression_bins - 1},
                     FLOOR(
-                        (ln(1 + value) - MIN(ln(1 + value)) OVER ()) * {self.n_expression_bins} / 
+                        (ln(1 + value) - MIN(ln(1 + value)) OVER ()) * {self.n_expression_bins} /
                         NULLIF(MAX(ln(1 + value)) OVER () - MIN(ln(1 + value)) OVER (), 0)
                     )
                 ) as expr_bin,
                 ROW_NUMBER() OVER (
-                    PARTITION BY cell_id 
+                    PARTITION BY cell_id
                     ORDER BY value DESC
                 ) as gene_rank
             FROM expression
             WHERE cell_integer_id BETWEEN {start} AND {end - 1}
         )
-        SELECT 
+        SELECT
             cell_id,
             array_agg(gene_id ORDER BY gene_rank) as gene_ids,
             array_agg(expr_bin ORDER BY gene_rank) as expr_bins
-        FROM ranked_genes 
+        FROM ranked_genes
         WHERE gene_rank <= {max_genes}
         GROUP BY cell_id
         """
@@ -307,10 +308,10 @@ class SLAFTokenizer:
 
     def tokenize_geneformer(
         self,
-        cell_integer_id_range: Tuple[int, int],
+        cell_integer_id_range: tuple[int, int],
         max_genes: int = 2048,
-        min_percentile: Optional[float] = None,
-    ) -> List[List[int]]:
+        min_percentile: float | None = None,
+    ) -> list[list[int]]:
         """Tokenize cells using Geneformer format: ranked gene tokens
 
         Args:
@@ -335,10 +336,10 @@ class SLAFTokenizer:
 
     def _tokenize_geneformer_sequential(
         self,
-        chunks: List[Tuple[int, int]],
+        chunks: list[tuple[int, int]],
         max_genes: int,
-        min_percentile: Optional[float],
-    ) -> List[List[int]]:
+        min_percentile: float | None,
+    ) -> list[list[int]]:
         """Process Geneformer tokenization sequentially across chunks"""
         all_tokens = []
         for chunk in chunks:
@@ -350,10 +351,10 @@ class SLAFTokenizer:
 
     def _tokenize_geneformer_chunk(
         self,
-        chunk_range: Tuple[int, int],
+        chunk_range: tuple[int, int],
         max_genes: int,
-        min_percentile: Optional[float],
-    ) -> List[List[int]]:
+        min_percentile: float | None,
+    ) -> list[list[int]]:
         """Tokenize a single chunk of cells using Geneformer format"""
         if min_percentile is not None:
             return self._tokenize_geneformer_percentile(
@@ -363,29 +364,29 @@ class SLAFTokenizer:
             return self._tokenize_geneformer_standard(chunk_range, max_genes)
 
     def _tokenize_geneformer_standard(
-        self, cell_integer_id_range: Tuple[int, int], max_genes: int
-    ) -> List[List[int]]:
+        self, cell_integer_id_range: tuple[int, int], max_genes: int
+    ) -> list[list[int]]:
         """Standard Geneformer tokenization with expression ranking"""
         start, end = cell_integer_id_range
 
         # Rank genes by expression within each cell
         sql = f"""
         WITH ranked_expression AS (
-            SELECT 
+            SELECT
                 cell_id,
                 gene_id,
                 value,
                 RANK() OVER (
-                    PARTITION BY cell_id 
+                    PARTITION BY cell_id
                     ORDER BY value DESC
                 ) as expression_rank
             FROM expression
             WHERE cell_integer_id BETWEEN {start} AND {end - 1}
         )
-        SELECT 
+        SELECT
             cell_id,
             array_agg(gene_id ORDER BY expression_rank) as ranked_genes
-        FROM ranked_expression 
+        FROM ranked_expression
         WHERE expression_rank <= {max_genes}
         GROUP BY cell_id
         """
@@ -411,43 +412,43 @@ class SLAFTokenizer:
 
     def _tokenize_geneformer_percentile(
         self,
-        cell_integer_id_range: Tuple[int, int],
+        cell_integer_id_range: tuple[int, int],
         max_genes: int,
         min_percentile: float,
-    ) -> List[List[int]]:
+    ) -> list[list[int]]:
         """Geneformer tokenization with expression percentile filtering"""
         start, end = cell_integer_id_range
 
         # Filter by expression percentile within each cell
         sql = f"""
         WITH cell_percentiles AS (
-            SELECT 
+            SELECT
                 cell_id,
                 gene_id,
                 value,
                 PERCENT_RANK() OVER (
-                    PARTITION BY cell_id 
+                    PARTITION BY cell_id
                     ORDER BY value
                 ) * 100 as expr_percentile
             FROM expression
             WHERE cell_integer_id BETWEEN {start} AND {end - 1}
         ),
         filtered_genes AS (
-            SELECT 
+            SELECT
                 cell_id,
                 gene_id,
                 value,
                 RANK() OVER (
-                    PARTITION BY cell_id 
+                    PARTITION BY cell_id
                     ORDER BY value DESC
                 ) as final_rank
             FROM cell_percentiles
             WHERE expr_percentile >= {min_percentile}
         )
-        SELECT 
+        SELECT
             cell_id,
             array_agg(gene_id ORDER BY final_rank) as ranked_genes
-        FROM filtered_genes 
+        FROM filtered_genes
         WHERE final_rank <= {max_genes}
         GROUP BY cell_id
         """
@@ -471,7 +472,7 @@ class SLAFTokenizer:
 
         return token_sequences
 
-    def get_vocab_info(self) -> Dict[str, Any]:
+    def get_vocab_info(self) -> dict[str, Any]:
         """Get vocabulary information"""
         return {
             "vocab_size": self.vocab_size,
@@ -486,7 +487,7 @@ class SLAFTokenizer:
             "chunk_size": self.chunk_size,
         }
 
-    def decode_tokens(self, tokens: List[int]) -> Dict[str, Any]:
+    def decode_tokens(self, tokens: list[int]) -> dict[str, Any]:
         """Decode token sequence back to interpretable format (for debugging)"""
         tokens_array = np.array(tokens)
         decoded = {"special_tokens": [], "genes": [], "expression_bins": []}

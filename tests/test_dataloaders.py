@@ -1,5 +1,6 @@
-import pytest
 import numpy as np
+import pytest
+
 from slaf.ml.dataloaders import SLAFDataLoader, get_device_info, get_optimal_device
 
 
@@ -242,7 +243,8 @@ class TestSLAFDataLoader:
         batches = list(dataloader)
 
         # All batches except the last should have batch_size cells
-        for i, batch in enumerate(batches[:-1]):
+        for _ in range(len(batches[:-1])):
+            batch = batches[_]
             input_ids = batch["input_ids"]
             assert input_ids.shape[0] == dataloader.batch_size
 
@@ -259,9 +261,10 @@ class TestSLAFDataLoader:
         batches = list(dataloader)
 
         # Check that cell IDs are sequential and match the ranges
-        for i, batch in enumerate(batches):
+        for _ in range(len(batches)):
+            batch = batches[_]
             cell_ids = batch["cell_ids"]
-            start_cell, end_cell = dataloader.cell_integer_ranges[i]
+            start_cell, end_cell = dataloader.cell_integer_ranges[_]
 
             # Cell IDs should be in the expected range
             expected_cell_ids = list(range(start_cell, end_cell))

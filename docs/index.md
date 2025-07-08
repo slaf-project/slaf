@@ -22,7 +22,7 @@
 
 ## What is SLAF?
 
-**SLAF** (Sparse Lance Array Format) is a high-performance format for single-cell data that combines the power of SQL with lazy evaluation. Built on top of [Lance](https://lancedb.github.io/lance/) and [DuckDB](https://duckdb.org/), SLAF provides:
+**SLAF** (Sparse Lazy Array Format) is a high-performance format for single-cell data that combines the power of SQL with lazy evaluation. Built on top of [Lance](https://lancedb.github.io/lance/) and [DuckDB](https://duckdb.org/), SLAF provides:
 
 - 🚀 **Lightning Fast Queries**: SQL-level performance for data operations
 - 💾 **Memory Efficient**: Lazy evaluation, only load what you need
@@ -110,8 +110,7 @@ See our [benchmarks](benchmarks/performance.md) for detailed performance compari
 ## Getting Help
 
 - 📖 **Documentation**: This site contains comprehensive guides and API docs
-- 💬 **GitHub Issues**: Report bugs or request features on [GitHub](https://github.com/pavanramkumar/slaf)
-- 🐦 **Twitter**: Follow [@pavanramkumar](https://twitter.com/pavanramkumar) for updates
+- 💬 **GitHub Issues**: Report bugs or request features on [GitHub](https://github.com/slaf-project/slaf)
 - 📧 **Email**: Contact pavan.ramkumar@gmail.com for questions
 
 ## Contributing
@@ -124,6 +123,6 @@ We welcome contributions! See our [contributing guide](development/contributing.
 
 - :fontawesome-solid-heart:{ .heart } **Made with love for the single-cell community**
 
-- :fontawesome-solid-code:{ .code } **[View on GitHub](https://github.com/pavanramkumar/slaf){target=\_blank}**
+- :fontawesome-solid-code:{ .code } **[View on GitHub](https://github.com/slaf-project/slaf){target=\_blank}**
 
 </div>

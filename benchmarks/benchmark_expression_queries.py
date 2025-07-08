@@ -1,15 +1,15 @@
-import scanpy as sc
-import time
 import sys
+import time
+
+import scanpy as sc
+
 from slaf.core.slaf import SLAFArray
-from typing import Optional
-import pandas as pd
 
 
 def demo_realistic_expression_queries(h5ad_path: str, slaf_path: str):
     """Demo realistic expression query scenarios for PBMC data"""
+
     from slaf.core.slaf import SLAFArray
-    import pandas as pd
 
     # Load SLAF dataset
     slaf = SLAFArray(slaf_path)

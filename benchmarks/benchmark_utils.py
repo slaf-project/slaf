@@ -1,6 +1,6 @@
-import numpy as np
 import sys
-from typing import Dict, List
+
+import numpy as np
 from rich.console import Console
 from rich.table import Table
 
@@ -72,7 +72,7 @@ def parse_filter_for_slaf(filter_dict):
 
 
 def print_benchmark_table(
-    results: List[Dict], dataset_name: str = "", scenario_type: str = ""
+    results: list[dict], dataset_name: str = "", scenario_type: str = ""
 ):
     """Print a comprehensive benchmark results table
 
@@ -301,16 +301,16 @@ def clear_caches():
         import duckdb
 
         duckdb.query("PRAGMA clear_cache;")
-    except:
+    except Exception:
         pass  # Ignore if DuckDB cache clearing fails
 
     # Clear any Lance dataset caches
     try:
-        import lance
+        pass
 
         # Note: This would need to be called on specific SLAF instances
         # We'll handle this in the burn_in function
-    except:
+    except Exception:
         pass  # Ignore if Lance cache clearing fails
 
 
@@ -337,11 +337,9 @@ def warm_up_slaf_database(slaf_instance, verbose=False):
     # Clear Lance dataset caches if SLAF instance provided
     if slaf_instance is not None:
         try:
-            import lance
-
             # Force reload of Lance datasets to clear any internal caches
             slaf_instance._setup_datasets()
-        except:
+        except Exception:
             pass  # Ignore if Lance cache clearing fails
 
     # Run representative warm-up queries to prime the database

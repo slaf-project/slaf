@@ -1,12 +1,14 @@
-import scanpy as sc
+import sys
 import time
+
 import numpy as np
-from slaf.core.slaf import SLAFArray
-from slaf.ml.tokenizers import SLAFTokenizer
-from benchmark_utils import get_object_memory_usage, clear_caches
+import scanpy as sc
+from benchmark_utils import clear_caches, get_object_memory_usage
 from rich.console import Console
 from rich.table import Table
-import sys
+
+from slaf.core.slaf import SLAFArray
+from slaf.ml.tokenizers import SLAFTokenizer
 
 
 def demo_tokenizer_scenarios(h5ad_path: str, slaf_path: str):

@@ -4,7 +4,7 @@ This page explains the fundamental concepts behind SLAF and how it works.
 
 ## What is SLAF?
 
-**SLAF** (Sparse Lance Array Format) is a high-performance format for single-cell data that combines the power of SQL with lazy evaluation. It's designed to solve the performance and scalability challenges of traditional single-cell data formats.
+**SLAF** (Sparse Lazy Array Format) is a high-performance format for single-cell data that combines the power of SQL with lazy evaluation. It's designed to solve the performance and scalability challenges of traditional single-cell data formats.
 
 ## Key Design Principles
 

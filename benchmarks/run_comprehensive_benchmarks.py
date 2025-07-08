@@ -15,29 +15,27 @@ Each benchmark type is run in isolation with proper memory management and timing
 import argparse
 import sys
 from pathlib import Path
-from typing import Dict, List
+
 import numpy as np
+from benchmark_anndata_ops import benchmark_anndata_ops
 
 # Import individual benchmark modules
 from benchmark_cell_filtering import benchmark_cell_filtering
-from benchmark_gene_filtering import benchmark_gene_filtering
-from benchmark_expression_queries import benchmark_expression_queries
-
-from benchmark_anndata_ops import benchmark_anndata_ops
-from benchmark_scanpy_preprocessing import benchmark_scanpy_preprocessing
-from benchmark_tokenizers import benchmark_tokenizers
 from benchmark_dataloaders import (
+    benchmark_data_vs_tokenization_timing,
     benchmark_dataloaders,
     benchmark_multi_process_scaling,
-    benchmark_data_vs_tokenization_timing,
 )
+from benchmark_expression_queries import benchmark_expression_queries
+from benchmark_gene_filtering import benchmark_gene_filtering
+from benchmark_scanpy_preprocessing import benchmark_scanpy_preprocessing
+from benchmark_tokenizers import benchmark_tokenizers
 
 # Import utilities
 from benchmark_utils import print_benchmark_table
 
 # Import SLAF converter for auto-conversion
 from slaf.data.converter import SLAFConverter
-
 
 DEFAULT_DATASET_DIR = str(
     (Path(__file__).parent.parent.parent / "slaf-datasets").resolve()
@@ -48,10 +46,10 @@ DEFAULT_BENCHMARK_DIR = str((Path(__file__).parent.parent / "benchmarks").resolv
 def run_benchmark_suite(
     h5ad_path: str,
     slaf_path: str,
-    benchmark_types: List[str] | None = None,
+    benchmark_types: list[str] | None = None,
     verbose: bool = False,
     auto_convert: bool = False,
-) -> Dict[str, List[Dict]]:
+) -> dict[str, list[dict]]:
     """
     Run comprehensive benchmark suite across all or specified benchmark types
 
@@ -84,7 +82,7 @@ def run_benchmark_suite(
 
     if not Path(slaf_path).exists():
         print(f"❌ SLAF file not found: {slaf_path}")
-        print(f"   Use --auto-convert to convert from h5ad")
+        print("   Use --auto-convert to convert from h5ad")
         return {}
 
     # Define all available benchmark types
@@ -111,7 +109,7 @@ def run_benchmark_suite(
         print(f"   Available types: {list(all_benchmark_types.keys())}")
         return {}
 
-    print(f"🚀 Running comprehensive benchmark suite")
+    print("🚀 Running comprehensive benchmark suite")
     print(f"   Dataset: {Path(h5ad_path).name}")
     print(f"   Benchmark types: {benchmark_types}")
     print(f"   Verbose: {verbose}")
@@ -173,7 +171,7 @@ def run_benchmark_suite(
                     print_dataloader_results_table(results)
 
                     # Calculate summary for this type
-                    avg_speedup = np.mean(
+                    _ = np.mean(
                         [r["total_speedup"] for r in results if r["total_speedup"] > 0]
                     )
                 else:
@@ -193,7 +191,7 @@ def run_benchmark_suite(
                     print_benchmark_table(results, Path(h5ad_path).stem, benchmark_type)
 
                     # Calculate summary for this type
-                    avg_speedup = np.mean(
+                    _ = np.mean(
                         [r["total_speedup"] for r in results if r["total_speedup"] > 0]
                     )
                 else:
@@ -206,7 +204,7 @@ def run_benchmark_suite(
     return all_results
 
 
-def print_comprehensive_summary(all_results: Dict[str, List[Dict]], dataset_name: str):
+def print_comprehensive_summary(all_results: dict[str, list[dict]], dataset_name: str):
     """Print comprehensive summary across all benchmark types"""
 
     if not all_results:
@@ -231,33 +229,35 @@ def print_comprehensive_summary(all_results: Dict[str, List[Dict]], dataset_name
     all_memory_efficiencies = []
     type_summaries = []
 
-    for benchmark_type, results in all_results.items():
-        if not results:
+    for _benchmark_type, type_results in all_results.items():
+        if not type_results:
             continue
 
         # Handle different result formats
-        if benchmark_type == "data_vs_tokenization_timing":
+        if _benchmark_type == "data_vs_tokenization_timing":
             # Timing breakdown returns a dictionary with h5ad/slaf breakdowns
             # Skip this in the standard summary since it has its own analysis
             continue
-        elif benchmark_type == "multi_process_scaling":
+        elif _benchmark_type == "multi_process_scaling":
             # Handle multi-process scaling results (different format)
             continue
-        elif benchmark_type == "dataloaders":
+        elif _benchmark_type == "dataloaders":
             # Dataloaders measures overhead, not speedup vs h5ad
             # Skip this in the standard summary since it has its own section
             continue
-        elif isinstance(results, dict):
+        elif isinstance(type_results, dict):
             # Handle other dictionary-based results
             continue
         else:
             # Standard list-based results
             # Calculate statistics for this type
-            speedups = [r["total_speedup"] for r in results if r["total_speedup"] > 0]
+            speedups = [
+                r["total_speedup"] for r in type_results if r["total_speedup"] > 0
+            ]
             memory_efficiencies = []
 
             # Calculate memory efficiency for each result
-            for r in results:
+            for r in type_results:
                 h5ad_mem = r.get("h5ad_total_memory_mb", 0)
                 slaf_mem = r.get("slaf_total_memory_mb", 0)
 
@@ -291,8 +291,8 @@ def print_comprehensive_summary(all_results: Dict[str, List[Dict]], dataset_name
 
                 type_summaries.append(
                     {
-                        "type": benchmark_type,
-                        "scenarios": len(results),
+                        "type": _benchmark_type,
+                        "scenarios": len(type_results),
                         "avg_speedup": avg_speedup,
                         "min_speedup": min_speedup,
                         "max_speedup": max_speedup,
@@ -303,7 +303,7 @@ def print_comprehensive_summary(all_results: Dict[str, List[Dict]], dataset_name
                 )
 
     # Print type-by-type summary
-    print(f"\n📊 BENCHMARK TYPE SUMMARY")
+    print("\n📊 BENCHMARK TYPE SUMMARY")
     print("-" * 80)
 
     # Use rich table for better formatting
@@ -375,7 +375,9 @@ def print_comprehensive_summary(all_results: Dict[str, List[Dict]], dataset_name
             overhead_status = (
                 "✅ Good"
                 if avg_overhead < 15
-                else "⚠️ High" if avg_overhead < 50 else "❌ Critical"
+                else "⚠️ High"
+                if avg_overhead < 50
+                else "❌ Critical"
             )
             special_benchmarks.append(
                 f"📦 Dataloader overhead: {avg_overhead:.1f}% ({overhead_status})"
@@ -402,7 +404,7 @@ def print_comprehensive_summary(all_results: Dict[str, List[Dict]], dataset_name
                 )
 
     if special_benchmarks:
-        print(f"\n🔧 SPECIAL BENCHMARK TYPES")
+        print("\n🔧 SPECIAL BENCHMARK TYPES")
         print("-" * 40)
         for benchmark in special_benchmarks:
             print(f"   {benchmark}")
@@ -418,7 +420,7 @@ def print_comprehensive_summary(all_results: Dict[str, List[Dict]], dataset_name
             speedup_25th = np.percentile(all_speedups, 25)
             speedup_75th = np.percentile(all_speedups, 75)
 
-        print(f"\n🎯 OVERALL SUMMARY")
+        print("\n🎯 OVERALL SUMMARY")
         print("-" * 40)
         print(f"Total scenarios: {len(all_speedups)}")
         print(f"Average speedup: {overall_avg:.1f}x")
@@ -449,7 +451,7 @@ def print_comprehensive_summary(all_results: Dict[str, List[Dict]], dataset_name
             )
 
         # Performance insights
-        print(f"\n💡 PERFORMANCE INSIGHTS")
+        print("\n💡 PERFORMANCE INSIGHTS")
         print("-" * 40)
 
         # Speedup insights
@@ -492,7 +494,7 @@ def print_comprehensive_summary(all_results: Dict[str, List[Dict]], dataset_name
             )
 
         # Optimization priorities
-        print(f"\n🎯 OPTIMIZATION PRIORITIES")
+        print("\n🎯 OPTIMIZATION PRIORITIES")
         print("-" * 40)
 
         # Find areas needing attention
@@ -524,7 +526,9 @@ def print_comprehensive_summary(all_results: Dict[str, List[Dict]], dataset_name
                 speedup_level = (
                     "exceptional"
                     if win["avg_speedup"] > 3.0
-                    else "excellent" if win["avg_speedup"] > 2.5 else "very good"
+                    else "excellent"
+                    if win["avg_speedup"] > 2.5
+                    else "very good"
                 )
                 print(
                     f"   • {win['type']}: {win['avg_speedup']:.1f}x speedup ({speedup_level})"
@@ -538,7 +542,9 @@ def print_comprehensive_summary(all_results: Dict[str, List[Dict]], dataset_name
                 efficiency_level = (
                     "exceptional"
                     if win["avg_mem_eff"] > 50
-                    else "excellent" if win["avg_mem_eff"] > 20 else "very good"
+                    else "excellent"
+                    if win["avg_mem_eff"] > 20
+                    else "very good"
                 )
                 print(
                     f"   • {win['type']}: {win['avg_mem_eff']:.1f}x memory efficiency ({efficiency_level})"
@@ -553,13 +559,13 @@ def main():
 Examples:
   # Run all benchmarks on pbmc3k
   python run_comprehensive_benchmarks.py --datasets pbmc3k --auto-convert
-  
+
   # Run specific benchmark types
   python run_comprehensive_benchmarks.py --datasets pbmc3k --types cell_filtering expression_queries
-  
+
   # Run with verbose output
   python run_comprehensive_benchmarks.py --datasets pbmc3k --verbose --auto-convert
-  
+
   # Run on multiple datasets
   python run_comprehensive_benchmarks.py --datasets pbmc3k pbmc_68k --auto-convert
         """,
@@ -699,7 +705,7 @@ Examples:
                         if isinstance(v, dict):
                             clean_dict = {}
                             for dict_k, dict_v in v.items():
-                                if isinstance(dict_v, (np.integer, np.floating)):
+                                if isinstance(dict_v, np.integer | np.floating):
                                     clean_dict[dict_k] = float(dict_v)
                                 elif hasattr(dict_v, "to_dict"):
                                     clean_dict[dict_k] = dict_v.to_dict()
@@ -716,7 +722,7 @@ Examples:
                     for result in type_results:
                         clean_result = {}
                         for k, v in result.items():
-                            if isinstance(v, (np.integer, np.floating)):
+                            if isinstance(v, np.integer | np.floating):
                                 clean_result[k] = float(v)
                             elif hasattr(v, "to_dict"):  # Handle pandas objects
                                 clean_result[k] = v.to_dict()
@@ -740,7 +746,7 @@ Examples:
 
             for dataset_name, results in all_dataset_results.items():
                 all_speedups = []
-                for benchmark_type, type_results in results.items():
+                for _benchmark_type, type_results in results.items():
                     speedups = [
                         r["total_speedup"]
                         for r in type_results

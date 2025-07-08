@@ -7,11 +7,11 @@ app = marimo.App(width="medium")
 @app.cell
 def _():
     import marimo as mo
-    from slaf import SLAFArray
-    from slaf.integrations.anndata import read_slaf
-    from slaf.integrations import scanpy as slaf_scanpy
     import numpy as np
-    import pandas as pd
+
+    from slaf import SLAFArray
+    from slaf.integrations import scanpy as slaf_scanpy
+    from slaf.integrations.anndata import read_slaf
 
     return SLAFArray, mo, np, read_slaf, slaf_scanpy
 
@@ -163,9 +163,9 @@ def _(slaf):
         print("\n2. Batch distribution:")
         cell_types = slaf.query(
             """
-            SELECT batch, COUNT(*) as count 
-            FROM cells 
-            GROUP BY batch 
+            SELECT batch, COUNT(*) as count
+            FROM cells
+            GROUP BY batch
             ORDER BY count DESC
         """
         )
@@ -175,7 +175,7 @@ def _(slaf):
         print("\n3. Expression value statistics:")
         expr_stats = slaf.query(
             """
-            SELECT 
+            SELECT
                 MIN(value) as min_expr,
                 MAX(value) as max_expr,
                 AVG(value) as avg_expr,
@@ -201,7 +201,7 @@ def _(slaf):
         print("\n1. Top 5 cells by total expression:")
         top_cells = slaf.query(
             """
-            SELECT 
+            SELECT
                 c.cell_id,
                 c.total_counts,
                 COUNT(e.value) as expressed_genes,
@@ -219,7 +219,7 @@ def _(slaf):
         print("\n2. Highly variable genes with expression stats:")
         hvg_stats = slaf.query(
             """
-            SELECT 
+            SELECT
                 g.gene_id,
                 g.highly_variable,
                 COUNT(e.value) as cells_expressed,
@@ -434,15 +434,13 @@ def _(slaf):
 
         # SLAF SQL approach
         start_time = time.time()
-        slaf_result = slaf.query(
-            "SELECT COUNT(*) FROM cells WHERE n_genes_by_counts > 500"
-        )
+        _ = slaf.query("SELECT COUNT(*) FROM cells WHERE n_genes_by_counts > 500")
         slaf_time = time.time() - start_time
         print(f"   SLAF SQL: {slaf_time:.4f}s")
 
         # SLAF convenience method
         start_time = time.time()
-        slaf_filter = slaf.filter_cells(n_genes_by_counts=">500")
+        _ = slaf.filter_cells(n_genes_by_counts=">500")
         slaf_filter_time = time.time() - start_time
         print(f"   SLAF filter method: {slaf_filter_time:.4f}s")
 
@@ -451,12 +449,12 @@ def _(slaf):
 
         # SLAF SQL aggregation
         start_time = time.time()
-        slaf_agg = slaf.query("SELECT AVG(value) FROM expression")
+        _ = slaf.query("SELECT AVG(value) FROM expression")
         slaf_agg_time = time.time() - start_time
         print(f"   SLAF SQL aggregation: {slaf_agg_time:.4f}s")
 
         # Lazy AnnData approach (when computed)
-        print(f"   Lazy AnnData: Operations stored, computed on demand")
+        print("   Lazy AnnData: Operations stored, computed on demand")
 
     examine_performance_characteristics()
 

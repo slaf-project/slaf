@@ -1,8 +1,9 @@
-from pathlib import Path
-import numpy as np
 import json
-import lance
 import os
+from pathlib import Path
+
+import lance
+import numpy as np
 
 from slaf.data.converter import SLAFConverter
 
@@ -184,8 +185,12 @@ class TestSLAFConverter:
         genes_df = genes_dataset.to_table().to_pandas()
 
         # Create mappings from string IDs to integer IDs
-        cell_id_to_int = dict(zip(cells_df["cell_id"], cells_df["cell_integer_id"]))
-        gene_id_to_int = dict(zip(genes_df["gene_id"], genes_df["gene_integer_id"]))
+        cell_id_to_int = dict(
+            zip(cells_df["cell_id"], cells_df["cell_integer_id"], strict=False)
+        )
+        gene_id_to_int = dict(
+            zip(genes_df["gene_id"], genes_df["gene_integer_id"], strict=False)
+        )
 
         # Verify that expression table integer IDs match the mappings
         for _, row in expression_df.iterrows():

@@ -1,8 +1,10 @@
-import pandas as pd
-import numpy as np
-import scanpy as sc
-import time
 import sys
+import time
+
+import numpy as np
+import pandas as pd
+import scanpy as sc
+
 from slaf.core.slaf import SLAFArray
 
 
@@ -58,13 +60,16 @@ def demo_realistic_gene_queries():
         {
             "type": "filtering",
             "operation": "filter_genes",
-            "filters": {"total_counts": ">=100", "total_counts": "<=10000"},
+            "filters": {"total_counts": ">=100", "total_counts_upper": "<=10000"},
             "description": "Genes with 100-10000 total counts",
         },
         {
             "type": "filtering",
             "operation": "filter_genes",
-            "filters": {"n_cells_by_counts": ">=5", "n_cells_by_counts": "<=1000"},
+            "filters": {
+                "n_cells_by_counts": ">=5",
+                "n_cells_by_counts_upper": "<=1000",
+            },
             "description": "Genes in 5-1000 cells",
         },
     ]
@@ -190,7 +195,7 @@ def _measure_h5ad_gene_filtering(h5ad_path: str, scenario: dict):
                     # Try to convert to numpy array first
                     X_array = np.array(adata.X)
                     n_cells_per_gene = (X_array > 0).sum(axis=0)
-                except:
+                except Exception:
                     # Fallback to sparse matrix operations
                     n_cells_per_gene = np.array((adata.X > 0).sum(axis=0)).flatten()
                 if op == "ge":
@@ -203,7 +208,7 @@ def _measure_h5ad_gene_filtering(h5ad_path: str, scenario: dict):
                     # Try to convert to numpy array first
                     X_array = np.array(adata.X)
                     total_counts_per_gene = X_array.sum(axis=0)
-                except:
+                except Exception:
                     # Fallback to sparse matrix operations
                     total_counts_per_gene = np.array(adata.X.sum(axis=0)).flatten()
                 if op == "ge":
@@ -216,7 +221,7 @@ def _measure_h5ad_gene_filtering(h5ad_path: str, scenario: dict):
                     # Try to convert to numpy array first
                     X_array = np.array(adata.X)
                     mean_counts_per_gene = X_array.mean(axis=0)
-                except:
+                except Exception:
                     # Fallback to sparse matrix operations
                     mean_counts_per_gene = np.array(adata.X.mean(axis=0)).flatten()
                 if op == "ge":
