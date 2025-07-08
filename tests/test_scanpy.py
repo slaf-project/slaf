@@ -151,9 +151,9 @@ class TestLazyPreprocessingCorrectness:
         assert len(cell_qc) > 0, "Should find cells meeting filtering criteria"
 
         # The number of cells meeting criteria should be reasonable
-        assert (
-            len(cell_qc) <= original_cells
-        ), "Filtered cells should not exceed original count"
+        assert len(cell_qc) <= original_cells, (
+            "Filtered cells should not exceed original count"
+        )
 
         # Test that scanpy filtering worked
         sc_cells_remaining = tiny_adata.n_obs
@@ -220,9 +220,9 @@ class TestLazyPreprocessingCorrectness:
         # Compare the number of genes remaining
         lazy_genes_remaining = lazy_adata.n_vars
         sc_genes_remaining = tiny_adata.n_vars
-        assert (
-            abs(lazy_genes_remaining - sc_genes_remaining) <= 1
-        ), f"Gene filtering count mismatch: lazy={lazy_genes_remaining}, scanpy={sc_genes_remaining}"
+        assert abs(lazy_genes_remaining - sc_genes_remaining) <= 1, (
+            f"Gene filtering count mismatch: lazy={lazy_genes_remaining}, scanpy={sc_genes_remaining}"
+        )
 
         # Compare the gene IDs that remain (if we can access them)
         if hasattr(lazy_adata, "var_names") and hasattr(tiny_adata, "var_names"):
@@ -821,33 +821,33 @@ class TestLazyPreprocessingCorrectness:
             sc_disp_col = None
 
         # Test that lazy implementation statistics are reasonable
-        assert all(
-            lazy_hvg_sorted["mean_expr"] >= 0
-        ), "Mean expression should be non-negative"
+        assert all(lazy_hvg_sorted["mean_expr"] >= 0), (
+            "Mean expression should be non-negative"
+        )
         assert all(lazy_hvg_sorted["variance"] >= 0), "Variance should be non-negative"
-        assert all(
-            lazy_hvg_sorted["dispersion"] >= 0
-        ), "Dispersion should be non-negative"
+        assert all(lazy_hvg_sorted["dispersion"] >= 0), (
+            "Dispersion should be non-negative"
+        )
 
         # Test that highly_variable is boolean
-        assert (
-            lazy_hvg_sorted["highly_variable"].dtype == bool
-        ), "highly_variable should be boolean"
+        assert lazy_hvg_sorted["highly_variable"].dtype == bool, (
+            "highly_variable should be boolean"
+        )
 
         # Test that some genes are identified as highly variable (reasonable assumption)
         n_hvg_lazy = lazy_hvg_sorted["highly_variable"].sum()
         assert n_hvg_lazy >= 0, "Number of highly variable genes should be non-negative"
-        assert n_hvg_lazy <= len(
-            lazy_hvg_sorted
-        ), "Number of highly variable genes should not exceed total genes"
+        assert n_hvg_lazy <= len(lazy_hvg_sorted), (
+            "Number of highly variable genes should not exceed total genes"
+        )
 
         # If scanpy has the expected columns, do a very lenient comparison
         # The implementations may differ significantly, so we just check that values are reasonable
         if sc_means_col is not None:
             # Check that scanpy means are also reasonable
-            assert all(
-                sc_hvg_sorted[sc_means_col] >= 0
-            ), "Scanpy mean expression should be non-negative"
+            assert all(sc_hvg_sorted[sc_means_col] >= 0), (
+                "Scanpy mean expression should be non-negative"
+            )
 
             # Print some comparison values for debugging
             print(f"Lazy HVG genes: {n_hvg_lazy}")
@@ -864,9 +864,9 @@ class TestLazyPreprocessingCorrectness:
 
         if sc_disp_col is not None:
             # Check that scanpy dispersions are also reasonable
-            assert all(
-                sc_hvg_sorted[sc_disp_col] >= 0
-            ), "Scanpy dispersion should be non-negative"
+            assert all(sc_hvg_sorted[sc_disp_col] >= 0), (
+                "Scanpy dispersion should be non-negative"
+            )
 
     def test_basic_slicing_works(self, tiny_slaf, tiny_adata):
         """Test that basic slicing works without transformations"""

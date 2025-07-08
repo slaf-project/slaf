@@ -718,7 +718,7 @@ class LazySparseMixin:
             sql = f"""
             SELECT
                 gene_integer_id,
-                {', '.join(agg_clauses)}
+                {", ".join(agg_clauses)}
             FROM expression
             GROUP BY gene_integer_id
             ORDER BY gene_integer_id
@@ -797,7 +797,7 @@ class LazySparseMixin:
             sql = f"""
             SELECT
                 cell_integer_id,
-                {', '.join(agg_clauses)}
+                {", ".join(agg_clauses)}
             FROM expression
             GROUP BY cell_integer_id
             ORDER BY cell_integer_id

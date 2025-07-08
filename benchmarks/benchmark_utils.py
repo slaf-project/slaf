@@ -191,7 +191,7 @@ def _print_rich_table(
 
     # Add data rows
     for i, result in enumerate(results):
-        scenario_name = f"S{i+1}"
+        scenario_name = f"S{i + 1}"
 
         # Timing breakdown (already in milliseconds)
         h5ad_load = result.get("h5ad_load_time", 0)
@@ -366,7 +366,7 @@ def warm_up_slaf_database(slaf_instance, verbose=False):
     try:
         for i, query in enumerate(warmup_queries):
             if verbose and i % 3 == 0:  # Print progress every 3 queries
-                console.print(f"    Warming up query {i+1}/{len(warmup_queries)}...")
+                console.print(f"    Warming up query {i + 1}/{len(warmup_queries)}...")
 
             # Execute warm-up query (discard results)
             _ = slaf_instance.query(query)
@@ -419,7 +419,7 @@ def run_with_burn_in(
         if verbose:
             console = Console()
             console.print(
-                f"\n[bold blue]Testing: {scenario.get('name', f'Scenario {i+1}')}[/bold blue]"
+                f"\n[bold blue]Testing: {scenario.get('name', f'Scenario {i + 1}')}[/bold blue]"
             )
 
         # Clear caches at the start of each scenario

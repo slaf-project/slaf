@@ -258,7 +258,7 @@ def _(Timer, tokenizer):
                 (0, 100), max_genes=100, min_percentile=10
             )
         print(f"   Geneformer [percentile]: {percentile_time.elapsed:.4f}s")
-        print(f"   Speedup: {standard_time.elapsed/percentile_time.elapsed:.2f}x")
+        print(f"   Speedup: {standard_time.elapsed / percentile_time.elapsed:.2f}x")
 
         # Test scGPT with different settings
         print("\n2. scGPT Performance:")
@@ -274,7 +274,7 @@ def _(Timer, tokenizer):
                 (0, 100), max_genes=50, use_sql_binning=True
             )
         print(f"   scGPT [SQL]: {sql_time.elapsed:.4f}s")
-        print(f"   Speedup: {python_time.elapsed/sql_time.elapsed:.2f}x")
+        print(f"   Speedup: {python_time.elapsed / sql_time.elapsed:.2f}x")
 
         # Calculate tokens per second
         total_tokens_geneformer = sum(len(seq) for seq in geneformer_standard)
@@ -282,15 +282,17 @@ def _(Timer, tokenizer):
 
         print("\n3. Throughput:")
         print(
-            f"   Geneformer [standard]: {total_tokens_geneformer/standard_time.elapsed:,.0f} tokens/sec"
+            f"   Geneformer [standard]: {total_tokens_geneformer / standard_time.elapsed:,.0f} tokens/sec"
         )
         print(
-            f"   Geneformer [percentile]: {total_tokens_geneformer/percentile_time.elapsed:,.0f} tokens/sec"
+            f"   Geneformer [percentile]: {total_tokens_geneformer / percentile_time.elapsed:,.0f} tokens/sec"
         )
         print(
-            f"   scGPT [Python]: {total_tokens_scgpt/python_time.elapsed:,.0f} tokens/sec"
+            f"   scGPT [Python]: {total_tokens_scgpt / python_time.elapsed:,.0f} tokens/sec"
         )
-        print(f"   scGPT [SQL]: {total_tokens_scgpt/sql_time.elapsed:,.0f} tokens/sec")
+        print(
+            f"   scGPT [SQL]: {total_tokens_scgpt / sql_time.elapsed:,.0f} tokens/sec"
+        )
 
     demo_tokenizer_performance()
     return
@@ -401,8 +403,8 @@ def _(Timer, dataloader):
 
     print(f"   Processed {batch_count} batches in {iteration_time.elapsed:.4f}s")
     print(f"   Total tokens: {total_tokens:,}")
-    print(f"   Tokens per second: {total_tokens/iteration_time.elapsed:,.0f}")
-    print(f"   Batches per second: {batch_count/iteration_time.elapsed:.2f}")
+    print(f"   Tokens per second: {total_tokens / iteration_time.elapsed:,.0f}")
+    print(f"   Batches per second: {batch_count / iteration_time.elapsed:.2f}")
 
     return
 
@@ -664,7 +666,7 @@ def _(np, time, tokenizer):
 
         print(f"   SQL binning: {sql_time:.4f}s")
         print(f"   Python binning: {python_time:.4f}s")
-        print(f"   Speedup: {python_time/sql_time:.2f}x")
+        print(f"   Speedup: {python_time / sql_time:.2f}x")
 
     demo_advanced_tokenization()
     return

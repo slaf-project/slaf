@@ -32,6 +32,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
+      - name: Install specific ruff version
+        run: |
+          pip install ruff==0.12.2
+
       - name: Check code formatting
         run: |
           ruff format --check .
@@ -57,6 +61,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
           pip install types-requests
+          pip install ruff==0.12.2
 
       - name: Type check with mypy
         run: |

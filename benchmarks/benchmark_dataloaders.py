@@ -715,7 +715,7 @@ def benchmark_dataloaders(
 
         # Format result to match expected interface
         result = {
-            "scenario": f"S{i+1}",
+            "scenario": f"S{i + 1}",
             "scenario_description": scenario["description"],
             "h5ad_time_ms": direct_time * 1000,  # Direct tokenizer time
             "slaf_time_ms": dataloader_time * 1000,  # Dataloader iteration time
@@ -735,8 +735,8 @@ def benchmark_dataloaders(
         results.append(result)
 
         if verbose:
-            console.print(f"  Direct tokenizer: {direct_time*1000:.1f}ms")
-            console.print(f"  Dataloader: {dataloader_time*1000:.1f}ms")
+            console.print(f"  Direct tokenizer: {direct_time * 1000:.1f}ms")
+            console.print(f"  Dataloader: {dataloader_time * 1000:.1f}ms")
             console.print(f"  Overhead: {overhead_ratio:.1f}%")
             console.print(f"  Memory overhead: {memory_overhead:.1f}MB")
             console.print(f"  Tokens/sec: {result['tokens_per_second']:,.0f}")
@@ -901,7 +901,7 @@ def benchmark_data_vs_tokenization_timing(
         console.print("\n[bold]Analysis:[/bold]")
         if data_ratio < 0.7:
             console.print(
-                f"🔍 h5ad data loading is {1/data_ratio:.1f}x faster - SLAF query optimization opportunity"
+                f"🔍 h5ad data loading is {1 / data_ratio:.1f}x faster - SLAF query optimization opportunity"
             )
         elif data_ratio > 1.5:
             console.print(
@@ -912,7 +912,7 @@ def benchmark_data_vs_tokenization_timing(
 
         if token_ratio < 0.7:
             console.print(
-                f"🔍 h5ad tokenization is {1/token_ratio:.1f}x faster - SLAF tokenizer optimization opportunity"
+                f"🔍 h5ad tokenization is {1 / token_ratio:.1f}x faster - SLAF tokenizer optimization opportunity"
             )
         elif token_ratio > 1.5:
             console.print(

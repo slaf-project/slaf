@@ -129,7 +129,7 @@ def create_dataset(
     # Save
     output_path = Path(output_dir)
     output_path.mkdir(exist_ok=True)
-    filename = output_path / f"synthetic_{n_cells//1000}k_cells_raw.h5ad"
+    filename = output_path / f"synthetic_{n_cells // 1000}k_cells_raw.h5ad"
     adata.write(filename)
     print(f"Saved: {filename}")
 
@@ -293,8 +293,8 @@ def get_or_create_dataset(
     # Determine file paths
     if dataset_type == "synthetic":
         n_cells = create_kwargs.get("n_cells", 500_000)
-        raw_filename = f"synthetic_{n_cells//1000}k_cells_raw.h5ad"
-        processed_filename = f"synthetic_{n_cells//1000}k_cells_processed.h5ad"
+        raw_filename = f"synthetic_{n_cells // 1000}k_cells_raw.h5ad"
+        processed_filename = f"synthetic_{n_cells // 1000}k_cells_processed.h5ad"
     else:
         raw_filename = f"{dataset_type}_raw.h5ad"
         processed_filename = f"{dataset_type}_processed.h5ad"
@@ -548,14 +548,14 @@ if __name__ == "__main__":
                         sparsity=0.95,
                     )
                     prepared_datasets.append(
-                        (f"synthetic_{n_cells//1000}k", processed_path)
+                        (f"synthetic_{n_cells // 1000}k", processed_path)
                     )
                     print(
-                        f"✅ Successfully prepared synthetic_{n_cells//1000}k dataset"
+                        f"✅ Successfully prepared synthetic_{n_cells // 1000}k dataset"
                     )
                 except Exception as e:
                     print(
-                        f"❌ Failed to prepare synthetic_{n_cells//1000}k dataset: {e}"
+                        f"❌ Failed to prepare synthetic_{n_cells // 1000}k dataset: {e}"
                     )
 
         else:

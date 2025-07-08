@@ -197,12 +197,12 @@ class TestSLAFConverter:
             expected_cell_int = cell_id_to_int[row["cell_id"]]
             expected_gene_int = gene_id_to_int[row["gene_id"]]
 
-            assert (
-                row["cell_integer_id"] == expected_cell_int
-            ), f"Cell integer ID mismatch for {row['cell_id']}"
-            assert (
-                row["gene_integer_id"] == expected_gene_int
-            ), f"Gene integer ID mismatch for {row['gene_id']}"
+            assert row["cell_integer_id"] == expected_cell_int, (
+                f"Cell integer ID mismatch for {row['cell_id']}"
+            )
+            assert row["gene_integer_id"] == expected_gene_int, (
+                f"Gene integer ID mismatch for {row['gene_id']}"
+            )
 
     # Optimization tests
     def test_integer_keys_optimization(self, small_sample_adata, temp_dir):

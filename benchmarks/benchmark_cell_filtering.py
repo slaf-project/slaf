@@ -263,7 +263,7 @@ def benchmark_cell_filtering(
     results = []
     for i, scenario in enumerate(scenarios):
         if verbose:
-            print(f"Running scenario {i+1}/{len(scenarios)}: {scenario['filters']}")
+            print(f"Running scenario {i + 1}/{len(scenarios)}: {scenario['filters']}")
 
         # Clear caches at the start of each scenario
         clear_caches()

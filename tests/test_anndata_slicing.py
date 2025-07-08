@@ -744,9 +744,9 @@ class TestUnifiedLazySystemConsistency:
             assert matrix1.shape == matrix2.shape
             if matrix1.data.size > 0:
                 diff = abs(matrix1.data - matrix2.data).max()
-                assert (
-                    diff < 1e-10
-                ), f"Large submatrix results differ: max diff = {diff}"
+                assert diff < 1e-10, (
+                    f"Large submatrix results differ: max diff = {diff}"
+                )
 
     def test_empty_matrix_handling(self, tiny_slaf):
         """Test handling of empty matrix results"""

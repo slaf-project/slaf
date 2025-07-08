@@ -134,9 +134,9 @@ class SLAFConverter:
         }
 
         for col, expected_type in expected_types.items():
-            assert (
-                table.schema.field(col).type == expected_type
-            ), f"{col} is not {expected_type} type!"
+            assert table.schema.field(col).type == expected_type, (
+                f"{col} is not {expected_type} type!"
+            )
             assert table.column(col).null_count == 0, f"Nulls found in {col} column!"
 
         return table

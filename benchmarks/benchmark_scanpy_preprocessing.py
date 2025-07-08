@@ -591,7 +591,9 @@ def benchmark_scanpy_preprocessing(
 
     for i, scenario in enumerate(scenarios):
         if verbose:
-            print(f"Running scenario {i+1}/{len(scenarios)}: {scenario['description']}")
+            print(
+                f"Running scenario {i + 1}/{len(scenarios)}: {scenario['description']}"
+            )
 
         # Clear caches at the start of each scenario
         clear_caches()

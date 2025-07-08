@@ -23,9 +23,9 @@ def compare_metadata_essentials(lazy_df, native_df, description=""):
     """
     # Check basic properties
     assert len(lazy_df) == len(native_df), f"{description}: Length mismatch"
-    assert list(lazy_df.columns) == list(
-        native_df.columns
-    ), f"{description}: Column mismatch"
+    assert list(lazy_df.columns) == list(native_df.columns), (
+        f"{description}: Column mismatch"
+    )
 
     # Check index
     pd.testing.assert_index_equal(
@@ -36,9 +36,9 @@ def compare_metadata_essentials(lazy_df, native_df, description=""):
     for col in lazy_df.columns:
         if isinstance(native_df[col].dtype, pd.CategoricalDtype):
             # Check that both are categorical
-            assert isinstance(
-                lazy_df[col].dtype, pd.CategoricalDtype
-            ), f"{description}: Column {col} should be categorical"
+            assert isinstance(lazy_df[col].dtype, pd.CategoricalDtype), (
+                f"{description}: Column {col} should be categorical"
+            )
             # Check categories match
             pd.testing.assert_index_equal(
                 lazy_df[col].cat.categories,
@@ -46,9 +46,9 @@ def compare_metadata_essentials(lazy_df, native_df, description=""):
                 f"{description}: Categories mismatch for column {col}",
             )
             # Check values match (ignoring unused categories)
-            assert list(lazy_df[col]) == list(
-                native_df[col]
-            ), f"{description}: Values mismatch for categorical column {col}"
+            assert list(lazy_df[col]) == list(native_df[col]), (
+                f"{description}: Values mismatch for categorical column {col}"
+            )
         else:
             # For non-categorical columns, check values
             np.testing.assert_array_equal(

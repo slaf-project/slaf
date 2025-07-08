@@ -17,7 +17,7 @@ class LazyExpressionMatrix(LazySparseMixin):
     def __init__(self, slaf_array: SLAFArray):
         super().__init__()
         self.slaf_array = slaf_array
-        self.parent_adata: "LazyAnnData" | None = None
+        self.parent_adata: LazyAnnData | None = None
         # Store slicing selectors
         self._cell_selector = None
         self._gene_selector = None
