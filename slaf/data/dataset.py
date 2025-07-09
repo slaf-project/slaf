@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
-import requests
+import requests  # type: ignore
 import scanpy as sc
 
 DatasetType = Literal["pbmc3k", "pbmc_68k", "heart_10k", "synthetic", "tiny_sample"]

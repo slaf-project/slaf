@@ -18,11 +18,14 @@ class LazySparseMixin:
     to array positions. If not provided, cell_id and gene_id are assumed to be integers.
     """
 
-    # Type hints for required attributes that implementing classes must provide
-    shape: tuple[int, int]
+    # Required attributes that implementing classes must provide
+    # These are defined as properties in implementing classes
     slaf_array: Any
-    obs_names: pd.Index | None
-    var_names: pd.Index | None
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        """Shape of the matrix - must be implemented by subclasses"""
+        raise NotImplementedError("Subclasses must implement shape property")
 
     def __init__(self):
         """Initialize the mixin"""
@@ -183,14 +186,14 @@ class LazySparseMixin:
 
         if isinstance(selector, np.ndarray) and selector.dtype == bool:
             # Convert boolean mask to index list
-            indices = np.where(selector)[0]
-            if len(indices) == 0:
+            bool_indices = np.where(selector)[0]
+            if len(bool_indices) == 0:
                 return "FALSE"
-            elif len(indices) == len(selector):
+            elif len(bool_indices) == len(selector):
                 return "TRUE"
             else:
                 # Use IN clause for efficiency
-                return f"{entity_col} IN ({','.join(map(str, indices))})"
+                return f"{entity_col} IN ({','.join(map(str, bool_indices))})"
 
         elif isinstance(selector, slice):
             start = selector.start or 0
@@ -201,7 +204,7 @@ class LazySparseMixin:
             if step == 1:
                 return f"{entity_col} >= {start} AND {entity_col} < {stop}"
             else:
-                indices = list(range(start, stop, step))
+                indices: list[int] = list(range(start, stop, step))
                 return f"{entity_col} IN ({','.join(map(str, indices))})"
 
         elif isinstance(selector, list | np.ndarray):
@@ -324,8 +327,12 @@ class LazySparseMixin:
         valid_values = values[valid_mask]
 
         # Map to output positions
-        rows = np.array([cell_id_to_row[cid] for cid in valid_cell_ids])
-        cols = np.array([gene_id_to_col[gid] for gid in valid_gene_ids])
+        rows = np.array(
+            [cell_id_to_row[cid] for cid in valid_cell_ids], dtype=int
+        ).reshape(-1)
+        cols = np.array(
+            [gene_id_to_col[gid] for gid in valid_gene_ids], dtype=int
+        ).reshape(-1)
 
         result_shape = (len(output_cell_ids), len(output_gene_ids))
         return scipy.sparse.csr_matrix((valid_values, (rows, cols)), shape=result_shape)
@@ -354,14 +361,14 @@ class LazySparseMixin:
             mapping = {}
             true_indices = np.where(selector)[0]
             for i, db_id in enumerate(true_indices):
-                mapping[db_id] = i
+                mapping[int(db_id)] = int(i)
             return mapping
 
         elif isinstance(selector, list | np.ndarray):
             # Arbitrary list - map each ID to its position in the list
             mapping = {}
             for i, db_id in enumerate(selector):
-                mapping[db_id] = i
+                mapping[int(db_id)] = int(i)
             return mapping
 
         elif isinstance(selector, int | np.integer):
@@ -742,7 +749,7 @@ class LazySparseMixin:
                             full_result[gene_indices[valid_mask]] = (
                                 sums[valid_mask] / total_cells
                             )
-                    results[op.lower()] = full_result.reshape(1, -1)
+                    results[op.lower()] = full_result.reshape(1, -1).astype(np.float64)
 
                 elif op.upper() in ["VARIANCE", "VAR"]:
                     full_result = np.zeros(self.shape[1])
@@ -762,7 +769,7 @@ class LazySparseMixin:
                                 means * means
                             )
                             full_result[valid_indices] = variances
-                    results[op.lower()] = full_result.reshape(1, -1)
+                    results[op.lower()] = full_result.reshape(1, -1).astype(np.float64)
 
                 else:
                     full_result = np.zeros(self.shape[1])
@@ -776,7 +783,7 @@ class LazySparseMixin:
                             full_result[gene_indices[valid_mask]] = op_results[
                                 valid_mask
                             ]
-                    results[op.lower()] = full_result.reshape(1, -1)
+                    results[op.lower()] = full_result.reshape(1, -1).astype(np.float64)
 
             return results
 
@@ -821,7 +828,7 @@ class LazySparseMixin:
                             full_result[cell_indices[valid_mask]] = (
                                 sums[valid_mask] / total_genes
                             )
-                    results[op.lower()] = full_result.reshape(-1, 1)
+                    results[op.lower()] = full_result.reshape(-1, 1).astype(np.float64)
 
                 elif op.upper() in ["VARIANCE", "VAR"]:
                     full_result = np.zeros(self.shape[0])
@@ -841,7 +848,7 @@ class LazySparseMixin:
                                 means * means
                             )
                             full_result[valid_indices] = variances
-                    results[op.lower()] = full_result.reshape(-1, 1)
+                    results[op.lower()] = full_result.reshape(-1, 1).astype(np.float64)
 
                 else:
                     full_result = np.zeros(self.shape[0])
@@ -855,7 +862,7 @@ class LazySparseMixin:
                             full_result[cell_indices[valid_mask]] = op_results[
                                 valid_mask
                             ]
-                    results[op.lower()] = full_result.reshape(-1, 1)
+                    results[op.lower()] = full_result.reshape(-1, 1).astype(np.float64)
 
             return results
 

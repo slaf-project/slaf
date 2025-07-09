@@ -494,7 +494,11 @@ class SLAFTokenizer:
     def decode_tokens(self, tokens: list[int]) -> dict[str, Any]:
         """Decode token sequence back to interpretable format (for debugging)"""
         tokens_array = np.array(tokens)
-        decoded = {"special_tokens": [], "genes": [], "expression_bins": []}
+        decoded: dict[str, Any] = {
+            "special_tokens": [],
+            "genes": [],
+            "expression_bins": [],
+        }
 
         # Create reverse mapping for special tokens for O(1) lookup
         special_token_reverse = {v: k for k, v in self.special_tokens.items()}

@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -8,6 +9,8 @@ from slaf.core.slaf import SLAFArray
 from slaf.core.sparse_ops import LazySparseMixin
 
 if TYPE_CHECKING:
+    from typing import Any
+
     import scanpy as sc
 
 
@@ -22,8 +25,12 @@ class LazyExpressionMatrix(LazySparseMixin):
         self._cell_selector = None
         self._gene_selector = None
         # Initialize shape attribute (required by LazySparseMixin)
-        self.shape = self.slaf_array.shape
-        self._cache = {}  # Simple caching for repeated queries
+        self._shape = self.slaf_array.shape
+        self._cache: dict[str, Any] = {}  # Simple caching for repeated queries
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return self._shape
 
     @property
     def obs_names(self):
@@ -57,10 +64,10 @@ class LazyExpressionMatrix(LazySparseMixin):
             n_cells = self._calculate_selected_count(cell_selector, axis=0)
             n_genes = self._calculate_selected_count(gene_selector, axis=1)
 
-            self.shape = (n_cells, n_genes)
+            self._shape = (n_cells, n_genes)
         else:
             # No selectors applied, return original shape
-            self.shape = self.slaf_array.shape
+            self._shape = self.slaf_array.shape
 
     def _calculate_selected_count(self, selector, axis: int) -> int:
         """Calculate the number of selected entities for a given selector"""
@@ -390,9 +397,19 @@ class LazyExpressionMatrix(LazySparseMixin):
         obs_names_local = []  # Always a list
         obs_names = None
         if hasattr(self, "parent_adata") and self.parent_adata is not None:
-            obs_names = getattr(self.parent_adata, "obs_names", None)
+            try:
+                obs_names = self.parent_adata.obs_names
+            except (AttributeError, TypeError):
+                obs_names = None
         if obs_names is None or not isinstance(obs_names, list | np.ndarray | pd.Index):
-            obs_names_local = [f"cell_{i}" for i in range(matrix.shape[0])]
+            if (
+                matrix is not None
+                and hasattr(matrix, "shape")
+                and matrix.shape is not None
+            ):
+                obs_names_local = [f"cell_{i}" for i in range(matrix.shape[0])]
+            else:
+                obs_names_local = []
         else:
             obs_names_local = list(obs_names)
         # Now obs_names_local is always a list
@@ -579,17 +596,17 @@ class LazyAnnData(LazySparseMixin):
         # Lazy-loaded metadata
         self._obs = None
         self._var = None
-        self._obs_names = None
-        self._var_names = None
+        self._cached_obs_names: pd.Index | None = None
+        self._cached_var_names: pd.Index | None = None
 
         # Filter selectors for subsetting
         self._cell_selector = None
         self._gene_selector = None
-        self._filtered_obs = None
-        self._filtered_var = None
+        self._filtered_obs: Callable[[], pd.DataFrame] | None = None
+        self._filtered_var: Callable[[], pd.DataFrame] | None = None
 
         # Transformations for lazy evaluation
-        self._transformations = {}
+        self._transformations: dict[str, Any] = {}
 
     @property
     def X(self) -> LazyExpressionMatrix:
@@ -605,15 +622,27 @@ class LazyAnnData(LazySparseMixin):
         For lazy access to metadata structure only, use obs.columns, obs.index, etc.
         """
         if self._filtered_obs is not None:
-            return self._filtered_obs()
+            result = self._filtered_obs()
+            if isinstance(result, pd.DataFrame):
+                return result
+            return pd.DataFrame()
         if self._obs is None:
             # Use the obs from SLAFArray (already loaded in memory)
-            self._obs = self.slaf.obs.copy()
-            # Drop cell_integer_id column if present to match AnnData expectations
-            if "cell_integer_id" in self._obs.columns:
-                self._obs = self._obs.drop(columns=["cell_integer_id"])
-            # Set index name to None to match AnnData format
-            self._obs.index.name = None
+            obs_df = getattr(self.slaf, "obs", None)
+            if obs_df is not None:
+                obs_copy = obs_df.copy()
+                # Drop cell_integer_id column if present to match AnnData expectations
+                if (
+                    hasattr(obs_copy, "columns")
+                    and "cell_integer_id" in obs_copy.columns
+                ):
+                    obs_copy = obs_copy.drop(columns=["cell_integer_id"])
+                # Set index name to None to match AnnData format
+                if hasattr(obs_copy, "index"):
+                    obs_copy.index.name = None
+                self._obs = obs_copy
+            else:
+                self._obs = pd.DataFrame()
         return self._obs
 
     @property
@@ -625,30 +654,41 @@ class LazyAnnData(LazySparseMixin):
         For lazy access to metadata structure only, use var.columns, var.index, etc.
         """
         if self._filtered_var is not None:
-            return self._filtered_var()
+            result = self._filtered_var()
+            if isinstance(result, pd.DataFrame):
+                return result
+            return pd.DataFrame()
         if self._var is None:
-            # Use the var from SLAFArray (already loaded in memory)
-            self._var = self.slaf.var.copy()
-            # Drop gene_integer_id column if present to match AnnData expectations
-            if "gene_integer_id" in self._var.columns:
-                self._var = self._var.drop(columns=["gene_integer_id"])
-            # Set index name to None to match AnnData format
-            self._var.index.name = None
+            var_df = getattr(self.slaf, "var", None)
+            if var_df is not None:
+                var_copy = var_df.copy()
+                # Drop gene_integer_id column if present to match AnnData expectations
+                if (
+                    hasattr(var_copy, "columns")
+                    and "gene_integer_id" in var_copy.columns
+                ):
+                    var_copy = var_copy.drop(columns=["gene_integer_id"])
+                # Set index name to None to match AnnData format
+                if hasattr(var_copy, "index"):
+                    var_copy.index.name = None
+                self._var = var_copy
+            else:
+                self._var = pd.DataFrame()
         return self._var
 
     @property
     def obs_names(self) -> pd.Index:
         """Cell names"""
-        if self._obs_names is None:
-            self._obs_names = self.obs.index
-        return self._obs_names
+        if self._cached_obs_names is None:
+            self._cached_obs_names = self.obs.index
+        return self._cached_obs_names
 
     @property
     def var_names(self) -> pd.Index:
         """Gene names"""
-        if self._var_names is None:
-            self._var_names = self.var.index
-        return self._var_names
+        if self._cached_var_names is None:
+            self._cached_var_names = self.var.index
+        return self._cached_var_names
 
     @property
     def n_obs(self) -> int:
@@ -663,13 +703,20 @@ class LazyAnnData(LazySparseMixin):
     @property
     def shape(self) -> tuple[int, int]:
         """Get the shape of the data, accounting for any applied filters"""
-        if self._cell_selector is not None or self._gene_selector is not None:
+        if (
+            getattr(self, "_cell_selector", None) is not None
+            or getattr(self, "_gene_selector", None) is not None
+        ):
             # Calculate the shape based on selectors
             cell_selector = (
-                self._cell_selector if self._cell_selector is not None else slice(None)
+                self._cell_selector
+                if getattr(self, "_cell_selector", None) is not None
+                else slice(None)
             )
             gene_selector = (
-                self._gene_selector if self._gene_selector is not None else slice(None)
+                self._gene_selector
+                if getattr(self, "_gene_selector", None) is not None
+                else slice(None)
             )
 
             # Use the same logic as _get_result_shape in LazySparseMixin
@@ -744,14 +791,15 @@ class LazyAnnData(LazySparseMixin):
             new_adata._X._update_shape()
 
         # Override obs and var properties to apply filtering
-        def filtered_obs():
+        def filtered_obs() -> pd.DataFrame:
             # Always apply the composed selector to the original obs
+            obs_df = self.obs
             if cell_selector is None or (
                 isinstance(cell_selector, slice) and cell_selector == slice(None)
             ):
-                obs_df = self.obs
+                pass
             else:
-                obs_df = self.obs.copy()
+                obs_df = obs_df.copy()
                 if isinstance(cell_selector, slice):
                     start = cell_selector.start or 0
                     stop = cell_selector.stop or len(obs_df)
@@ -787,8 +835,7 @@ class LazyAnnData(LazySparseMixin):
                     obs_df = obs_df.iloc[cell_selector]
                 elif isinstance(cell_selector, int | np.integer):
                     obs_df = obs_df.iloc[[int(cell_selector)]]
-                else:
-                    obs_df = obs_df
+                # else: leave as is
             # Remove unused categories for all categorical columns if not empty
             if obs_df is not None and not obs_df.empty:
                 for col in obs_df.select_dtypes(include="category").columns:
@@ -796,16 +843,19 @@ class LazyAnnData(LazySparseMixin):
                     # Type-safe check for pandas categorical data
                     if isinstance(col_data, pd.Series) and hasattr(col_data, "cat"):
                         obs_df[col] = col_data.cat.remove_unused_categories()
-            return obs_df
+            if isinstance(obs_df, pd.DataFrame):
+                return obs_df
+            return pd.DataFrame()
 
-        def filtered_var():
+        def filtered_var() -> pd.DataFrame:
             # Always apply the composed selector to the original var
+            var_df = self.var
             if gene_selector is None or (
                 isinstance(gene_selector, slice) and gene_selector == slice(None)
             ):
-                var_df = self.var
+                pass
             else:
-                var_df = self.var.copy()
+                var_df = var_df.copy()
                 if isinstance(gene_selector, slice):
                     start = gene_selector.start or 0
                     stop = gene_selector.stop or len(var_df)
@@ -841,8 +891,7 @@ class LazyAnnData(LazySparseMixin):
                     var_df = var_df.iloc[gene_selector]
                 elif isinstance(gene_selector, int | np.integer):
                     var_df = var_df.iloc[[int(gene_selector)]]
-                else:
-                    var_df = var_df
+                # else: leave as is
             # Remove unused categories for all categorical columns if not empty
             if var_df is not None and not var_df.empty:
                 for col in var_df.select_dtypes(include="category").columns:
@@ -850,15 +899,17 @@ class LazyAnnData(LazySparseMixin):
                     # Type-safe check for pandas categorical data
                     if isinstance(col_data, pd.Series) and hasattr(col_data, "cat"):
                         var_df[col] = col_data.cat.remove_unused_categories()
-            return var_df
+            if isinstance(var_df, pd.DataFrame):
+                return var_df
+            return pd.DataFrame()
 
         # Store the filter functions
         new_adata._filtered_obs = filtered_obs
         new_adata._filtered_var = filtered_var
 
         # Ensure obs_names and var_names match the filtered DataFrames
-        new_adata._obs_names = new_adata._filtered_obs().index
-        new_adata._var_names = new_adata._filtered_var().index
+        new_adata._cached_obs_names = new_adata._filtered_obs().index
+        new_adata._cached_var_names = new_adata._filtered_var().index
 
         # Copy transformations
         new_adata._transformations = self._transformations.copy()

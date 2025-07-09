@@ -373,7 +373,7 @@ def _benchmark_h5ad_multi_process(
 ) -> tuple:
     """Benchmark h5ad with multiple processes"""
     # Run multiple processes
-    result_queue = mp.Queue()
+    result_queue: mp.Queue = mp.Queue()
     processes = []
 
     for i in range(n_processes):
@@ -410,7 +410,7 @@ def _benchmark_slaf_multi_process(
 ) -> tuple:
     """Benchmark SLAF with multiple processes"""
     # Run multiple processes
-    result_queue = mp.Queue()
+    result_queue: mp.Queue = mp.Queue()
     processes = []
 
     for i in range(n_processes):
@@ -682,13 +682,15 @@ def benchmark_dataloaders(
         if scenario["tokenizer_type"] == "geneformer":
             start_time = time.time()
             tokens = tokenizer.tokenize_geneformer(
-                cell_integer_id_range=first_batch_range, max_genes=scenario["max_genes"]
+                cell_integer_id_range=first_batch_range,
+                max_genes=int(scenario["max_genes"]),
             )
             direct_time = time.time() - start_time
         else:  # scgpt
             start_time = time.time()
             tokens = tokenizer.tokenize_scgpt(
-                cell_integer_id_range=first_batch_range, max_genes=scenario["max_genes"]
+                cell_integer_id_range=first_batch_range,
+                max_genes=int(scenario["max_genes"]),
             )
             direct_time = time.time() - start_time
 

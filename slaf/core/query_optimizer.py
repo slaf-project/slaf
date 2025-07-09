@@ -216,28 +216,30 @@ class QueryOptimizer:
             SQL WHERE condition string
         """
         if isinstance(selector, np.ndarray) and selector.dtype == bool:
-            # Boolean mask
             indices = np.where(selector)[0]
             if len(indices) == 0:
                 return "FALSE"
+            bool_indices_list = indices.tolist()
         else:
             # List of indices - handle negative indices
-            indices = []
+            list_indices: list[int] = []
             for idx in selector:
                 if idx < 0:
                     idx = max_size + idx
                 if 0 <= idx < max_size:
-                    indices.append(idx)
-            if len(indices) == 0:
+                    list_indices.append(idx)
+            if len(list_indices) == 0:
                 return "FALSE"
 
         # Build condition for the indices
-        indices_list = indices.tolist() if isinstance(indices, np.ndarray) else indices
-        if QueryOptimizer.is_consecutive(indices_list):
-            min_id, max_id = min(indices_list), max(indices_list)
+        final_indices = (
+            bool_indices_list if "bool_indices_list" in locals() else list_indices
+        )
+        if QueryOptimizer.is_consecutive(final_indices):
+            min_id, max_id = min(final_indices), max(final_indices)
             return f"{entity_type}_integer_id BETWEEN {min_id} AND {max_id}"
         else:
-            ids_str = ",".join(map(str, indices_list))
+            ids_str = ",".join(map(str, final_indices))
             return f"{entity_type}_integer_id IN ({ids_str})"
 
     @staticmethod
@@ -420,7 +422,7 @@ class PerformanceMetrics:
 
     def get_performance_summary(self) -> dict:
         """Get performance summary across all strategies"""
-        summary = {}
+        summary: dict[str, dict[int, dict[str, float | int]]] = {}
         for key in self.query_times:
             if self.query_times[key]:
                 strategy, count = key.split("_", 1)
@@ -428,9 +430,9 @@ class PerformanceMetrics:
                     summary[strategy] = {}
 
                 summary[strategy][int(count)] = {
-                    "avg_time": np.mean(self.query_times[key]),
-                    "min_time": np.min(self.query_times[key]),
-                    "max_time": np.max(self.query_times[key]),
+                    "avg_time": float(np.mean(self.query_times[key])),
+                    "min_time": float(np.min(self.query_times[key])),
+                    "max_time": float(np.max(self.query_times[key])),
                     "count": self.query_counts[key],
                 }
 
