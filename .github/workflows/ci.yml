@@ -304,10 +304,47 @@ jobs:
           echo "highest_coverage=$HIGHEST_COVERAGE" >> $GITHUB_OUTPUT
           echo "Highest coverage across all Python versions: $HIGHEST_COVERAGE%"
 
-      - name: Output badge URL
+      - name: Create coverage JSON for GitHub badge
         run: |
-          echo "Recommended badge URL: https://img.shields.io/badge/coverage-${{ steps.highest_coverage.outputs.highest_coverage }}%25-brightgreen.svg"
-          echo "Update the README with this URL to reflect the best coverage"
+          COVERAGE=${{ steps.highest_coverage.outputs.highest_coverage }}
+          echo "{\"schemaVersion\":1,\"label\":\"coverage\",\"message\":\"$COVERAGE%\",\"color\":\"brightgreen\"}" > coverage-badge.json
+
+      - name: Update gist with coverage data
+        env:
+          GIST_TOKEN: ${{ secrets.GIST_SECRET }}
+        run: |
+          # Create or update gist with coverage data
+          GIST_ID="${{ secrets.COVERAGE_GIST_ID }}"
+          if [ -z "$GIST_ID" ]; then
+            # Create new gist if ID not provided
+            GIST_RESPONSE=$(curl -X POST \
+              -H "Authorization: token $GIST_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -d '{
+                "description": "SLAF Coverage Badge Data",
+                "public": true,
+                "files": {
+                  "slaf-coverage.json": {
+                    "content": "'"$(cat coverage-badge.json)"'"
+                  }
+                }
+              }' https://api.github.com/gists)
+            echo "Created new gist: $GIST_RESPONSE"
+            echo "GIST_ID=$(echo $GIST_RESPONSE | jq -r '.id')" >> $GITHUB_OUTPUT
+          else
+            # Update existing gist
+            curl -X PATCH \
+              -H "Authorization: token $GIST_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -d '{
+                "files": {
+                  "slaf-coverage.json": {
+                    "content": "'"$(cat coverage-badge.json)"'"
+                  }
+                }
+              }' https://api.github.com/gists/$GIST_ID
+            echo "Updated gist: $GIST_ID"
+          fi
 
   quality-gate:
     name: Quality Gate
