@@ -123,22 +123,35 @@ jobs:
         run: |
           uv run pytest tests \
             --cov=slaf \
-            --cov-report=xml \
-            --cov-report=html \
+            --cov-report=json \
             --cov-report=term-missing \
             --cov-fail-under=60 \
             -v
           echo "coverage=$(uv run coverage report --format=total)" >> $GITHUB_OUTPUT
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          file: ./coverage.xml
-          flags: unittests
-          name: codecov-umbrella
-          fail_ci_if_error: false
+      - name: Parse coverage from JSON
+        id: parse_coverage
+        run: |
+          COVERAGE_PERCENT=$(python -c "
+          import json
+          with open('coverage.json', 'r') as f:
+              data = json.load(f)
+          print(f'{data[\"totals\"][\"percent_covered\"]:.1f}')
+          ")
+          echo "coverage_percent=$COVERAGE_PERCENT" >> $GITHUB_OUTPUT
 
-      # Dynamic badges removed - using static badges in README instead
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-data
+          path: coverage.json
+
+      - name: Output coverage percentage
+        run: |
+          COVERAGE_PERCENT=${{ steps.parse_coverage.outputs.coverage_percent }}
+          echo "Coverage: $COVERAGE_PERCENT%"
+          echo "Update the README badge manually with this percentage"
+          echo "Current badge URL: https://img.shields.io/badge/coverage-${COVERAGE_PERCENT}%25-brightgreen.svg"
 
   dependencies:
     name: Dependency Check
