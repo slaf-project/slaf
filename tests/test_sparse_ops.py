@@ -13,6 +13,32 @@ from slaf.core.sparse_ops import LazySparseMixin
 class TestLazySparseMixin:
     """Test LazySparseMixin functionality."""
 
+    class TestMixin(LazySparseMixin):
+        """Test implementation of LazySparseMixin."""
+
+        __test__ = False  # Tell pytest this is not a test class
+
+        def __init__(
+            self, shape: tuple[int, int], slaf_array, obs_names=None, var_names=None
+        ):
+            super().__init__()
+            self._shape = shape
+            self.slaf_array = slaf_array
+            self._obs_names = obs_names
+            self._var_names = var_names
+
+        @property
+        def shape(self) -> tuple[int, int]:
+            return self._shape
+
+        @property
+        def obs_names(self):
+            return self._obs_names
+
+        @property
+        def var_names(self):
+            return self._var_names
+
     @pytest.fixture
     def mock_slaf_array(self):
         """Create a mock SLAFArray for testing."""
@@ -29,11 +55,12 @@ class TestLazySparseMixin:
     @pytest.fixture
     def sparse_mixin(self, mock_slaf_array):
         """Create a LazySparseMixin instance for testing."""
-        mixin = LazySparseMixin()
-        mixin.shape = (100, 200)
-        mixin.slaf_array = mock_slaf_array
-        mixin.obs_names = pd.Index([f"cell_{i}" for i in range(100)])
-        mixin.var_names = pd.Index([f"gene_{i}" for i in range(200)])
+        mixin = self.TestMixin(
+            shape=(100, 200),
+            slaf_array=mock_slaf_array,
+            obs_names=pd.Index([f"cell_{i}" for i in range(100)]),
+            var_names=pd.Index([f"gene_{i}" for i in range(200)]),
+        )
         return mixin
 
     def test_parse_key_single_index(self, sparse_mixin):
