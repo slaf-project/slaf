@@ -290,12 +290,7 @@ jobs:
           HIGHEST_COVERAGE=0
           for file in coverage.json*; do
             if [ -f "$file" ]; then
-              COVERAGE=$(python -c "
-              import json
-              with open('$file', 'r') as f:
-                  data = json.load(f)
-              print(f'{data[\"totals\"][\"percent_covered\"]:.1f}')
-              ")
+              COVERAGE=$(python -c "import json; data = json.load(open('$file')); print(f'{data[\"totals\"][\"percent_covered\"]:.1f}')")
               if (( $(echo "$COVERAGE > $HIGHEST_COVERAGE" | bc -l) )); then
                 HIGHEST_COVERAGE=$COVERAGE
               fi
