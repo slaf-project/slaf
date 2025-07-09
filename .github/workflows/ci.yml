@@ -318,20 +318,24 @@ jobs:
         run: |
           # Create or update gist with coverage data
           GIST_ID="${{ secrets.COVERAGE_GIST_ID }}"
+
+          # Read the coverage badge JSON and escape it properly
+          BADGE_CONTENT=$(cat coverage-badge.json | jq -c .)
+
           if [ -z "$GIST_ID" ]; then
             # Create new gist if ID not provided
             GIST_RESPONSE=$(curl -X POST \
               -H "Authorization: token $GIST_TOKEN" \
               -H "Accept: application/vnd.github.v3+json" \
-              -d '{
-                "description": "SLAF Coverage Badge Data",
-                "public": true,
-                "files": {
-                  "slaf-coverage.json": {
-                    "content": "'"$(cat coverage-badge.json)"'"
+              -d "{
+                \"description\": \"SLAF Coverage Badge Data\",
+                \"public\": true,
+                \"files\": {
+                  \"slaf-coverage.json\": {
+                    \"content\": $BADGE_CONTENT
                   }
                 }
-              }' https://api.github.com/gists)
+              }" https://api.github.com/gists)
             echo "Created new gist: $GIST_RESPONSE"
             echo "GIST_ID=$(echo $GIST_RESPONSE | jq -r '.id')" >> $GITHUB_OUTPUT
           else
@@ -339,13 +343,13 @@ jobs:
             curl -X PATCH \
               -H "Authorization: token $GIST_TOKEN" \
               -H "Accept: application/vnd.github.v3+json" \
-              -d '{
-                "files": {
-                  "slaf-coverage.json": {
-                    "content": "'"$(cat coverage-badge.json)"'"
+              -d "{
+                \"files\": {
+                  \"slaf-coverage.json\": {
+                    \"content\": $BADGE_CONTENT
                   }
                 }
-              }' https://api.github.com/gists/$GIST_ID
+              }" https://api.github.com/gists/$GIST_ID
             echo "Updated gist: $GIST_ID"
           fi
 
