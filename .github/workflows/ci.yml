@@ -119,6 +119,7 @@ jobs:
           uv sync --extra dev --extra test
 
       - name: Run tests with coverage
+        id: coverage
         run: |
           uv run pytest tests \
             --cov=slaf \
@@ -127,6 +128,7 @@ jobs:
             --cov-report=term-missing \
             --cov-fail-under=60 \
             -v
+          echo "coverage=$(uv run coverage report --format=total)" >> $GITHUB_OUTPUT
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
@@ -135,6 +137,30 @@ jobs:
           flags: unittests
           name: codecov-umbrella
           fail_ci_if_error: false
+
+      - name: Generate test status badge
+        uses: schneegans/dynamic-badges@v1
+        with:
+          auth: ${{ secrets.GIST_SECRET }}
+          filename: slaf-tests.json
+          namedLogo: pytest
+          label: tests
+          namedColor: brightgreen
+          style: flat
+          message: passing
+          logLevel: 3
+
+      - name: Generate coverage badge
+        uses: schneegans/dynamic-badges@v1
+        with:
+          auth: ${{ secrets.GIST_SECRET }}
+          filename: slaf-coverage.json
+          namedLogo: codecov
+          label: coverage
+          namedColor: green
+          style: flat
+          message: ${{ steps.coverage.outputs.coverage }}%
+          logLevel: 3
 
   dependencies:
     name: Dependency Check
