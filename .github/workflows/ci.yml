@@ -138,29 +138,7 @@ jobs:
           name: codecov-umbrella
           fail_ci_if_error: false
 
-      - name: Generate test status badge
-        uses: schneegans/dynamic-badges@v1
-        with:
-          auth: ${{ secrets.GIST_SECRET }}
-          filename: slaf-tests.json
-          namedLogo: pytest
-          label: tests
-          namedColor: brightgreen
-          style: flat
-          message: passing
-          logLevel: 3
-
-      - name: Generate coverage badge
-        uses: schneegans/dynamic-badges@v1
-        with:
-          auth: ${{ secrets.GIST_SECRET }}
-          filename: slaf-coverage.json
-          namedLogo: codecov
-          label: coverage
-          namedColor: green
-          style: flat
-          message: ${{ steps.coverage.outputs.coverage }}%
-          logLevel: 3
+      # Dynamic badges removed - using static badges in README instead
 
   dependencies:
     name: Dependency Check

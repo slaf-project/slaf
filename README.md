@@ -5,8 +5,8 @@
 
 <!-- Update these badges with your actual repository URLs -->
 
-[![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](https://github.com/slaf-project/slaf/actions)
-[![Coverage](https://img.shields.io/badge/coverage-90%25-brightgreen.svg)](https://codecov.io/gh/slaf-project/slaf)
+[![Tests](https://img.shields.io/github/actions/workflow/status/slaf-project/slaf/ci.yml?branch=main&label=tests)](https://github.com/slaf-project/slaf/actions)
+[![Coverage](https://img.shields.io/codecov/c/github/slaf-project/slaf?label=coverage)](https://codecov.io/gh/slaf-project/slaf)
 [![Code style](https://img.shields.io/badge/code%20style-ruff-black.svg)](https://github.com/astral-sh/ruff)
 
 <!-- Uncomment when published to PyPI: [![PyPI](https://img.shields.io/badge/PyPI-0.2.0-blue.svg)](https://pypi.org/project/slaf/) -->
