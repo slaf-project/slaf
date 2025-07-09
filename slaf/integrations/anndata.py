@@ -825,7 +825,7 @@ class LazyAnnData(LazySparseMixin):
                     else:
                         # Pad or truncate the mask to match
                         if len(cell_selector) < len(obs_df):
-                            mask = np.zeros(len(obs_df), dtype=bool)
+                            mask: np.ndarray = np.zeros(len(obs_df), dtype=bool)
                             mask[: len(cell_selector)] = cell_selector
                         else:
                             mask = cell_selector[: len(obs_df)]
@@ -881,7 +881,7 @@ class LazyAnnData(LazySparseMixin):
                     else:
                         # Pad or truncate the mask to match
                         if len(gene_selector) < len(var_df):
-                            mask = np.zeros(len(var_df), dtype=bool)
+                            mask: np.ndarray = np.zeros(len(var_df), dtype=bool)
                             mask[: len(gene_selector)] = gene_selector
                         else:
                             mask = gene_selector[: len(var_df)]

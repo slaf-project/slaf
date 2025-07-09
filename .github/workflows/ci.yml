@@ -62,10 +62,11 @@ jobs:
           pip install -e ".[dev]"
           pip install types-requests
           pip install ruff==0.12.2
+          pip install mypy==1.8.0
 
       - name: Type check with mypy
         run: |
-          mypy slaf/ --ignore-missing-imports
+          mypy slaf/ --explicit-package-bases --ignore-missing-imports
 
   test:
     name: Test Suite

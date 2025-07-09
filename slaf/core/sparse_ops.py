@@ -358,22 +358,22 @@ class LazySparseMixin:
 
         elif isinstance(selector, np.ndarray) and selector.dtype == bool:
             # Boolean mask - map True positions to sequential indices
-            mapping = {}
-            true_indices = np.where(selector)[0]
+            true_indices = [int(x) for x in np.where(selector)[0]]
+            bool_mapping: dict[int, int] = {}
             for i, db_id in enumerate(true_indices):
-                mapping[int(db_id)] = int(i)
-            return mapping
+                bool_mapping[db_id] = i
+            return bool_mapping
 
         elif isinstance(selector, list | np.ndarray):
             # Arbitrary list - map each ID to its position in the list
-            mapping = {}
+            list_mapping: dict[int, int] = {}
             for i, db_id in enumerate(selector):
-                mapping[int(db_id)] = int(i)
-            return mapping
+                list_mapping[int(db_id)] = int(i)
+            return list_mapping
 
         elif isinstance(selector, int | np.integer):
             # Single index - map the ID to position 0
-            return {selector: 0}
+            return {int(selector): 0}
 
         else:
             # Fallback - empty mapping
@@ -733,7 +733,7 @@ class LazySparseMixin:
             result_df = self.slaf_array.query(sql)
 
             # Process results for each operation
-            results = {}
+            gene_results: dict[str, np.ndarray] = {}
             total_cells = self.shape[0]
 
             for op in operations:
@@ -749,7 +749,9 @@ class LazySparseMixin:
                             full_result[gene_indices[valid_mask]] = (
                                 sums[valid_mask] / total_cells
                             )
-                    results[op.lower()] = full_result.reshape(1, -1).astype(np.float64)
+                    gene_results[op.lower()] = full_result.reshape(1, -1).astype(
+                        np.float64
+                    )
 
                 elif op.upper() in ["VARIANCE", "VAR"]:
                     full_result = np.zeros(self.shape[1])
@@ -769,7 +771,9 @@ class LazySparseMixin:
                                 means * means
                             )
                             full_result[valid_indices] = variances
-                    results[op.lower()] = full_result.reshape(1, -1).astype(np.float64)
+                    gene_results[op.lower()] = full_result.reshape(1, -1).astype(
+                        np.float64
+                    )
 
                 else:
                     full_result = np.zeros(self.shape[1])
@@ -783,9 +787,11 @@ class LazySparseMixin:
                             full_result[gene_indices[valid_mask]] = op_results[
                                 valid_mask
                             ]
-                    results[op.lower()] = full_result.reshape(1, -1).astype(np.float64)
+                    gene_results[op.lower()] = full_result.reshape(1, -1).astype(
+                        np.float64
+                    )
 
-            return results
+            return gene_results
 
         elif axis == 1:  # Cell-wise aggregation
             # Similar optimization for cell-wise operations
@@ -812,7 +818,7 @@ class LazySparseMixin:
             result_df = self.slaf_array.query(sql)
 
             # Process results for each operation
-            results = {}
+            cell_results: dict[str, np.ndarray] = {}
             total_genes = self.shape[1]
 
             for op in operations:
@@ -828,7 +834,9 @@ class LazySparseMixin:
                             full_result[cell_indices[valid_mask]] = (
                                 sums[valid_mask] / total_genes
                             )
-                    results[op.lower()] = full_result.reshape(-1, 1).astype(np.float64)
+                    cell_results[op.lower()] = full_result.reshape(-1, 1).astype(
+                        np.float64
+                    )
 
                 elif op.upper() in ["VARIANCE", "VAR"]:
                     full_result = np.zeros(self.shape[0])
@@ -848,7 +856,9 @@ class LazySparseMixin:
                                 means * means
                             )
                             full_result[valid_indices] = variances
-                    results[op.lower()] = full_result.reshape(-1, 1).astype(np.float64)
+                    cell_results[op.lower()] = full_result.reshape(-1, 1).astype(
+                        np.float64
+                    )
 
                 else:
                     full_result = np.zeros(self.shape[0])
@@ -862,9 +872,11 @@ class LazySparseMixin:
                             full_result[cell_indices[valid_mask]] = op_results[
                                 valid_mask
                             ]
-                    results[op.lower()] = full_result.reshape(-1, 1).astype(np.float64)
+                    cell_results[op.lower()] = full_result.reshape(-1, 1).astype(
+                        np.float64
+                    )
 
-            return results
+            return cell_results
 
         else:  # Global aggregation
             # Global multi-aggregation
@@ -883,14 +895,16 @@ class LazySparseMixin:
             sql = f"SELECT {', '.join(agg_clauses)} FROM expression"
             result = self.slaf_array.query(sql)
 
-            results = {}
+            global_results: dict[str, np.ndarray] = {}
             if len(result) > 0:
                 total_elements = self.shape[0] * self.shape[1]
 
                 for op in operations:
                     if op.upper() in ["MEAN", "AVG"]:
                         total_sum = result.iloc[0][f"{op.lower()}_sum"]
-                        results[op.lower()] = np.array([total_sum / total_elements])
+                        global_results[op.lower()] = np.array(
+                            [total_sum / total_elements]
+                        )
                     elif op.upper() in ["VARIANCE", "VAR"]:
                         total_sum = result.iloc[0][f"{op.lower()}_sum"]
                         sum_squares = result.iloc[0][f"{op.lower()}_sum_squares"]
@@ -898,12 +912,12 @@ class LazySparseMixin:
                         global_variance = (sum_squares / total_elements) - (
                             global_mean * global_mean
                         )
-                        results[op.lower()] = np.array([global_variance])
+                        global_results[op.lower()] = np.array([global_variance])
                     else:
                         op_result = result.iloc[0][f"{op.lower()}_result"]
-                        results[op.lower()] = np.array([float(op_result)])
+                        global_results[op.lower()] = np.array([float(op_result)])
             else:
                 for op in operations:
-                    results[op.lower()] = np.array([0.0])
+                    global_results[op.lower()] = np.array([0.0])
 
-            return results
+            return global_results
