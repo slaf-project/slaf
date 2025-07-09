@@ -319,8 +319,8 @@ jobs:
           # Create or update gist with coverage data
           GIST_ID="${{ secrets.COVERAGE_GIST_ID }}"
 
-          # Read the coverage badge JSON and escape it properly
-          BADGE_CONTENT=$(cat coverage-badge.json | jq -c .)
+          # Read the coverage badge JSON and escape it properly as a string
+          BADGE_CONTENT=$(cat coverage-badge.json | jq -c . | jq -R .)
 
           if [ -z "$GIST_ID" ]; then
             # Create new gist if ID not provided
