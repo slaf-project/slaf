@@ -1,5 +1,7 @@
 import numpy as np
 
+from slaf.core.slaf import SLAFArray
+
 from .tokenizers import SLAFTokenizer
 
 # Try to import torch, but make it optional
@@ -56,20 +58,109 @@ OPTIMAL_DEVICE = get_optimal_device()
 
 
 class SLAFDataLoader:
-    """High-performance DataLoader for SLAF data"""
+    """
+    High-performance DataLoader for SLAF data optimized for ML training.
+
+    SLAFDataLoader provides efficient batching and tokenization of single-cell data
+    for machine learning applications. It supports multiple tokenization strategies
+    and automatic device optimization for PyTorch training.
+
+    Key Features:
+        - Multiple tokenization strategies (GeneFormer, SCPGPT)
+        - Automatic device optimization (CUDA > MPS > CPU)
+        - Efficient batching with integer ID ranges
+        - PyTorch tensor output with attention masks
+        - Memory-efficient lazy loading
+
+    Examples:
+        >>> # Basic usage with default settings
+        >>> slaf_array = SLAFArray("path/to/data.slaf")
+        >>> dataloader = SLAFDataLoader(slaf_array)
+        >>> for batch in dataloader:
+        ...     print(f"Batch shape: {batch['input_ids'].shape}")
+        ...     print(f"Cell IDs: {batch['cell_ids']}")
+        ...     break
+        Batch shape: torch.Size([32, 2048])
+        Cell IDs: tensor([0, 1, 2, ..., 29, 30, 31])
+
+        >>> # Custom configuration for training
+        >>> dataloader = SLAFDataLoader(
+        ...     slaf_array=slaf_array,
+        ...     tokenizer_type="geneformer",
+        ...     batch_size=64,
+        ...     max_genes=1024,
+        ...     vocab_size=30000
+        ... )
+        >>> print(f"Number of batches: {len(dataloader)}")
+        Number of batches: 42
+
+        >>> # Training loop example
+        >>> for batch_idx, batch in enumerate(dataloader):
+        ...     input_ids = batch["input_ids"]
+        ...     attention_mask = batch["attention_mask"]
+        ...     cell_ids = batch["cell_ids"]
+        ...     # Your training code here
+        ...     if batch_idx >= 2:  # Just show first few batches
+        ...         break
+        >>> print("Training loop completed")
+        Training loop completed
+    """
 
     def __init__(
         self,
-        slaf_array,
-        tokenizer_type="geneformer",
-        batch_size=32,
-        max_genes=2048,
-        num_workers=4,
-        vocab_size=50000,
-        n_expression_bins=10,
-        chunk_size=1024,
-        device=None,  # Allow manual device override
+        slaf_array: SLAFArray,
+        tokenizer_type: str = "geneformer",
+        batch_size: int = 32,
+        max_genes: int = 2048,
+        num_workers: int = 4,
+        vocab_size: int = 50000,
+        n_expression_bins: int = 10,
+        chunk_size: int = 1024,
+        device: str | None = None,  # Allow manual device override
     ):
+        """
+        Initialize the SLAF DataLoader with training configuration.
+
+        Args:
+            slaf_array: SLAFArray instance containing the single-cell data.
+            tokenizer_type: Tokenization strategy to use. Options: "geneformer", "scgpt".
+            batch_size: Number of cells per batch. Larger batches use more memory.
+            max_genes: Maximum number of genes to include in each cell's tokenization.
+            num_workers: Number of worker processes for data loading (unused in current implementation).
+            vocab_size: Size of the tokenizer vocabulary.
+            n_expression_bins: Number of expression level bins for discretization.
+            chunk_size: Size of chunks for processing large datasets.
+            device: PyTorch device to use. If None, automatically selects optimal device.
+
+        Raises:
+            ValueError: If tokenizer_type is not supported.
+            RuntimeError: If PyTorch is not available and device is specified.
+
+        Examples:
+            >>> # Basic initialization
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> dataloader = SLAFDataLoader(slaf_array)
+            >>> print(f"Batch size: {dataloader.batch_size}")
+            Batch size: 32
+
+            >>> # Custom configuration
+            >>> dataloader = SLAFDataLoader(
+            ...     slaf_array=slaf_array,
+            ...     tokenizer_type="scgpt",
+            ...     batch_size=64,
+            ...     max_genes=1024
+            ... )
+            >>> print(f"Tokenizer type: {dataloader.tokenizer_type}")
+            Tokenizer type: scgpt
+
+            >>> # With custom device
+            >>> dataloader = SLAFDataLoader(
+            ...     slaf_array=slaf_array,
+            ...     device="cuda:0"
+            ... )
+            >>> print(f"Device: {dataloader.device}")
+            Device: cuda:0
+        """
         self.slaf_array = slaf_array
         self.tokenizer_type = tokenizer_type
         self.batch_size = batch_size
@@ -112,7 +203,51 @@ class SLAFDataLoader:
         return ranges
 
     def __iter__(self):
-        """Iterate through batches"""
+        """
+        Iterate through batches of tokenized single-cell data.
+
+        Yields batches of tokenized data suitable for machine learning training.
+        Each batch contains input_ids, attention_mask, and cell_ids for the
+        cells in that batch.
+
+        Yields:
+            dict: Batch dictionary containing:
+                - input_ids: Tokenized gene expression data (torch.Tensor or np.ndarray)
+                - attention_mask: Boolean mask indicating valid tokens (torch.Tensor or np.ndarray)
+                - cell_ids: Integer IDs of cells in the batch (torch.Tensor or np.ndarray)
+
+        Raises:
+            ValueError: If the tokenizer type is not supported.
+            RuntimeError: If tokenization fails for a batch.
+
+        Examples:
+            >>> # Basic iteration
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> dataloader = SLAFDataLoader(slaf_array, batch_size=16)
+            >>> for batch in dataloader:
+            ...     print(f"Batch keys: {list(batch.keys())}")
+            ...     print(f"Input shape: {batch['input_ids'].shape}")
+            ...     print(f"Cell IDs: {batch['cell_ids']}")
+            ...     break
+            Batch keys: ['input_ids', 'attention_mask', 'cell_ids']
+            Input shape: (16, 2048)
+            Cell IDs: tensor([0, 1, 2, ..., 13, 14, 15])
+
+            >>> # Training loop with error handling
+            >>> for batch_idx, batch in enumerate(dataloader):
+            ...     try:
+            ...         input_ids = batch["input_ids"]
+            ...         attention_mask = batch["attention_mask"]
+            ...         cell_ids = batch["cell_ids"]
+            ...         # Your training code here
+            ...         print(f"Processed batch {batch_idx}")
+            ...     except Exception as e:
+            ...         print(f"Error in batch {batch_idx}: {e}")
+            ...         continue
+            Processed batch 0
+            Processed batch 1
+            Processed batch 2
+        """
         for cell_range in self.cell_integer_ranges:
             if self.tokenizer_type == "geneformer":
                 tokens = self.tokenizer.tokenize_geneformer(

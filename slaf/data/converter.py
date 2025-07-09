@@ -10,22 +10,114 @@ import scanpy as sc
 
 
 class SLAFConverter:
-    """Convert h5ad to SLAF format with COO-style expression table"""
+    """
+    Convert single-cell data formats to SLAF format with optimized storage.
+
+    SLAFConverter provides efficient conversion from various single-cell data formats
+    (primarily AnnData/h5ad) to the SLAF format. It optimizes storage by using
+    integer keys, COO-style expression tables, and efficient metadata handling.
+
+    Key Features:
+        - AnnData/h5ad file conversion
+        - Integer key optimization for memory efficiency
+        - COO-style sparse matrix storage
+        - Automatic metadata type inference
+        - Lance format for high-performance storage
+
+    Examples:
+        >>> # Basic conversion from h5ad file
+        >>> converter = SLAFConverter()
+        >>> converter.convert("data.h5ad", "output.slaf")
+        Converting data.h5ad to SLAF format...
+        Optimizations: int_keys=True
+        Loaded: 1000 cells × 20000 genes
+        Conversion complete! Saved to output.slaf
+
+        >>> # Conversion with custom optimization settings
+        >>> converter = SLAFConverter(use_integer_keys=False)
+        >>> converter.convert("data.h5ad", "output_string_keys.slaf")
+        Converting data.h5ad to SLAF format...
+        Optimizations: int_keys=False
+        Loaded: 1000 cells × 20000 genes
+        Conversion complete! Saved to output_string_keys.slaf
+
+        >>> # Convert existing AnnData object
+        >>> import scanpy as sc
+        >>> adata = sc.read_h5ad("data.h5ad")
+        >>> converter = SLAFConverter()
+        >>> converter.convert_anndata(adata, "output_from_object.slaf")
+        Converting AnnData object to SLAF format...
+        Optimizations: int_keys=True
+        Loaded: 1000 cells × 20000 genes
+        Conversion complete! Saved to output_from_object.slaf
+    """
 
     def __init__(
         self,
         use_integer_keys: bool = True,
     ):
         """
-        Initialize converter with optimization options
+        Initialize converter with optimization options.
 
         Args:
-            use_integer_keys: Use integer keys instead of strings in sparse data (saves space)
+            use_integer_keys: Use integer keys instead of strings in sparse data.
+                             This saves significant memory and improves query performance.
+                             Set to False only if you need to preserve original string IDs.
+
+        Examples:
+            >>> # Default optimization (recommended)
+            >>> converter = SLAFConverter()
+            >>> print(f"Using integer keys: {converter.use_integer_keys}")
+            Using integer keys: True
+
+            >>> # Disable integer key optimization
+            >>> converter = SLAFConverter(use_integer_keys=False)
+            >>> print(f"Using integer keys: {converter.use_integer_keys}")
+            Using integer keys: False
         """
         self.use_integer_keys = use_integer_keys
 
     def convert(self, h5ad_path: str, output_path: str):
-        """Convert h5ad file to SLAF format with COO-style expression table"""
+        """
+        Convert h5ad file to SLAF format with optimized storage.
+
+        Loads an h5ad file and converts it to the SLAF format with COO-style
+        expression tables and optimized metadata storage. This is the primary
+        conversion method for AnnData files.
+
+        Args:
+            h5ad_path: Path to the input h5ad file to convert.
+            output_path: Path where the SLAF dataset will be saved.
+                        Should be a directory path, not a file path.
+
+        Raises:
+            FileNotFoundError: If the h5ad file doesn't exist.
+            ValueError: If the h5ad file is corrupted or invalid.
+            RuntimeError: If the conversion process fails.
+
+        Examples:
+            >>> # Convert a single h5ad file
+            >>> converter = SLAFConverter()
+            >>> converter.convert("pbmc3k.h5ad", "pbmc3k.slaf")
+            Converting pbmc3k.h5ad to SLAF format...
+            Optimizations: int_keys=True
+            Loaded: 2700 cells × 32738 genes
+            Conversion complete! Saved to pbmc3k.slaf
+
+            >>> # Convert with custom output path
+            >>> converter.convert("data.h5ad", "/path/to/output/dataset.slaf")
+            Converting data.h5ad to SLAF format...
+            Optimizations: int_keys=True
+            Loaded: 1000 cells × 20000 genes
+            Conversion complete! Saved to /path/to/output/dataset.slaf
+
+            >>> # Error handling for missing file
+            >>> try:
+            ...     converter.convert("nonexistent.h5ad", "output.slaf")
+            ... except FileNotFoundError as e:
+            ...     print(f"Error: {e}")
+            Error: [Errno 2] No such file or directory: 'nonexistent.h5ad'
+        """
         print(f"Converting {h5ad_path} to SLAF format...")
         print(f"Optimizations: int_keys={self.use_integer_keys}")
 

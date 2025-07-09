@@ -1,5 +1,96 @@
 /* Custom styles for SLAF documentation */
 
+/* API Documentation Visual Separation */
+.doc-contents {
+  margin-bottom: 2rem;
+}
+
+.doc-contents .doc-heading {
+  border-bottom: 2px solid var(--md-primary-fg-color);
+  padding-bottom: 0.5rem;
+  margin-bottom: 1.5rem;
+  margin-top: 2rem;
+}
+
+.doc-contents .doc-heading:first-child {
+  margin-top: 0;
+}
+
+/* Function/Method separation */
+.doc-contents .doc-function {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-bottom: 2rem;
+  background: var(--md-default-bg-color);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.doc-contents .doc-function:hover {
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+  border-color: var(--md-primary-fg-color);
+}
+
+/* Method signature styling */
+.doc-contents .doc-signature {
+  background: var(--md-code-bg-color);
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1rem 0;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  border-left: 4px solid var(--md-primary-fg-color);
+}
+
+/* Parameter lists */
+.doc-contents .doc-parameter-list {
+  background: var(--md-default-bg-color);
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1rem 0;
+  border: 1px solid var(--md-default-fg-color--lightest);
+}
+
+.doc-contents .doc-parameter-list dt {
+  font-weight: bold;
+  color: var(--md-primary-fg-color);
+}
+
+/* Example code blocks */
+.doc-contents .doc-examples {
+  background: var(--md-code-bg-color);
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1rem 0;
+  border-left: 4px solid #4caf50;
+}
+
+/* Class vs Method distinction */
+.doc-contents .doc-class {
+  border: 2px solid var(--md-primary-fg-color);
+  border-radius: 8px;
+  padding: 2rem;
+  margin-bottom: 3rem;
+  background: linear-gradient(135deg, var(--md-default-bg-color) 0%, var(--md-primary-fg-color--lightest) 100%);
+}
+
+.doc-contents .doc-method {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 6px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  background: var(--md-default-bg-color);
+}
+
+/* Property styling */
+.doc-contents .doc-property {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 6px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  background: var(--md-default-bg-color);
+  border-left: 4px solid #ff9800;
+}
+
 /* Hero section styling */
 .hero {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -172,6 +263,23 @@
   border-top: 1px solid var(--md-default-fg-color--lightest);
 }
 
+body {
+  overflow-x: hidden;
+}
+
+.md-footer {
+  position: relative !important;
+  left: 0 !important;
+  width: 100vw !important;
+  margin-left: 0 !important;
+  box-sizing: border-box;
+  z-index: 1000 !important;
+  border-radius: 0 !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  overflow-x: visible !important;
+}
+
 /* Responsive design */
 @media (max-width: 768px) {
   .grid.cards {
@@ -284,13 +392,20 @@
   color: var(--md-primary-bg-color);
 }
 
-/* Ensure TOC is properly integrated on the left */
+/* Ensure primary sidebar is on the left */
 .md-sidebar--primary {
   order: 1;
+  position: fixed;
+  left: 0;
+  top: 48px; /* Account for header height */
+  width: 240px;
+  height: calc(100vh - 48px);
+  z-index: 1;
 }
 
 .md-sidebar--secondary {
   order: 2;
+  display: none !important;
 }
 
 /* Customize the navigation drawer */
@@ -298,9 +413,10 @@
   background-color: var(--md-primary-fg-color);
 }
 
-/* Ensure proper spacing */
+/* Ensure proper spacing for main content */
 .md-content {
-  margin-left: 0;
+  margin-left: 240px; /* Match sidebar width */
+  padding-left: 1rem;
 }
 
 /* Customize the hamburger menu button */
@@ -311,6 +427,35 @@
 /* Ensure TOC follows properly */
 .md-sidebar__scrollwrap {
   scrollbar-width: thin;
+}
+
+/* Add indentation for sub-pages */
+.md-nav__list .md-nav__list {
+  margin-left: 1rem;
+}
+
+.md-nav__list .md-nav__list .md-nav__list {
+  margin-left: 1.5rem;
+}
+
+.md-nav__list .md-nav__list .md-nav__list .md-nav__list {
+  margin-left: 2rem;
+}
+
+/* Style nested navigation items */
+.md-nav__list .md-nav__list .md-nav__link {
+  padding-left: 1rem;
+  font-size: 0.9em;
+}
+
+.md-nav__list .md-nav__list .md-nav__list .md-nav__link {
+  padding-left: 1.5rem;
+  font-size: 0.85em;
+}
+
+.md-nav__list .md-nav__list .md-nav__list .md-nav__list .md-nav__link {
+  padding-left: 2rem;
+  font-size: 0.8em;
 }
 
 /* Custom styling for the heart and code icons on homepage */
@@ -373,14 +518,20 @@ iframe {
   .md-sidebar--secondary {
     display: none;
   }
+
+  .md-content {
+    margin-left: 0;
+    padding-left: 0;
+  }
 }
 
 /* Hide the right Table of Contents sidebar */
 .md-sidebar--secondary {
   display: none !important;
 }
-
-/* Ensure the left sidebar (navigation) is always visible */
-.md-sidebar--primary {
-  display: block !important;
+/* Ensure the left sidebar (navigation) is always visible on desktop */
+@media (min-width: 76.1875em) {
+  .md-sidebar--primary {
+    display: block !important;
+  }
 }

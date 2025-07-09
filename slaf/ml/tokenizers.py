@@ -6,9 +6,45 @@ from slaf.core.slaf import SLAFArray
 
 
 class SLAFTokenizer:
-    """Tokenizer for single-cell RNA-seq data in SLAF format
+    """
+    Tokenizer for single-cell RNA-seq data in SLAF format.
 
-    Supports scGPT and Geneformer tokenization styles with various configurations.
+    SLAFTokenizer converts single-cell gene expression data into tokenized sequences
+    suitable for machine learning models. It supports multiple tokenization strategies
+    including scGPT and GeneFormer styles with configurable vocabulary sizes and
+    expression binning.
+
+    Key Features:
+        - Multiple tokenization strategies (scGPT, GeneFormer)
+        - Configurable vocabulary size and expression binning
+        - Efficient chunked processing for large datasets
+        - Special token handling (CLS, SEP, PAD, UNK)
+        - Memory-efficient gene vocabulary building
+
+    Examples:
+        >>> # Basic tokenizer initialization
+        >>> slaf_array = SLAFArray("path/to/data.slaf")
+        >>> tokenizer = SLAFTokenizer(slaf_array)
+        >>> print(f"Vocabulary size: {tokenizer.vocab_size}")
+        Vocabulary size: 50000
+
+        >>> # Custom configuration
+        >>> tokenizer = SLAFTokenizer(
+        ...     slaf_array=slaf_array,
+        ...     vocab_size=30000,
+        ...     n_expression_bins=15,
+        ...     chunk_size=1024
+        ... )
+        >>> print(f"Expression bins: {tokenizer.n_expression_bins}")
+        Expression bins: 15
+
+        >>> # Tokenize cells for training
+        >>> tokens = tokenizer.tokenize_geneformer(
+        ...     cell_integer_id_range=(0, 32),
+        ...     max_genes=2048
+        ... )
+        >>> print(f"Tokenized {len(tokens)} cells")
+        Tokenized 32 cells
     """
 
     def __init__(
@@ -18,13 +54,45 @@ class SLAFTokenizer:
         n_expression_bins: int = 10,
         chunk_size: int = 2048,
     ):
-        """Initialize SLAFTokenizer with SLAF array and vocabulary settings
+        """
+        Initialize SLAFTokenizer with SLAF array and vocabulary settings.
 
         Args:
-            slaf_array: Initialized SLAFArray instance
-            vocab_size: Maximum size of gene vocabulary
-            n_expression_bins: Number of expression bins for scGPT tokenization
-            chunk_size: Number of cells to process in each chunk
+            slaf_array: Initialized SLAFArray instance containing the single-cell data.
+                       Used to build the gene vocabulary and access expression data.
+            vocab_size: Maximum size of gene vocabulary. Genes beyond this limit
+                       will be mapped to UNK token. Larger vocabularies use more memory.
+            n_expression_bins: Number of expression level bins for scGPT tokenization.
+                              More bins provide finer expression level discretization.
+            chunk_size: Number of cells to process in each chunk for memory efficiency.
+                       Larger chunks are faster but use more memory.
+
+        Raises:
+            ValueError: If vocab_size or n_expression_bins are invalid.
+            RuntimeError: If the SLAF array is not properly initialized.
+
+        Examples:
+            >>> # Basic initialization
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> tokenizer = SLAFTokenizer(slaf_array)
+            >>> print(f"Special tokens: {list(tokenizer.special_tokens.keys())}")
+            Special tokens: ['CLS', 'SEP', 'PAD', 'UNK']
+
+            >>> # Custom vocabulary size
+            >>> tokenizer = SLAFTokenizer(
+            ...     slaf_array=slaf_array,
+            ...     vocab_size=10000
+            ... )
+            >>> print(f"Gene vocabulary size: {len(tokenizer.gene_vocab)}")
+            Gene vocabulary size: 10000
+
+            >>> # With more expression bins
+            >>> tokenizer = SLAFTokenizer(
+            ...     slaf_array=slaf_array,
+            ...     n_expression_bins=20
+            ... )
+            >>> print(f"Expression bin start: {tokenizer.expr_bin_start}")
+            Expression bin start: 4
         """
         self.slaf_array = slaf_array
         self.vocab_size = vocab_size
@@ -46,7 +114,22 @@ class SLAFTokenizer:
         self._build_gene_vocabulary()
 
     def _build_gene_vocabulary(self):
-        """Build gene vocabulary from SLAF var DataFrame"""
+        """
+        Build gene vocabulary from SLAF var DataFrame.
+
+        Creates a mapping from gene IDs to token IDs for the tokenizer.
+        The vocabulary is limited by vocab_size and includes special tokens
+        and expression bins in the token space.
+
+        Examples:
+            >>> # Vocabulary building process
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> tokenizer = SLAFTokenizer(slaf_array, vocab_size=1000)
+            >>> print(f"Gene vocabulary size: {len(tokenizer.gene_vocab)}")
+            Gene vocabulary size: 1000
+            >>> print(f"First gene token: {list(tokenizer.gene_vocab.values())[0]}")
+            First gene token: 14  # 4 special tokens + 10 expression bins
+        """
         # Use gene_integer_id as token IDs, but limit to vocab_size
         gene_ids = self.slaf_array.var.index.tolist()[: self.vocab_size]
 
@@ -127,15 +210,52 @@ class SLAFTokenizer:
         max_genes: int = 1024,
         use_sql_binning: bool = False,
     ) -> list[list[int]]:
-        """Tokenize cells using scGPT format: [CLS] gene1 expr1 gene2 expr2 ... [SEP]
+        """
+        Tokenize cells using scGPT format: [CLS] gene1 expr1 gene2 expr2 ... [SEP].
+
+        This method tokenizes single-cell data in the scGPT format, which interleaves
+        gene tokens with expression level tokens. The format is designed for transformer
+        models that can learn gene-expression relationships.
 
         Args:
-            cell_integer_id_range: Range of cell integer IDs (start, end)
-            max_genes: Maximum number of genes per cell
-            use_sql_binning: Whether to use SQL-based expression binning
+            cell_integer_id_range: Range of cell integer IDs (start, end) to tokenize.
+            max_genes: Maximum number of genes to include per cell. Genes are ranked
+                      by expression level and only the top max_genes are included.
+            use_sql_binning: Whether to use SQL-based expression binning for better
+                           performance on large datasets. If False, uses Python-based
+                           binning which is more memory efficient.
 
         Returns:
-            List of token sequences, one per cell
+            list[list[int]]: List of token sequences, one per cell. Each sequence
+                            follows the format [CLS, gene1, expr1, gene2, expr2, ..., SEP, PAD...].
+
+        Raises:
+            ValueError: If cell_integer_id_range is invalid.
+            RuntimeError: If the SLAF array is not properly initialized.
+
+        Examples:
+            >>> # Basic scGPT tokenization
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> tokenizer = SLAFTokenizer(slaf_array)
+            >>> tokens = tokenizer.tokenize_scgpt(
+            ...     cell_integer_id_range=(0, 32), max_genes=1024
+            ... )
+            >>> print(f"Tokenized {len(tokens)} cells")
+            Tokenized 32 cells
+            >>> print(f"First cell sequence length: {len(tokens[0])}")
+            First cell sequence length: 2050  # CLS + 1024*2 + SEP
+
+            >>> # With SQL binning for large datasets
+            >>> tokens = tokenizer.tokenize_scgpt(
+            ...     cell_integer_id_range=(0, 100), max_genes=512, use_sql_binning=True
+            ... )
+            >>> print(f"Tokenized {len(tokens)} cells with SQL binning")
+            Tokenized 100 cells with SQL binning
+
+            >>> # Check token format
+            >>> first_tokens = tokens[0][:10]  # First 10 tokens
+            >>> print(f"First tokens: {first_tokens}")
+            First tokens: [0, 14, 4, 15, 5, ...]  # CLS, gene1, expr1, gene2, expr2, ...
         """
         start, end = cell_integer_id_range
         chunks = self._chunk_range(start, end)
@@ -314,15 +434,53 @@ class SLAFTokenizer:
         max_genes: int = 2048,
         min_percentile: float | None = None,
     ) -> list[list[int]]:
-        """Tokenize cells using Geneformer format: ranked gene tokens
+        """
+        Tokenize cells using Geneformer format: ranked gene tokens.
+
+        This method tokenizes single-cell data in the Geneformer format, which creates
+        sequences of gene tokens ranked by expression level. This format is designed
+        for transformer models that learn gene importance from expression patterns.
 
         Args:
-            cell_integer_id_range: Range of cell integer IDs (start, end)
-            max_genes: Maximum number of genes per cell
-            min_percentile: Optional percentile filter (0-100) for expression
+            cell_integer_id_range: Range of cell integer IDs (start, end) to tokenize.
+            max_genes: Maximum number of genes to include per cell. Genes are ranked
+                      by expression level and only the top max_genes are included.
+            min_percentile: Optional percentile filter (0-100) for expression levels.
+                          Only genes with expression above this percentile are included.
+                          If None, all genes are considered.
 
         Returns:
-            List of token sequences, one per cell
+            list[list[int]]: List of token sequences, one per cell. Each sequence
+                            contains gene tokens ranked by expression level, padded
+                            to max_genes length.
+
+        Raises:
+            ValueError: If cell_integer_id_range is invalid or min_percentile is out of range.
+            RuntimeError: If the SLAF array is not properly initialized.
+
+        Examples:
+            >>> # Basic Geneformer tokenization
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> tokenizer = SLAFTokenizer(slaf_array)
+            >>> tokens = tokenizer.tokenize_geneformer(
+            ...     cell_integer_id_range=(0, 32), max_genes=2048
+            ... )
+            >>> print(f"Tokenized {len(tokens)} cells")
+            Tokenized 32 cells
+            >>> print(f"First cell sequence length: {len(tokens[0])}")
+            First cell sequence length: 2048
+
+            >>> # With percentile filtering
+            >>> tokens = tokenizer.tokenize_geneformer(
+            ...     cell_integer_id_range=(0, 100), max_genes=1024, min_percentile=10.0
+            ... )
+            >>> print(f"Tokenized {len(tokens)} cells with percentile filtering")
+            Tokenized 100 cells with percentile filtering
+
+            >>> # Check token ranking (first few tokens should be highest expressed genes)
+            >>> first_tokens = tokens[0][:10]
+            >>> print(f"First 10 gene tokens: {first_tokens}")
+            First 10 gene tokens: [14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
         """
         start, end = cell_integer_id_range
         chunks = self._chunk_range(start, end)
@@ -477,7 +635,44 @@ class SLAFTokenizer:
         return token_sequences
 
     def get_vocab_info(self) -> dict[str, Any]:
-        """Get vocabulary information"""
+        """
+        Get comprehensive vocabulary information for the tokenizer.
+
+        This method returns a dictionary containing all relevant information about
+        the tokenizer's vocabulary, including sizes, token ranges, and configuration
+        parameters.
+
+        Returns:
+            dict[str, Any]: Dictionary containing vocabulary information:
+                - vocab_size: Maximum vocabulary size
+                - n_genes: Number of genes in vocabulary
+                - n_expression_bins: Number of expression level bins
+                - n_special_tokens: Number of special tokens
+                - total_vocab_size: Total vocabulary size including all token types
+                - special_tokens: Dictionary mapping special token names to IDs
+                - expr_bin_start: Starting token ID for expression bins
+                - chunk_size: Processing chunk size
+
+        Examples:
+            >>> # Get vocabulary information
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> tokenizer = SLAFTokenizer(slaf_array, vocab_size=10000)
+            >>> vocab_info = tokenizer.get_vocab_info()
+            >>> print(f"Total vocabulary size: {vocab_info['total_vocab_size']}")
+            Total vocabulary size: 10014  # 4 special + 10 bins + 10000 genes
+
+            >>> # Check token ranges
+            >>> print(f"Special tokens: {vocab_info['special_tokens']}")
+            Special tokens: {'CLS': 0, 'SEP': 1, 'PAD': 2, 'UNK': 3}
+            >>> print(f"Expression bin start: {vocab_info['expr_bin_start']}")
+            Expression bin start: 4
+
+            >>> # Verify vocabulary composition
+            >>> print(f"Genes: {vocab_info['n_genes']}")
+            Genes: 10000
+            >>> print(f"Expression bins: {vocab_info['n_expression_bins']}")
+            Expression bins: 10
+        """
         return {
             "vocab_size": self.vocab_size,
             "n_genes": len(self.gene_vocab),
@@ -492,7 +687,43 @@ class SLAFTokenizer:
         }
 
     def decode_tokens(self, tokens: list[int]) -> dict[str, Any]:
-        """Decode token sequence back to interpretable format (for debugging)"""
+        """
+        Decode token sequence back to interpretable format for debugging.
+
+        This method converts a sequence of token IDs back into a human-readable
+        format, separating special tokens, gene tokens, and expression bin tokens.
+        Useful for debugging tokenization and understanding model inputs.
+
+        Args:
+            tokens: List of token IDs to decode.
+
+        Returns:
+            dict[str, Any]: Dictionary containing decoded tokens:
+                - special_tokens: List of special token names (CLS, SEP, PAD, UNK)
+                - genes: List of gene IDs corresponding to gene tokens
+                - expression_bins: List of expression bin indices (0-based)
+
+        Examples:
+            >>> # Decode a token sequence
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> tokenizer = SLAFTokenizer(slaf_array)
+            >>> tokens = [0, 14, 4, 15, 5, 1, 2, 2]  # CLS, gene1, expr1, gene2, expr2, SEP, PAD, PAD
+            >>> decoded = tokenizer.decode_tokens(tokens)
+            >>> print(f"Special tokens: {decoded['special_tokens']}")
+            Special tokens: ['CLS', 'SEP', 'PAD', 'PAD']
+            >>> print(f"Genes: {decoded['genes']}")
+            Genes: ['GENE_001', 'GENE_002']
+            >>> print(f"Expression bins: {decoded['expression_bins']}")
+            Expression bins: [0, 1]
+
+            >>> # Decode Geneformer tokens
+            >>> geneformer_tokens = [14, 15, 16, 17, 2, 2, 2, 2]  # gene1, gene2, gene3, gene4, PAD, PAD, PAD, PAD
+            >>> decoded = tokenizer.decode_tokens(geneformer_tokens)
+            >>> print(f"Genes: {decoded['genes']}")
+            Genes: ['GENE_001', 'GENE_002', 'GENE_003', 'GENE_004']
+            >>> print(f"Special tokens: {decoded['special_tokens']}")
+            Special tokens: ['PAD', 'PAD', 'PAD', 'PAD']
+        """
         tokens_array = np.array(tokens)
         decoded: dict[str, Any] = {
             "special_tokens": [],

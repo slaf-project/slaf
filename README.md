@@ -2,9 +2,6 @@
 
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-
-<!-- Update these badges with your actual repository URLs -->
-
 [![Tests](https://img.shields.io/github/actions/workflow/status/slaf-project/slaf/ci.yml?branch=main&label=tests)](https://github.com/slaf-project/slaf/actions)
 [![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/pavanramkumar/33e8b97f85afdc956a71edc623f5c2ba/raw/slaf-coverage.json)](https://github.com/slaf-project/slaf/actions)
 [![Code style](https://img.shields.io/badge/code%20style-ruff-black.svg)](https://github.com/astral-sh/ruff)

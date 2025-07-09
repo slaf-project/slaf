@@ -16,9 +16,49 @@ class LazyPreprocessing:
         inplace: bool = True,
     ) -> tuple | None:
         """
-        Lazy version of scanpy.pp.calculate_qc_metrics
+        Calculate quality control metrics for cells and genes using lazy evaluation.
 
-        Calculate quality control metrics for cells and genes.
+        This function computes cell and gene-level QC metrics using SQL aggregation
+        for memory efficiency. It calculates metrics like total counts, number of
+        genes per cell, and number of cells per gene.
+
+        Args:
+            adata: LazyAnnData instance containing the single-cell data.
+            percent_top: Number of top genes to consider for percent_top calculation.
+                        Currently not implemented in lazy version.
+            log1p: Whether to compute log1p-transformed versions of count metrics.
+                   Adds log1p_total_counts and log1p_n_genes_by_counts to cell metrics,
+                   and log1p_total_counts and log1p_n_cells_by_counts to gene metrics.
+            inplace: Whether to modify the adata object in place. Currently not fully
+                    implemented in lazy version - returns None when True.
+
+        Returns:
+            tuple | None: If inplace=False, returns (cell_qc, gene_qc) where:
+                - cell_qc: DataFrame with cell-level QC metrics
+                - gene_qc: DataFrame with gene-level QC metrics
+                If inplace=True, returns None.
+
+        Raises:
+            RuntimeError: If the SLAF array is not properly initialized.
+
+        Examples:
+            >>> # Calculate QC metrics
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> adata = LazyAnnData(slaf_array)
+            >>> cell_qc, gene_qc = LazyPreprocessing.calculate_qc_metrics(
+            ...     adata, inplace=False
+            ... )
+            >>> print(f"Cell QC shape: {cell_qc.shape}")
+            Cell QC shape: (1000, 4)
+            >>> print(f"Gene QC shape: {gene_qc.shape}")
+            Gene QC shape: (20000, 4)
+
+            >>> # With log1p transformation
+            >>> cell_qc, gene_qc = LazyPreprocessing.calculate_qc_metrics(
+            ...     adata, log1p=True, inplace=False
+            ... )
+            >>> print(f"Cell QC columns: {list(cell_qc.columns)}")
+            Cell QC columns: ['cell_id', 'n_genes_by_counts', 'total_counts', 'log1p_total_counts', 'log1p_n_genes_by_counts']
         """
 
         # Calculate cell-level metrics via SQL using simple aggregation (no JOINs)
@@ -122,9 +162,54 @@ class LazyPreprocessing:
         inplace: bool = True,
     ) -> LazyAnnData | None:
         """
-        Lazy version of scanpy.pp.filter_cells
+        Filter cells based on quality control metrics using lazy evaluation.
 
-        Filter cells based on quality control metrics.
+        This function filters cells based on their total counts and number of genes
+        using SQL aggregation for memory efficiency. It supports both minimum and
+        maximum thresholds for each metric.
+
+        Args:
+            adata: LazyAnnData instance containing the single-cell data.
+            min_counts: Minimum total counts per cell. Cells with fewer counts are filtered.
+            min_genes: Minimum number of genes per cell. Cells with fewer genes are filtered.
+            max_counts: Maximum total counts per cell. Cells with more counts are filtered.
+            max_genes: Maximum number of genes per cell. Cells with more genes are filtered.
+            inplace: Whether to modify the adata object in place. Currently not fully
+                    implemented in lazy version - returns None when True.
+
+        Returns:
+            LazyAnnData | None: If inplace=False, returns filtered LazyAnnData.
+                               If inplace=True, returns None.
+
+        Raises:
+            ValueError: If all cells are filtered out by the criteria.
+            RuntimeError: If the SLAF array is not properly initialized.
+
+        Examples:
+            >>> # Filter cells with basic criteria
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> adata = LazyAnnData(slaf_array)
+            >>> filtered = LazyPreprocessing.filter_cells(
+            ...     adata, min_counts=100, min_genes=50, inplace=False
+            ... )
+            >>> print(f"Original cells: {adata.n_obs}")
+            Original cells: 1000
+            >>> print(f"Filtered cells: {filtered.n_obs}")
+            Filtered cells: 850
+
+            >>> # Filter with maximum thresholds
+            >>> filtered = LazyPreprocessing.filter_cells(
+            ...     adata, max_counts=10000, max_genes=5000, inplace=False
+            ... )
+            >>> print(f"Cells after max filtering: {filtered.n_obs}")
+            Cells after max filtering: 920
+
+            >>> # Error when all cells filtered out
+            >>> try:
+            ...     LazyPreprocessing.filter_cells(adata, min_counts=1000000)
+            ... except ValueError as e:
+            ...     print(f"Error: {e}")
+            Error: All cells were filtered out
         """
 
         # Build filter conditions
@@ -190,9 +275,54 @@ class LazyPreprocessing:
         inplace: bool = True,
     ) -> LazyAnnData | None:
         """
-        Lazy version of scanpy.pp.filter_genes
+        Filter genes based on quality control metrics using lazy evaluation.
 
-        Filter genes based on quality control metrics.
+        This function filters genes based on their total counts and number of cells
+        using SQL aggregation for memory efficiency. It supports both minimum and
+        maximum thresholds for each metric.
+
+        Args:
+            adata: LazyAnnData instance containing the single-cell data.
+            min_counts: Minimum total counts per gene. Genes with fewer counts are filtered.
+            min_cells: Minimum number of cells per gene. Genes expressed in fewer cells are filtered.
+            max_counts: Maximum total counts per gene. Genes with more counts are filtered.
+            max_cells: Maximum number of cells per gene. Genes expressed in more cells are filtered.
+            inplace: Whether to modify the adata object in place. Currently not fully
+                    implemented in lazy version - returns None when True.
+
+        Returns:
+            LazyAnnData | None: If inplace=False, returns filtered LazyAnnData.
+                               If inplace=True, returns None.
+
+        Raises:
+            ValueError: If all genes are filtered out by the criteria.
+            RuntimeError: If the SLAF array is not properly initialized.
+
+        Examples:
+            >>> # Filter genes with basic criteria
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> adata = LazyAnnData(slaf_array)
+            >>> filtered = LazyPreprocessing.filter_genes(
+            ...     adata, min_counts=10, min_cells=5, inplace=False
+            ... )
+            >>> print(f"Original genes: {adata.n_vars}")
+            Original genes: 20000
+            >>> print(f"Filtered genes: {filtered.n_vars}")
+            Filtered genes: 15000
+
+            >>> # Filter with maximum thresholds
+            >>> filtered = LazyPreprocessing.filter_genes(
+            ...     adata, max_counts=100000, max_cells=1000, inplace=False
+            ... )
+            >>> print(f"Genes after max filtering: {filtered.n_vars}")
+            Genes after max filtering: 18000
+
+            >>> # Error when all genes filtered out
+            >>> try:
+            ...     LazyPreprocessing.filter_genes(adata, min_counts=1000000)
+            ... except ValueError as e:
+            ...     print(f"Error: {e}")
+            Error: All genes were filtered out
         """
 
         # Build filter conditions for genes
@@ -257,9 +387,51 @@ class LazyPreprocessing:
         inplace: bool = True,
     ) -> LazyAnnData | None:
         """
-        Lazy version of scanpy.pp.normalize_total
+        Normalize counts per cell to target sum using lazy evaluation.
 
-        Normalize counts per cell to target sum.
+        This function normalizes the expression data so that each cell has a total
+        count equal to target_sum. The normalization is applied lazily and stored
+        as a transformation that will be computed when the data is accessed.
+
+        Args:
+            adata: LazyAnnData instance containing the single-cell data.
+            target_sum: Target sum for normalization. Default is 10,000.
+            exclude_highly_expressed: Whether to exclude highly expressed genes from
+                                     normalization. Currently not implemented in lazy version.
+            max_fraction: Maximum fraction of counts for highly expressed genes.
+                         Used when exclude_highly_expressed=True.
+            key_added: Key for storing normalization factors. Currently not used.
+            inplace: Whether to modify the adata object in place. If False, returns
+                    a copy with the transformation applied.
+
+        Returns:
+            LazyAnnData | None: If inplace=False, returns LazyAnnData with transformation.
+                               If inplace=True, returns None.
+
+        Raises:
+            ValueError: If target_sum is not positive.
+            RuntimeError: If the SLAF array is not properly initialized.
+
+        Examples:
+            >>> # Basic normalization
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> adata = LazyAnnData(slaf_array)
+            >>> LazyPreprocessing.normalize_total(adata, target_sum=10000)
+            Applied normalize_total with target_sum=10000
+
+            >>> # Custom target sum
+            >>> adata_copy = adata.copy()
+            >>> LazyPreprocessing.normalize_total(
+            ...     adata_copy, target_sum=5000, inplace=False
+            ... )
+            >>> print("Normalization applied to copy")
+
+            >>> # Error with invalid target_sum
+            >>> try:
+            ...     LazyPreprocessing.normalize_total(adata, target_sum=0)
+            ... except ValueError as e:
+            ...     print(f"Error: {e}")
+            Error: target_sum must be positive
         """
         if target_sum is None:
             target_sum = 1e4
@@ -325,9 +497,39 @@ class LazyPreprocessing:
     @staticmethod
     def log1p(adata: LazyAnnData, inplace: bool = True) -> LazyAnnData | None:
         """
-        Lazy version of scanpy.pp.log1p
+        Apply log1p transformation to expression data using lazy evaluation.
 
-        Logarithmize the data matrix.
+        This function applies log(1 + x) transformation to the expression data.
+        The transformation is stored lazily and will be computed when the data
+        is accessed, avoiding memory-intensive operations on large datasets.
+
+        Args:
+            adata: LazyAnnData instance containing the single-cell data.
+            inplace: Whether to modify the adata object in place. If False, returns
+                    a copy with the transformation applied.
+
+        Returns:
+            LazyAnnData | None: If inplace=False, returns LazyAnnData with transformation.
+                               If inplace=True, returns None.
+
+        Raises:
+            RuntimeError: If the SLAF array is not properly initialized.
+
+        Examples:
+            >>> # Apply log1p transformation
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> adata = LazyAnnData(slaf_array)
+            >>> LazyPreprocessing.log1p(adata)
+            Applied log1p transformation
+
+            >>> # Apply to copy
+            >>> adata_copy = adata.copy()
+            >>> LazyPreprocessing.log1p(adata_copy, inplace=False)
+            >>> print("Log1p transformation applied to copy")
+
+            >>> # Check transformation was stored
+            >>> print("log1p" in adata._transformations)
+            True
         """
         if inplace:
             # Store log1p transformation for lazy application
@@ -359,9 +561,53 @@ class LazyPreprocessing:
         inplace: bool = True,
     ) -> pd.DataFrame | None:
         """
-        Lazy version of scanpy.pp.highly_variable_genes
+        Identify highly variable genes using lazy evaluation.
 
-        Identify highly variable genes.
+        This function identifies genes with high cell-to-cell variation in expression
+        using SQL aggregation for memory efficiency. It calculates mean expression
+        and dispersion for each gene and applies filtering criteria.
+
+        Args:
+            adata: LazyAnnData instance containing the single-cell data.
+            min_mean: Minimum mean expression for genes to be considered.
+            max_mean: Maximum mean expression for genes to be considered.
+            min_disp: Minimum dispersion for genes to be considered.
+            max_disp: Maximum dispersion for genes to be considered.
+            n_top_genes: Number of top genes to select by dispersion.
+                        If specified, overrides min_disp and max_disp criteria.
+            inplace: Whether to modify the adata object in place. Currently not
+                    fully implemented - returns None when True.
+
+        Returns:
+            pd.DataFrame | None: If inplace=False, returns DataFrame with gene statistics
+                                and highly_variable column. If inplace=True, returns None.
+
+        Raises:
+            RuntimeError: If the SLAF array is not properly initialized.
+
+        Examples:
+            >>> # Find highly variable genes
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> adata = LazyAnnData(slaf_array)
+            >>> hvg_stats = LazyPreprocessing.highly_variable_genes(
+            ...     adata, inplace=False
+            ... )
+            >>> print(f"Highly variable genes: {hvg_stats['highly_variable'].sum()}")
+            Highly variable genes: 1500
+
+            >>> # With custom criteria
+            >>> hvg_stats = LazyPreprocessing.highly_variable_genes(
+            ...     adata, min_mean=0.1, max_mean=5, min_disp=1.0, inplace=False
+            ... )
+            >>> print(f"Genes meeting criteria: {hvg_stats['highly_variable'].sum()}")
+            Genes meeting criteria: 800
+
+            >>> # Select top N genes
+            >>> hvg_stats = LazyPreprocessing.highly_variable_genes(
+            ...     adata, n_top_genes=1000, inplace=False
+            ... )
+            >>> print(f"Top genes selected: {hvg_stats['highly_variable'].sum()}")
+            Top genes selected: 1000
         """
 
         # Calculate gene statistics via SQL using simple aggregation (no JOINs)
@@ -447,14 +693,36 @@ def apply_transformations(
     """
     Apply a list of transformations to the data.
 
-    This provides explicit control over when transformations are applied.
+    This function provides explicit control over when transformations are applied.
+    It creates a copy of the LazyAnnData with only the specified transformations
+    stored for lazy evaluation.
 
     Args:
-        adata: LazyAnnData object
-        transformations: List of transformation names to apply. If None, applies all.
+        adata: LazyAnnData instance containing the single-cell data.
+        transformations: List of transformation names to apply. If None, applies all
+                       available transformations.
 
     Returns:
-        New LazyAnnData with transformations applied
+        LazyAnnData: New LazyAnnData with specified transformations applied.
+
+    Raises:
+        RuntimeError: If the SLAF array is not properly initialized.
+
+    Examples:
+        >>> # Apply all transformations
+        >>> slaf_array = SLAFArray("path/to/data.slaf")
+        >>> adata = LazyAnnData(slaf_array)
+        >>> LazyPreprocessing.normalize_total(adata)
+        >>> LazyPreprocessing.log1p(adata)
+        >>> adata_with_transforms = apply_transformations(adata)
+        >>> print("Transformations applied")
+
+        >>> # Apply specific transformations
+        >>> adata_copy = adata.copy()
+        >>> adata_with_norm = apply_transformations(
+        ...     adata_copy, transformations=["normalize_total"]
+        ... )
+        >>> print("Only normalization applied")
     """
     if transformations is None:
         # Apply all transformations
@@ -479,12 +747,35 @@ def clear_transformations(
     """
     Clear all transformations from the data.
 
+    This function removes all stored transformations from the LazyAnnData object,
+    effectively resetting it to its original state without any preprocessing.
+
     Args:
-        adata: LazyAnnData object
-        inplace: If True, modify the original object. If False, return a copy.
+        adata: LazyAnnData instance containing the single-cell data.
+        inplace: Whether to modify the adata object in place. If False, returns
+                a copy with transformations cleared.
 
     Returns:
-        LazyAnnData with transformations cleared (if not inplace)
+        LazyAnnData | None: If inplace=False, returns LazyAnnData with transformations
+                           cleared. If inplace=True, returns None.
+
+    Raises:
+        RuntimeError: If the SLAF array is not properly initialized.
+
+    Examples:
+        >>> # Clear transformations in place
+        >>> slaf_array = SLAFArray("path/to/data.slaf")
+        >>> adata = LazyAnnData(slaf_array)
+        >>> LazyPreprocessing.normalize_total(adata)
+        >>> LazyPreprocessing.log1p(adata)
+        >>> clear_transformations(adata, inplace=True)
+        >>> print("Transformations cleared")
+
+        >>> # Clear transformations to copy
+        >>> adata_copy = adata.copy()
+        >>> LazyPreprocessing.normalize_total(adata_copy)
+        >>> adata_clean = clear_transformations(adata_copy, inplace=False)
+        >>> print("Clean copy created")
     """
     if inplace:
         adata._transformations = {}

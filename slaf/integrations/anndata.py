@@ -15,9 +15,58 @@ if TYPE_CHECKING:
 
 
 class LazyExpressionMatrix(LazySparseMixin):
-    """Lazy expression matrix backed by SLAF with scipy.sparse interface"""
+    """
+    Lazy expression matrix backed by SLAF with scipy.sparse interface.
+
+    LazyExpressionMatrix provides a scipy.sparse-compatible interface for accessing
+    single-cell expression data stored in SLAF format. It implements lazy evaluation
+    to avoid loading all data into memory, making it suitable for large datasets.
+
+    Key Features:
+        - scipy.sparse-compatible interface
+        - Lazy evaluation for memory efficiency
+        - Caching for repeated queries
+        - Support for cell and gene subsetting
+        - Integration with AnnData objects
+
+    Examples:
+        >>> # Basic usage
+        >>> slaf_array = SLAFArray("path/to/data.slaf")
+        >>> lazy_matrix = LazyExpressionMatrix(slaf_array)
+        >>> print(f"Matrix shape: {lazy_matrix.shape}")
+        Matrix shape: (1000, 20000)
+
+        >>> # With AnnData integration
+        >>> adata = LazyAnnData(slaf_array)
+        >>> matrix = adata.X
+        >>> print(f"Expression matrix shape: {matrix.shape}")
+        Expression matrix shape: (1000, 20000)
+
+        >>> # Subsetting operations
+        >>> subset_matrix = matrix[:100, :5000]  # First 100 cells, first 5000 genes
+        >>> print(f"Subset shape: {subset_matrix.shape}")
+        Subset shape: (100, 5000)
+    """
 
     def __init__(self, slaf_array: SLAFArray):
+        """
+        Initialize lazy expression matrix with SLAF array.
+
+        Args:
+            slaf_array: SLAFArray instance containing the single-cell data.
+                       Used for database queries and metadata access.
+
+        Examples:
+            >>> # Basic initialization
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> matrix = LazyExpressionMatrix(slaf_array)
+            >>> print(f"Initialized with shape: {matrix.shape}")
+            Initialized with shape: (1000, 20000)
+
+            >>> # Check parent reference
+            >>> print(f"Parent adata: {matrix.parent_adata}")
+            Parent adata: None
+        """
         super().__init__()
         self.slaf_array = slaf_array
         self.parent_adata: LazyAnnData | None = None
@@ -30,18 +79,54 @@ class LazyExpressionMatrix(LazySparseMixin):
 
     @property
     def shape(self) -> tuple[int, int]:
+        """
+        Shape of the expression matrix.
+
+        Returns:
+            Tuple of (n_cells, n_genes) representing the matrix dimensions.
+
+        Examples:
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> matrix = LazyExpressionMatrix(slaf_array)
+            >>> print(f"Matrix shape: {matrix.shape}")
+            Matrix shape: (1000, 20000)
+        """
         return self._shape
 
     @property
-    def obs_names(self):
-        """Cell names (observations)"""
+    def obs_names(self) -> pd.Index | None:
+        """
+        Cell names (observations).
+
+        Returns:
+            pandas.Index of cell names if parent AnnData is available, None otherwise.
+
+        Examples:
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> adata = LazyAnnData(slaf_array)
+            >>> matrix = adata.X
+            >>> print(f"Cell names: {len(matrix.obs_names)}")
+            Cell names: 1000
+        """
         if hasattr(self, "parent_adata") and self.parent_adata is not None:
             return self.parent_adata.obs_names
         return None
 
     @property
-    def var_names(self):
-        """Gene names (variables)"""
+    def var_names(self) -> pd.Index | None:
+        """
+        Gene names (variables).
+
+        Returns:
+            pandas.Index of gene names if parent AnnData is available, None otherwise.
+
+        Examples:
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> adata = LazyAnnData(slaf_array)
+            >>> matrix = adata.X
+            >>> print(f"Gene names: {len(matrix.var_names)}")
+            Gene names: 20000
+        """
         if hasattr(self, "parent_adata") and self.parent_adata is not None:
             return self.parent_adata.var_names
         return None
@@ -575,13 +660,81 @@ class LazyExpressionMatrix(LazySparseMixin):
 
 
 class LazyAnnData(LazySparseMixin):
-    """AnnData-compatible interface for SLAF data"""
+    """
+    AnnData-compatible interface for SLAF data with lazy evaluation.
+
+    LazyAnnData provides a drop-in replacement for AnnData objects that works with
+    SLAF datasets. It implements lazy evaluation to avoid loading all data into memory,
+    making it suitable for large single-cell datasets.
+
+    Key Features:
+        - AnnData-compatible interface
+        - Lazy evaluation for memory efficiency
+        - Support for cell and gene subsetting
+        - Integration with scanpy workflows
+        - Automatic metadata loading
+        - Transformation caching
+
+    Examples:
+        >>> # Basic usage
+        >>> slaf_array = SLAFArray("path/to/data.slaf")
+        >>> adata = LazyAnnData(slaf_array)
+        >>> print(f"AnnData shape: {adata.shape}")
+        AnnData shape: (1000, 20000)
+
+        >>> # Access expression data
+        >>> print(f"Expression matrix shape: {adata.X.shape}")
+        Expression matrix shape: (1000, 20000)
+
+        >>> # Access metadata
+        >>> print(f"Cell metadata columns: {list(adata.obs.columns)}")
+        Cell metadata columns: ['cell_type', 'total_counts', 'batch']
+        >>> print(f"Gene metadata columns: {list(adata.var.columns)}")
+        Gene metadata columns: ['gene_type', 'chromosome']
+
+        >>> # Subsetting operations
+        >>> subset = adata[:100, :5000]  # First 100 cells, first 5000 genes
+        >>> print(f"Subset shape: {subset.shape}")
+        Subset shape: (100, 5000)
+    """
 
     def __init__(
         self,
         slaf_array: SLAFArray,
         backend: str = "auto",
     ):
+        """
+        Initialize LazyAnnData with SLAF array.
+
+        Args:
+            slaf_array: SLAFArray instance containing the single-cell data.
+                       Used for database queries and metadata access.
+            backend: Backend for expression matrix. Currently supports "scipy" and "auto".
+                    "auto" defaults to "scipy" for sparse matrix operations.
+
+        Raises:
+            ValueError: If the backend is not supported.
+            RuntimeError: If the SLAF array is not properly initialized.
+
+        Examples:
+            >>> # Basic initialization
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> adata = LazyAnnData(slaf_array)
+            >>> print(f"Backend: {adata.backend}")
+            Backend: auto
+
+            >>> # With explicit backend
+            >>> adata = LazyAnnData(slaf_array, backend="scipy")
+            >>> print(f"Backend: {adata.backend}")
+            Backend: scipy
+
+            >>> # Error handling for unsupported backend
+            >>> try:
+            ...     adata = LazyAnnData(slaf_array, backend="unsupported")
+            ... except ValueError as e:
+            ...     print(f"Error: {e}")
+            Error: Unknown backend: unsupported
+        """
         super().__init__()
         self.slaf = slaf_array
         self.backend = backend
@@ -610,7 +763,32 @@ class LazyAnnData(LazySparseMixin):
 
     @property
     def X(self) -> LazyExpressionMatrix:
-        """Access to expression data"""
+        """
+        Access to expression data.
+
+        Returns the lazy expression matrix that provides scipy.sparse-compatible
+        access to the single-cell expression data. The matrix is lazily evaluated
+        to avoid loading all data into memory.
+
+        Returns:
+            LazyExpressionMatrix providing scipy.sparse-compatible interface.
+
+        Examples:
+            >>> # Access expression data
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> adata = LazyAnnData(slaf_array)
+            >>> print(f"Expression matrix shape: {adata.X.shape}")
+            Expression matrix shape: (1000, 20000)
+
+            >>> # Subsetting expression data
+            >>> subset_X = adata.X[:100, :5000]
+            >>> print(f"Subset expression shape: {subset_X.shape}")
+            Subset expression shape: (100, 5000)
+
+            >>> # Check matrix type
+            >>> print(f"Matrix type: {type(adata.X)}")
+            Matrix type: <class 'slaf.integrations.anndata.LazyExpressionMatrix'>
+        """
         return self._X
 
     @property

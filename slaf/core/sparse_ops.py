@@ -6,16 +6,68 @@ import scipy
 
 
 class LazySparseMixin:
-    """Mixin class for lazy sparse matrix operations
+    """
+    Mixin class for lazy sparse matrix operations with SLAF integration.
+
+    LazySparseMixin provides a foundation for implementing lazy sparse matrix
+    operations that work with SLAF data. It defines the interface for classes
+    that need to perform sparse matrix operations without loading all data into memory.
+
+    Key Features:
+        - Lazy evaluation of sparse matrix operations
+        - Integration with SLAFArray for database queries
+        - Support for cell and gene name mapping
+        - Memory-efficient sparse operations
 
     Implementing classes must provide:
-    - shape: Tuple[int, int] - the shape of the matrix (n_cells, n_genes)
-    - slaf_array: SLAFArray object for database queries
-    - obs_names: Optional[pd.Index] - cell names/IDs (for cell-wise operations)
-    - var_names: Optional[pd.Index] - gene names/IDs (for gene-wise operations)
+        - shape: Tuple[int, int] - the shape of the matrix (n_cells, n_genes)
+        - slaf_array: SLAFArray object for database queries
+        - obs_names: Optional[pd.Index] - cell names/IDs (for cell-wise operations)
+        - var_names: Optional[pd.Index] - gene names/IDs (for gene-wise operations)
 
-    The obs_names and var_names are used for mapping non-integer cell/gene IDs
-    to array positions. If not provided, cell_id and gene_id are assumed to be integers.
+    Examples:
+        >>> # Basic usage in a subclass
+        >>> class MyLazyMatrix(LazySparseMixin):
+        ...     def __init__(self, slaf_array):
+        ...         super().__init__()
+        ...         self.slaf_array = slaf_array
+        ...         self._shape = slaf_array.shape
+        ...
+        ...     @property
+        ...     def shape(self):
+        ...         return self._shape
+        >>>
+        >>> slaf_array = SLAFArray("path/to/data.slaf")
+        >>> lazy_matrix = MyLazyMatrix(slaf_array)
+        >>> print(f"Matrix shape: {lazy_matrix.shape}")
+        Matrix shape: (1000, 20000)
+
+        >>> # With cell and gene name mapping
+        >>> class NamedLazyMatrix(LazySparseMixin):
+        ...     def __init__(self, slaf_array, obs_names, var_names):
+        ...         super().__init__()
+        ...         self.slaf_array = slaf_array
+        ...         self._shape = slaf_array.shape
+        ...         self._obs_names = obs_names
+        ...         self._var_names = var_names
+        ...
+        ...     @property
+        ...     def shape(self):
+        ...         return self._shape
+        ...
+        ...     @property
+        ...     def obs_names(self):
+        ...         return self._obs_names
+        ...
+        ...     @property
+        ...     def var_names(self):
+        ...         return self._var_names
+        >>>
+        >>> obs_names = pd.Index([f"cell_{i}" for i in range(1000)])
+        >>> var_names = pd.Index([f"gene_{i}" for i in range(20000)])
+        >>> named_matrix = NamedLazyMatrix(slaf_array, obs_names, var_names)
+        >>> print(f"Cell names: {len(named_matrix.obs_names)}")
+        Cell names: 1000
     """
 
     # Required attributes that implementing classes must provide
@@ -24,11 +76,57 @@ class LazySparseMixin:
 
     @property
     def shape(self) -> tuple[int, int]:
-        """Shape of the matrix - must be implemented by subclasses"""
+        """
+        Shape of the matrix - must be implemented by subclasses.
+
+        Returns:
+            Tuple of (n_cells, n_genes) representing the matrix dimensions.
+
+        Raises:
+            NotImplementedError: If the subclass doesn't implement this property.
+
+        Examples:
+            >>> # In a subclass implementation
+            >>> class MyMatrix(LazySparseMixin):
+            ...     def __init__(self, shape):
+            ...         super().__init__()
+            ...         self._shape = shape
+            ...
+            ...     @property
+            ...     def shape(self):
+            ...         return self._shape
+            >>>
+            >>> matrix = MyMatrix((100, 200))
+            >>> print(f"Shape: {matrix.shape}")
+            Shape: (100, 200)
+        """
         raise NotImplementedError("Subclasses must implement shape property")
 
     def __init__(self):
-        """Initialize the mixin"""
+        """
+        Initialize the mixin.
+
+        This method sets up the basic structure for lazy sparse matrix operations.
+        Implementing classes should call this method and then set the required
+        attributes (slaf_array, shape, etc.).
+
+        Examples:
+            >>> # Proper initialization in a subclass
+            >>> class MyLazyMatrix(LazySparseMixin):
+            ...     def __init__(self, slaf_array):
+            ...         super().__init__()  # Call parent init
+            ...         self.slaf_array = slaf_array  # Set required attribute
+            ...         self._shape = slaf_array.shape
+            ...
+            ...     @property
+            ...     def shape(self):
+            ...         return self._shape
+            >>>
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> matrix = MyLazyMatrix(slaf_array)
+            >>> print(f"Initialized with shape: {matrix.shape}")
+            Initialized with shape: (1000, 20000)
+        """
         # Implementing classes will set the required attributes
         pass
 

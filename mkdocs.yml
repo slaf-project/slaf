@@ -1,15 +1,15 @@
 site_name: SLAF Documentation
 site_description: Sparse Lazy Array Format - High-performance single-cell data storage and analysis
 site_author: Pavan Ramkumar
-site_url: https://pavanramkumar.github.io/slaf/
+site_url: https://slaf-project.github.io/slaf/
 
 # Repository
-repo_name: pavanramkumar/slaf
-repo_url: https://github.com/pavanramkumar/slaf
+repo_name: slaf-project/slaf
+repo_url: https://github.com/slaf-project/slaf
 edit_uri: edit/main/docs/
 
 # Copyright
-copyright: Copyright &copy; 2024 Pavan Ramkumar
+copyright: Copyright &copy; 2025 Pavan Ramkumar
 
 # Theme
 theme:
@@ -41,7 +41,7 @@ theme:
   # Social
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/pavanramkumar/slaf
+      link: https://github.com/slaf-project/slaf
 
 # Plugins
 plugins:
@@ -49,7 +49,8 @@ plugins:
   - macros
   - git-revision-date-localized:
       enable_creation_date: true
-  - git-authors
+  - git-authors:
+      show_email_address: false
   - minify:
       minify_html: true
   - redirects:
@@ -59,8 +60,9 @@ plugins:
   - mkdocstrings:
       handlers:
         python:
-          paths: [../slaf]
+          paths: [slaf]
           options:
+            # Core display options
             show_source: true
             show_root_heading: true
             show_signature_annotations: true
@@ -71,6 +73,26 @@ plugins:
             show_bases: true
             show_root_toc_entry: true
             docstring_style: google
+
+            # Enhanced rendering for better examples
+            show_examples: true
+
+            # Visual separation and organization
+            show_signature_annotations: true
+            show_source: true
+            show_root_heading: true
+            show_category_heading: true
+            heading_level: 2
+            show_if_no_docstring: false
+            members_order: source
+            show_bases: true
+            show_root_toc_entry: true
+
+            # Filter out dunder methods except __init__
+            filters: ["!^_", "!^__", "__init__"]
+
+            # Group methods by type for better organization
+            members_order: ["source", "alphabetical"]
   - awesome-pages
   - section-index
 
@@ -151,7 +173,12 @@ nav:
       - Integrations: api/integrations.md
       - ML: api/ml.md
   - Development:
-      - Contributing: DEVELOPMENT.md
+      - Overview: development/index.md
+      - Contributing: development/contributing.md
+      - Documentation: development/documentation.md
+      - CI/CD Pipeline: development/ci-cd.md
+      - Publishing: development/publishing.md
+      - Docstring Template: development/docstring_template.md
 
 # Extra
 extra:
@@ -160,9 +187,7 @@ extra:
     property: !ENV GOOGLE_ANALYTICS_KEY
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/pavanramkumar/slaf
-    - icon: fontawesome/brands/twitter
-      link: https://twitter.com/pavanramkumar
+      link: https://github.com/slaf-project/slaf
   generator: false
 
 # Validation
