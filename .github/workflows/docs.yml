@@ -15,6 +15,7 @@ on:
       - "mkdocs.yml"
       - ".github/workflows/docs.yml"
       - "README.md"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -51,7 +52,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv sync --group docs
+          uv sync --extra docs
 
       - name: Build documentation
         run: |
