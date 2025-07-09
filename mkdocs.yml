@@ -53,9 +53,6 @@ plugins:
       show_email_address: false
   - minify:
       minify_html: true
-  - redirects:
-      redirect_maps:
-        index.md: getting-started/quickstart.md
   - autorefs
   - mkdocstrings:
       handlers:
@@ -154,9 +151,7 @@ extra_javascript:
 # Navigation
 nav:
   - Home: index.md
-  - Getting Started:
-      - Quick Start: getting-started/quickstart.md
-      - Installation: getting-started/installation.md
+  - Quick Start: getting-started/quickstart.md
   - User Guide:
       - Core Concepts: user-guide/core-concepts.md
       - Command Line Interface: user-guide/cli.md

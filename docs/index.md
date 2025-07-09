@@ -1,10 +1,10 @@
-# SLAF Documentation
+# **SLAF (Sparse Lazy Array Format)**
 
 <div class="grid cards" markdown>
 
 - :fontawesome-solid-rocket: **[Quick Start](getting-started/quickstart.md)**
 
-  Get up and running with SLAF in minutes. Learn the basics of loading data and running your first queries.
+  Get up and running with SLAF in minutes. Experience the joy of lightning-fast SQL queries on your single-cell data.
 
 - :fontawesome-solid-book: **[User Guide](user-guide/core-concepts.md)**
 
@@ -83,7 +83,7 @@ pip install slaf
 For development dependencies:
 
 ```bash
-pip install slaf[docs,dev]
+pip install slaf[docs,dev,test]
 ```
 
 ## Architecture
@@ -111,18 +111,9 @@ See our [benchmarks](benchmarks/performance.md) for detailed performance compari
 
 - 📖 **Documentation**: This site contains comprehensive guides and API docs
 - 💬 **GitHub Issues**: Report bugs or request features on [GitHub](https://github.com/slaf-project/slaf)
-- 📧 **Email**: Contact pavan.ramkumar@gmail.com for questions
 
 ## Contributing
 
 We welcome contributions! See our [contributing guide](development/contributing.md) for details on how to get started.
 
 ---
-
-<div class="grid" markdown>
-
-- :fontawesome-solid-heart:{ .heart } **Made with love for the single-cell community**
-
-- :fontawesome-solid-code:{ .code } **[View on GitHub](https://github.com/slaf-project/slaf){target=\_blank}**
-
-</div>
