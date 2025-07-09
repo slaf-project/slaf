@@ -143,14 +143,14 @@ jobs:
       - name: Upload coverage artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-data
+          name: coverage-data-py${{ matrix.python-version }}
           path: coverage.json
 
       - name: Output coverage percentage
         run: |
           COVERAGE_PERCENT=${{ steps.parse_coverage.outputs.coverage_percent }}
-          echo "Coverage: $COVERAGE_PERCENT%"
-          echo "Update the README badge manually with this percentage"
+          echo "Coverage for Python ${{ matrix.python-version }}: $COVERAGE_PERCENT%"
+          echo "Update the README badge manually with the highest coverage percentage"
           echo "Current badge URL: https://img.shields.io/badge/coverage-${COVERAGE_PERCENT}%25-brightgreen.svg"
 
   dependencies:
@@ -270,6 +270,44 @@ jobs:
         with:
           name: dist-py${{ matrix.python-version }}
           path: dist/
+
+  coverage-summary:
+    name: Coverage Summary
+    runs-on: ubuntu-latest
+    needs: [test]
+    if: always()
+    steps:
+      - name: Download all coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-data-py*
+          merge-multiple: true
+          download-files: true
+
+      - name: Find highest coverage
+        id: highest_coverage
+        run: |
+          HIGHEST_COVERAGE=0
+          for file in coverage.json*; do
+            if [ -f "$file" ]; then
+              COVERAGE=$(python -c "
+              import json
+              with open('$file', 'r') as f:
+                  data = json.load(f)
+              print(f'{data[\"totals\"][\"percent_covered\"]:.1f}')
+              ")
+              if (( $(echo "$COVERAGE > $HIGHEST_COVERAGE" | bc -l) )); then
+                HIGHEST_COVERAGE=$COVERAGE
+              fi
+            fi
+          done
+          echo "highest_coverage=$HIGHEST_COVERAGE" >> $GITHUB_OUTPUT
+          echo "Highest coverage across all Python versions: $HIGHEST_COVERAGE%"
+
+      - name: Output badge URL
+        run: |
+          echo "Recommended badge URL: https://img.shields.io/badge/coverage-${{ steps.highest_coverage.outputs.highest_coverage }}%25-brightgreen.svg"
+          echo "Update the README with this URL to reflect the best coverage"
 
   quality-gate:
     name: Quality Gate
