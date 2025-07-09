@@ -157,11 +157,157 @@
   padding: 1rem;
 }
 
+/* Enhanced syntax highlighting for all code blocks */
+
+/* Python syntax highlighting */
+.highlight .k { color: #ff79c6; } /* Keyword */
+.highlight .s1 { color: #f1fa8c; } /* Single quote string */
+.highlight .s2 { color: #50fa7b; } /* Double quote string */
+.highlight .s3 { color: #8be9fd; } /* Triple quote string */
+.highlight .mi { color: #bd93f9; } /* Number */
+.highlight .o { color: #ff79c6; } /* Operator */
+.highlight .c1 { color: #6272a4; } /* Comment */
+.highlight .c2 { color: #ff5555; } /* Comment special */
+.highlight .nb { color: #8be9fd; } /* Name builtin */
+.highlight .nc { color: #50fa7b; } /* Name class */
+.highlight .nd { color: #ff79c6; } /* Name decorator */
+.highlight .nf { color: #50fa7b; } /* Name function */
+.highlight .nn { color: #8be9fd; } /* Name namespace */
+.highlight .nt { color: #ff79c6; } /* Name tag */
+.highlight .nv { color: #f8f8f2; } /* Name variable */
+.highlight .p { color: #f8f8f2; } /* Punctuation */
+
 /* SQL syntax highlighting */
 .highlight .k { color: #ff79c6; } /* Keyword */
 .highlight .s1 { color: #f1fa8c; } /* String */
+.highlight .s2 { color: #50fa7b; } /* Double quote string */
 .highlight .mi { color: #bd93f9; } /* Number */
 .highlight .o { color: #ff79c6; } /* Operator */
+.highlight .c1 { color: #6272a4; } /* Comment */
+.highlight .c2 { color: #ff5555; } /* Comment special */
+.highlight .nb { color: #8be9fd; } /* Name builtin */
+.highlight .nc { color: #50fa7b; } /* Name class */
+.highlight .nf { color: #50fa7b; } /* Name function */
+.highlight .nv { color: #f8f8f2; } /* Name variable */
+.highlight .p { color: #f8f8f2; } /* Punctuation */
+
+/* Shell/Bash syntax highlighting */
+.highlight .k { color: #ff79c6; } /* Keyword */
+.highlight .s1 { color: #f1fa8c; } /* Single quote string */
+.highlight .s2 { color: #50fa7b; } /* Double quote string */
+.highlight .mi { color: #bd93f9; } /* Number */
+.highlight .o { color: #ff79c6; } /* Operator */
+.highlight .c1 { color: #6272a4; } /* Comment */
+.highlight .c2 { color: #ff5555; } /* Comment special */
+.highlight .nb { color: #8be9fd; } /* Name builtin */
+.highlight .nc { color: #50fa7b; } /* Name class */
+.highlight .nf { color: #50fa7b; } /* Name function */
+.highlight .nv { color: #f8f8f2; } /* Name variable */
+.highlight .p { color: #f8f8f2; } /* Punctuation */
+
+/* Dark mode specific enhancements */
+[data-md-color-scheme="slate"] .highlight .s1 {
+  color: #f1fa8c !important; /* Brighter yellow for better visibility */
+}
+
+[data-md-color-scheme="slate"] .highlight .s2 {
+  color: #50fa7b !important; /* Bright green for double quotes */
+}
+
+[data-md-color-scheme="slate"] .highlight .s3 {
+  color: #8be9fd !important; /* Light blue for triple quotes */
+}
+
+[data-md-color-scheme="slate"] .highlight .c1 {
+  color: #6272a4 !important; /* Muted blue for comments */
+}
+
+[data-md-color-scheme="slate"] .highlight .c2 {
+  color: #ff5555 !important; /* Red for special comments */
+}
+
+/* Enhanced cyan visibility in dark mode */
+[data-md-color-scheme="slate"] .highlight .nb {
+  color: #00d4ff !important; /* Brighter cyan for built-ins like print, len */
+}
+
+[data-md-color-scheme="slate"] .highlight .nn {
+  color: #00d4ff !important; /* Brighter cyan for namespaces */
+}
+
+[data-md-color-scheme="slate"] .highlight .nt {
+  color: #00d4ff !important; /* Brighter cyan for type hints */
+}
+
+[data-md-color-scheme="slate"] .highlight .nd {
+  color: #ff79c6 !important; /* Pink for decorators */
+}
+
+/* Light mode specific enhancements with better contrast */
+[data-md-color-scheme="default"] .highlight .s1 {
+  color: #b8860b !important; /* Darker gold for better contrast */
+}
+
+[data-md-color-scheme="default"] .highlight .s2 {
+  color: #006400 !important; /* Darker green for double quotes */
+}
+
+[data-md-color-scheme="default"] .highlight .s3 {
+  color: #000080 !important; /* Navy blue for triple quotes */
+}
+
+[data-md-color-scheme="default"] .highlight .c1 {
+  color: #483d8b !important; /* Darker slate blue for comments */
+}
+
+[data-md-color-scheme="default"] .highlight .c2 {
+  color: #b22222 !important; /* Darker crimson for special comments */
+}
+
+/* Enhanced contrast for light mode */
+[data-md-color-scheme="default"] .highlight .nb {
+  color: #0066cc !important; /* Dark blue for built-ins like print, len */
+}
+
+[data-md-color-scheme="default"] .highlight .nn {
+  color: #0066cc !important; /* Dark blue for namespaces */
+}
+
+[data-md-color-scheme="default"] .highlight .nt {
+  color: #0066cc !important; /* Dark blue for type hints */
+}
+
+[data-md-color-scheme="default"] .highlight .nd {
+  color: #8b008b !important; /* Dark magenta for decorators */
+}
+
+[data-md-color-scheme="default"] .highlight .nf {
+  color: #228b22 !important; /* Dark green for functions */
+}
+
+[data-md-color-scheme="default"] .highlight .nc {
+  color: #228b22 !important; /* Dark green for classes */
+}
+
+[data-md-color-scheme="default"] .highlight .k {
+  color: #8b008b !important; /* Dark magenta for keywords */
+}
+
+[data-md-color-scheme="default"] .highlight .o {
+  color: #8b008b !important; /* Dark magenta for operators */
+}
+
+[data-md-color-scheme="default"] .highlight .mi {
+  color: #8b008b !important; /* Dark magenta for numbers */
+}
+
+[data-md-color-scheme="default"] .highlight .nv {
+  color: #000000 !important; /* Black for variables */
+}
+
+[data-md-color-scheme="default"] .highlight .p {
+  color: #000000 !important; /* Black for punctuation */
+}
 
 /* Performance metrics */
 .performance-metric {
