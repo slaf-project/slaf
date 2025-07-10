@@ -2,6 +2,7 @@ import sys
 import time
 
 import scanpy as sc
+from benchmark_utils import get_slaf_memory_usage
 
 from slaf.core.slaf import SLAFArray
 
@@ -239,7 +240,7 @@ def _measure_slaf_expression_query(slaf_path: str, scenario: dict):
     slaf_init_time = time.time() - start
 
     # Measure memory footprint of loaded metadata
-    slaf_load_memory = get_object_memory_usage(slaf)
+    slaf_load_memory = get_slaf_memory_usage(slaf)
 
     # slaf expression query
     start = time.time()
@@ -269,11 +270,6 @@ def _measure_slaf_expression_query(slaf_path: str, scenario: dict):
             cell_selector=slice(cell_start, cell_end),
             gene_selector=slice(gene_start, gene_end),
         )
-
-    elif scenario["type"] == "aggregation":
-        operation = scenario["operation"]
-        axis = scenario["axis"]
-        result = slaf.aggregate_expression(operation, axis)
     else:
         raise ValueError(f"Unknown scenario type: {scenario['type']}")
 

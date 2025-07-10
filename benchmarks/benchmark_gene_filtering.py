@@ -4,6 +4,7 @@ import time
 import numpy as np
 import pandas as pd
 import scanpy as sc
+from benchmark_utils import get_slaf_memory_usage
 
 from slaf.core.slaf import SLAFArray
 
@@ -259,7 +260,7 @@ def _measure_slaf_gene_filtering(slaf_path: str, scenario: dict):
     slaf_init_time = time.time() - start
 
     # Measure memory footprint of loaded metadata
-    slaf_load_memory = get_object_memory_usage(slaf)
+    slaf_load_memory = get_slaf_memory_usage(slaf)
 
     # Parse filter for SLAF
     slaf_filter = parse_filter_for_slaf(scenario["filters"])

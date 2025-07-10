@@ -4,7 +4,7 @@ import multiprocessing as mp
 import time
 
 import numpy as np
-from benchmark_utils import get_object_memory_usage
+from benchmark_utils import get_object_memory_usage, get_slaf_memory_usage
 from rich.console import Console
 from rich.table import Table
 
@@ -703,7 +703,7 @@ def benchmark_dataloaders(
         # Memory measurements
         if include_memory:
             gc.collect()
-            start_memory = get_object_memory_usage(slaf)
+            start_memory = get_slaf_memory_usage(slaf)
 
             # Iterate through dataloader and measure peak memory
             peak_memory = start_memory

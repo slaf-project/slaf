@@ -7,6 +7,7 @@ import scanpy as sc
 from benchmark_utils import (
     clear_caches,
     get_object_memory_usage,
+    get_slaf_memory_usage,
     parse_filter_for_h5ad,
     parse_filter_for_slaf,
 )
@@ -169,7 +170,7 @@ def _measure_slaf_cell_filtering(slaf_path: str, scenario: dict):
     slaf_init_time = time.time() - start
 
     # Measure memory footprint of loaded metadata
-    slaf_load_memory = get_object_memory_usage(slaf)
+    slaf_load_memory = get_slaf_memory_usage(slaf)
 
     # Parse filter for SLAF
     slaf_filter = parse_filter_for_slaf(scenario["filters"])

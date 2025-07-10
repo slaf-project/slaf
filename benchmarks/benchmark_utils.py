@@ -26,6 +26,42 @@ def get_object_memory_usage(obj):
         return sys.getsizeof(obj) / 1024 / 1024
 
 
+def get_slaf_memory_usage(slaf_obj):
+    """Get comprehensive memory usage of a SLAF object including all data attributes"""
+    total_memory = 0.0
+
+    # Measure the SLAF object itself
+    total_memory += get_object_memory_usage(slaf_obj)
+
+    # Measure cell metadata (obs)
+    if hasattr(slaf_obj, "obs") and slaf_obj.obs is not None:
+        total_memory += get_object_memory_usage(slaf_obj.obs)
+
+    # Measure gene metadata (var)
+    if hasattr(slaf_obj, "var") and slaf_obj.var is not None:
+        total_memory += get_object_memory_usage(slaf_obj.var)
+
+    # Measure Lance datasets (these are file-based but may have some in-memory components)
+    # Note: Lance datasets are primarily file-based, but we measure any in-memory components
+    for attr_name in ["expression", "cells", "genes"]:
+        if hasattr(slaf_obj, attr_name) and getattr(slaf_obj, attr_name) is not None:
+            total_memory += get_object_memory_usage(getattr(slaf_obj, attr_name))
+
+    # Measure LanceDB connection and tables
+    if hasattr(slaf_obj, "lancedb_conn") and slaf_obj.lancedb_conn is not None:
+        total_memory += get_object_memory_usage(slaf_obj.lancedb_conn)
+
+    for attr_name in ["expression_table", "cells_table", "genes_table"]:
+        if hasattr(slaf_obj, attr_name) and getattr(slaf_obj, attr_name) is not None:
+            total_memory += get_object_memory_usage(getattr(slaf_obj, attr_name))
+
+    # Measure config dictionary
+    if hasattr(slaf_obj, "config") and slaf_obj.config is not None:
+        total_memory += get_object_memory_usage(slaf_obj.config)
+
+    return total_memory
+
+
 def get_sparse_matrix_size(sparse_matrix):
     """Get the total memory size of a sparse matrix in bytes"""
     total = 0

@@ -7,6 +7,7 @@ import scanpy as sc
 from benchmark_utils import (
     clear_caches,
     get_object_memory_usage,
+    get_slaf_memory_usage,
 )
 
 from slaf.core.slaf import SLAFArray
@@ -191,7 +192,7 @@ def _measure_slaf_anndata_op(slaf_path: str, scenario: dict):
     slaf_init_time = time.time() - start
 
     # Measure memory footprint of loaded data
-    slaf_load_memory = get_object_memory_usage(slaf)
+    slaf_load_memory = get_slaf_memory_usage(slaf)
 
     # slaf operation
     start = time.time()

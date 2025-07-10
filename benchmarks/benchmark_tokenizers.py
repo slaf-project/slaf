@@ -3,7 +3,7 @@ import time
 
 import numpy as np
 import scanpy as sc
-from benchmark_utils import clear_caches, get_object_memory_usage
+from benchmark_utils import clear_caches, get_object_memory_usage, get_slaf_memory_usage
 from rich.console import Console
 from rich.table import Table
 
@@ -297,11 +297,7 @@ def _measure_slaf_tokenization(slaf_path: str, scenario: dict):
     warm_up_slaf_database(slaf, verbose=False)
 
     # Measure memory footprint of loaded data - measure actual loaded metadata
-    slaf_load_memory = (
-        get_object_memory_usage(slaf.obs)
-        + get_object_memory_usage(slaf.var)
-        + get_object_memory_usage(tokenizer)
-    )
+    slaf_load_memory = get_slaf_memory_usage(slaf) + get_object_memory_usage(tokenizer)
 
     # Tokenization
     start = time.time()
