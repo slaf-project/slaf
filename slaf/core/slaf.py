@@ -266,7 +266,7 @@ class SLAFArray:
 
         Provides a convenient interface for filtering cells using metadata columns.
         Supports exact matches, list values, and range queries with operators.
-        This method is more user-friendly than writing raw SQL queries.
+        Uses in-memory pandas filtering when metadata is loaded, falls back to SQL otherwise.
 
         Args:
             **filters: Column name and filter value pairs. Supports:
@@ -313,34 +313,7 @@ class SLAFArray:
             ...     print(f"Error: {e}")
             Error: Column 'invalid_column' not found in cell metadata
         """
-        if not filters:
-            return self.obs.copy()
-
-        # Build filter conditions
-        conditions = []
-        for column, value in filters.items():
-            if column not in self.obs.columns:
-                raise ValueError(f"Column '{column}' not found in cell metadata")
-
-            if isinstance(value, str) and value.startswith((">", "<", ">=", "<=")):
-                # Handle range queries
-                operator = value[:2] if value.startswith((">=", "<=")) else value[0]
-                filter_value = (
-                    value[2:] if value.startswith((">=", "<=")) else value[1:]
-                )
-                conditions.append(f"{column} {operator} {filter_value}")
-            elif isinstance(value, list):
-                # Handle list values
-                value_list = "', '".join(map(str, value))
-                conditions.append(f"{column} IN ('{value_list}')")
-            else:
-                # Handle exact matches
-                conditions.append(f"{column} = '{value}'")
-
-        where_clause = " AND ".join(conditions)
-        sql = f"SELECT * FROM cells WHERE {where_clause}"
-
-        return self.query(sql)
+        return self._filter("cells", **filters)
 
     def filter_genes(self, **filters: Any) -> pd.DataFrame:
         """
@@ -348,7 +321,7 @@ class SLAFArray:
 
         Provides a convenient interface for filtering genes using metadata columns.
         Supports exact matches, list values, and range queries with operators.
-        This method is more user-friendly than writing raw SQL queries.
+        Uses in-memory pandas filtering when metadata is loaded, falls back to SQL otherwise.
 
         Args:
             **filters: Column name and filter value pairs. Supports:
@@ -395,15 +368,120 @@ class SLAFArray:
             ...     print(f"Error: {e}")
             Error: Column 'invalid_column' not found in gene metadata
         """
+        return self._filter("genes", **filters)
+
+    def _filter(self, table_name: str, **filters: Any) -> pd.DataFrame:
+        """
+        Generic filtering method that chooses between pandas and SQL based on metadata availability.
+
+        Args:
+            table_name: Either "cells" or "genes"
+            **filters: Filter conditions
+
+        Returns:
+            Filtered DataFrame
+        """
         if not filters:
-            return self.var.copy()
+            # Return all metadata if no filters
+            if table_name == "cells":
+                return (
+                    self.obs.copy()
+                    if self.obs is not None
+                    else self.query("SELECT * FROM cells")
+                )
+            else:
+                return (
+                    self.var.copy()
+                    if self.var is not None
+                    else self.query("SELECT * FROM genes")
+                )
+
+        # Choose filtering method based on metadata availability
+        if table_name == "cells" and self.obs is not None:
+            return self._filter_with_pandas(self.obs, **filters)
+        elif table_name == "genes" and self.var is not None:
+            return self._filter_with_pandas(self.var, **filters)
+        else:
+            return self._filter_with_sql(table_name, **filters)
+
+    def _filter_with_pandas(
+        self, metadata_df: pd.DataFrame, **filters: Any
+    ) -> pd.DataFrame:
+        """
+        Filter metadata using in-memory pandas operations.
+
+        Args:
+            metadata_df: DataFrame to filter (self.obs or self.var)
+            **filters: Filter conditions
+
+        Returns:
+            Filtered DataFrame
+        """
+        # Start with all rows
+        mask = pd.Series(True, index=metadata_df.index)
+
+        for column, value in filters.items():
+            if column not in metadata_df.columns:
+                raise ValueError(f"Column '{column}' not found in metadata")
+
+            if isinstance(value, str) and value.startswith((">", "<", ">=", "<=")):
+                # Handle range queries
+                operator = value[:2] if value.startswith((">=", "<=")) else value[0]
+                filter_value = (
+                    value[2:] if value.startswith((">=", "<=")) else value[1:]
+                )
+
+                # Convert to numeric for comparison
+                try:
+                    numeric_filter_value = float(filter_value)
+                    col_data = pd.to_numeric(metadata_df[column], errors="coerce")
+
+                    # Create boolean mask for the comparison
+                    if operator == ">":
+                        comparison_mask = col_data > numeric_filter_value  # type: ignore
+                    elif operator == "<":
+                        comparison_mask = col_data < numeric_filter_value  # type: ignore
+                    elif operator == ">=":
+                        comparison_mask = col_data >= numeric_filter_value  # type: ignore
+                    elif operator == "<=":
+                        comparison_mask = col_data <= numeric_filter_value  # type: ignore
+                    else:
+                        raise ValueError(f"Unsupported operator: {operator}")
+
+                    # Apply the comparison mask, excluding NaN values
+                    mask &= comparison_mask & col_data.notna()  # type: ignore
+                except Exception as err:
+                    raise ValueError(
+                        f"Cannot perform numeric comparison on non-numeric column '{column}'"
+                    ) from err
+
+            elif isinstance(value, list):
+                # Handle list values
+                mask &= metadata_df[column].isin(value)
+            else:
+                # Handle exact matches
+                mask &= metadata_df[column] == value
+
+        result = metadata_df[mask].copy()
+        return result  # type: ignore
+
+    def _filter_with_sql(self, table_name: str, **filters: Any) -> pd.DataFrame:
+        """
+        Filter metadata using SQL queries against disk-based tables.
+
+        Args:
+            table_name: Table name ("cells" or "genes")
+            **filters: Filter conditions
+
+        Returns:
+            Filtered DataFrame
+        """
+        if not filters:
+            return self.query(f"SELECT * FROM {table_name}")
 
         # Build filter conditions
         conditions = []
         for column, value in filters.items():
-            if column not in self.var.columns:
-                raise ValueError(f"Column '{column}' not found in gene metadata")
-
             if isinstance(value, str) and value.startswith((">", "<", ">=", "<=")):
                 # Handle range queries
                 operator = value[:2] if value.startswith((">=", "<=")) else value[0]
@@ -420,7 +498,7 @@ class SLAFArray:
                 conditions.append(f"{column} = '{value}'")
 
         where_clause = " AND ".join(conditions)
-        sql = f"SELECT * FROM genes WHERE {where_clause}"
+        sql = f"SELECT * FROM {table_name} WHERE {where_clause}"
 
         return self.query(sql)
 
