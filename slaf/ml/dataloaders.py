@@ -1,3 +1,5 @@
+from typing import Optional
+
 import numpy as np
 
 from slaf.core.slaf import SLAFArray
@@ -105,6 +107,8 @@ class SLAFDataLoader:
         >>> print("Training loop completed")
         Training loop completed
     """
+
+    device: Optional["torch.device"]  # type: ignore
 
     def __init__(
         self,
