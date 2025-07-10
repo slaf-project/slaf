@@ -14,8 +14,8 @@ copyright: Copyright &copy; 2025 Pavan Ramkumar
 # Theme
 theme:
   name: material
-  logo: assets/logo.svg
-  favicon: assets/favicon.png
+  # logo: assets/logo.svg
+  # favicon: assets/favicon.png
 
   # Color palette
   palette:
