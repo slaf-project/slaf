@@ -320,7 +320,6 @@ class LazyExpressionMatrix(LazySparseMixin):
         matrix: scipy.sparse.csr_matrix,
         cell_selector,
         gene_selector,
-        idx_to_cell_id,
     ) -> scipy.sparse.csr_matrix:
         """Apply any stored transformations to the matrix"""
         # Get transformations from the parent LazyAnnData if available
@@ -607,16 +606,6 @@ class LazyExpressionMatrix(LazySparseMixin):
         """Convert to dense numpy array"""
         matrix = self.compute()
         return matrix.toarray()
-
-    def tocsr(self) -> scipy.sparse.csr_matrix:
-        """Convert to CSR format (already in CSR)"""
-        matrix = self.compute()
-        return matrix.tocsr()
-
-    def tocsc(self) -> scipy.sparse.csc_array:
-        """Convert to CSC format"""
-        matrix = self.compute()
-        return matrix.tocsc()
 
     def compute(self) -> scipy.sparse.csr_matrix:
         """
@@ -1153,81 +1142,10 @@ class LazyAnnData(LazySparseMixin):
         """Explicitly compute and return a native AnnData object"""
         import scanpy as sc
 
-        # Compute the expression matrix with transformations applied
-        X_matrix = self._X.compute()
-
-        # Get metadata
-        obs_df = self.obs.copy()
-        var_df = self.var.copy()
-
         # Create native AnnData object
-        adata = sc.AnnData(X=X_matrix, obs=obs_df, var=var_df)
+        adata = sc.AnnData(X=self._X.compute(), obs=self.obs, var=self.var)
 
         return adata
-
-    def compute_obs(self) -> pd.DataFrame:
-        """Explicitly compute and return obs metadata"""
-        return self.obs
-
-    def compute_var(self) -> pd.DataFrame:
-        """Explicitly compute and return var metadata"""
-        return self.var
-
-    def to_df(self) -> pd.DataFrame:
-        """Convert to dense pandas DataFrame (explicit computation)"""
-        return pd.DataFrame(
-            self.X.toarray(), index=self.obs_names, columns=self.var_names
-        )
-
-    def get_obs_structure(self) -> dict:
-        """
-        Get obs metadata structure without loading full data.
-        Returns dict with columns, index info, etc.
-        """
-        if self._obs is None:
-            # Get structure from SLAF without loading full data
-            obs_structure = {
-                "columns": self.slaf.obs.columns.tolist(),
-                "index_name": self.slaf.obs.index.name,
-                "shape": self.slaf.obs.shape,
-                "dtypes": self.slaf.obs.dtypes.to_dict(),
-            }
-            # Remove internal columns
-            if "cell_integer_id" in obs_structure["columns"]:
-                obs_structure["columns"].remove("cell_integer_id")
-            return obs_structure
-        else:
-            return {
-                "columns": self._obs.columns.tolist(),
-                "index_name": self._obs.index.name,
-                "shape": self._obs.shape,
-                "dtypes": self._obs.dtypes.to_dict(),
-            }
-
-    def get_var_structure(self) -> dict:
-        """
-        Get var metadata structure without loading full data.
-        Returns dict with columns, index info, etc.
-        """
-        if self._var is None:
-            # Get structure from SLAF without loading full data
-            var_structure = {
-                "columns": self.slaf.var.columns.tolist(),
-                "index_name": self.slaf.var.index.name,
-                "shape": self.slaf.var.shape,
-                "dtypes": self.slaf.var.dtypes.to_dict(),
-            }
-            # Remove internal columns
-            if "gene_integer_id" in var_structure["columns"]:
-                var_structure["columns"].remove("gene_integer_id")
-            return var_structure
-        else:
-            return {
-                "columns": self._var.columns.tolist(),
-                "index_name": self._var.index.name,
-                "shape": self._var.shape,
-                "dtypes": self._var.dtypes.to_dict(),
-            }
 
 
 def read_slaf(filename: str, backend: str = "auto") -> LazyAnnData:
