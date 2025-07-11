@@ -27,7 +27,7 @@ filtered_genes = adata[:, adata.var['highly_variable']]
 
 ```python
 # Minimal memory footprint
-slaf = SLAFArray("data.slaf")  # 0.0001 MB for PBMC3K
+slaf = SLAFArray("data.slaf")
 
 # Complex filtering in single operation
 high_quality = slaf.filter_cells(
@@ -44,10 +44,10 @@ filtered_genes = slaf.filter_genes(highly_variable=True)
 
 | Operation          | Traditional | SLAF   | Improvement                |
 | ------------------ | ----------- | ------ | -------------------------- |
-| **Cell Filtering** | 4.0 MB      | 0.3 MB | **15x memory efficiency**  |
-| **Gene Filtering** | 4.0 MB      | 0.2 MB | **125x memory efficiency** |
-| **Load Time**      | 37.8 ms     | 8.0 ms | **2.7x faster**            |
-| **Query Time**     | 2.2 ms      | 5.9 ms | 0.4x (slower)              |
+| **Cell Filtering** | 4.0 MB      | 0.8 MB | **5.3x memory efficiency** |
+| **Gene Filtering** | 4.0 MB      | 0.8 MB | **5.3x memory efficiency** |
+| **Load Time**      | 19.7 ms     | 8.0 ms | **2.4x faster**            |
+| **Query Time**     | 0.4 ms      | 0.5 ms | 0.9x (slower)              |
 
 **Key Insight**: While individual queries may be slower, SLAF's memory efficiency enables **complex multi-step workflows** that would crash traditional tools on larger datasets.
 
@@ -89,12 +89,12 @@ cell_expr = slaf.get_expression(cell_id="AAACCTGAGAAACCAT-1")
 
 | Query Type            | Traditional | SLAF   | Memory Efficiency |
 | --------------------- | ----------- | ------ | ----------------- |
-| **Single Cell**       | 3.9 MB      | 0.0 MB | **>100x**         |
-| **Single Gene**       | 3.9 MB      | 0.0 MB | **>100x**         |
-| **100×50 Submatrix**  | 3.9 MB      | 0.1 MB | **>100x**         |
-| **500×500 Submatrix** | 4.0 MB      | 2.7 MB | **1.5x**          |
+| **Single Cell**       | 3.9 MB      | 0.6 MB | **6.4x**          |
+| **Single Gene**       | 3.9 MB      | 0.6 MB | **6.4x**          |
+| **100×50 Submatrix**  | 3.9 MB      | 0.6 MB | **6.0x**          |
+| **500×500 Submatrix** | 4.0 MB      | 3.3 MB | **1.2x**          |
 
-**Key Insight**: SLAF's **>100x memory efficiency** for most queries enables analysis of datasets that don't fit in memory.
+**Key Insight**: SLAF's **6x memory efficiency** for most queries enables analysis of datasets that don't fit in memory.
 
 ## ⚡ Lazy Processing
 
@@ -137,18 +137,18 @@ expression = filtered.get_expression(cell_ids=["cell1", "cell2"])
 
 ### Performance Results
 
-| Operation          | Traditional | SLAF      | Speedup              |
-| ------------------ | ----------- | --------- | -------------------- |
-| **QC Metrics**     | 233.9 ms    | 70.5 ms   | **3.3x faster**      |
-| **Cell Filtering** | 45.8 ms     | 36.4 ms   | **1.3x faster**      |
-| **Gene Filtering** | 59.2 ms     | 50.0 ms   | **1.2x faster**      |
-| **Memory Usage**   | 7.8 MB      | 0.0001 MB | **>100x efficiency** |
+| Operation          | Traditional | SLAF    | Speedup              |
+| ------------------ | ----------- | ------- | -------------------- |
+| **QC Metrics**     | 155.2 ms    | 44.2 ms | **3.5x faster**      |
+| **Cell Filtering** | 22.3 ms     | 24.9 ms | **0.9x (slower)**    |
+| **Gene Filtering** | 29.4 ms     | 24.0 ms | **1.2x faster**      |
+| **Memory Usage**   | 7.8 MB      | 0.6 MB  | **13.3x efficiency** |
 
 **Key Insight**: Lazy evaluation enables **workflow chaining** that would cause memory explosions with traditional tools.
 
 ## 🤖 ML Training
 
-**The Story**: SLAF streams cells to training loops at **37M tokens/sec** with **efficient multi-process scaling**, enabling ML training on datasets that don't fit in memory.
+**The Story**: SLAF streams cells to training loops at **40M tokens/sec** with **efficient multi-process scaling**, enabling ML training on datasets that don't fit in memory.
 
 ### Traditional Approach (Memory Bottleneck)
 
@@ -184,7 +184,7 @@ for batch in dataloader:
 
 | Metric                    | Value            | Impact                       |
 | ------------------------- | ---------------- | ---------------------------- |
-| **Throughput**            | 37M tokens/sec   | Enables large-scale training |
+| **Throughput**            | 40M tokens/sec   | Enables large-scale training |
 | **Memory Efficiency**     | 1.2x vs h5ad     | Minimal overhead per process |
 | **Multi-Process Scaling** | Efficient        | No data duplication          |
 | **Batch Size**            | Up to 2048 cells | Large batches for efficiency |
@@ -197,12 +197,12 @@ As datasets grow larger, SLAF's advantages become more pronounced:
 
 | Dataset Size | Traditional Memory | SLAF Memory | Efficiency Gain |
 | ------------ | ------------------ | ----------- | --------------- |
-| 1K cells     | 8 MB               | 0.1 MB      | 80x             |
-| 10K cells    | 80 MB              | 1 MB        | 80x             |
-| 50K cells    | 729 MB             | 12 MB       | 311x            |
-| 100K cells   | 1.5 GB             | 25 MB       | 600x            |
+| 1K cells     | 4 MB               | 0.8 MB      | 5x              |
+| 10K cells    | 40 MB              | 8 MB        | 5x              |
+| 50K cells    | 200 MB             | 40 MB       | 5x              |
+| 100K cells   | 400 MB             | 80 MB       | 5x              |
 
-**The larger your dataset, the more SLAF helps you.**
+**SLAF provides consistent memory efficiency across dataset sizes.**
 
 ## ⚠️ Caveats & Limitations
 

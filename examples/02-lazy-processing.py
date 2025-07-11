@@ -120,8 +120,8 @@ def _(adata, time):
         print("Available computation methods:")
         print("1. adata.compute() → native AnnData object")
         print("2. adata.X.compute() → scipy.sparse.csr_matrix")
-        print("3. adata.compute_obs() → pandas.DataFrame (cell metadata)")
-        print("4. adata.compute_var() → pandas.DataFrame (gene metadata)")
+        print("3. adata.obs → pandas.DataFrame (cell metadata)")
+        print("4. adata.var → pandas.DataFrame (gene metadata)")
 
         print("\nLet's demonstrate:")
 
@@ -135,12 +135,12 @@ def _(adata, time):
         print(f"   Shape: {sparse_matrix.shape}")
         print(f"   Memory: {sparse_matrix.data.nbytes / 1024 / 1024:.1f} MB")
 
-        # Compute just cell metadata
-        print("\n2. Computing cell metadata...")
+        # Access cell metadata
+        print("\n2. Accessing cell metadata...")
         start_time = time.time()
-        obs_df = adata.compute_obs()
+        obs_df = adata.obs
         obs_time = time.time() - start_time
-        print(f"   ✅ Computed in {obs_time:.4f}s")
+        print(f"   ✅ Accessed in {obs_time:.4f}s")
         print(f"   Type: {type(obs_df)}")
         print(f"   Shape: {obs_df.shape}")
 
@@ -699,7 +699,7 @@ def _():
 
     print("\n2. Computation Control:")
     print("   ✅ Use .compute() only when you need the data")
-    print("   ✅ Use .compute_obs() or .compute_var() for metadata only")
+    print("   ✅ Use .obs or .var for metadata")
     print("   ✅ Use .X.compute() for expression matrix only")
 
     print("\n3. Memory Management:")

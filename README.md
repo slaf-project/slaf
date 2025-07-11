@@ -117,8 +117,8 @@ adata.compute()  # Now it's a real AnnData object
 ```python
 # Compute specific parts
 expression_matrix = adata.X.compute()  # Just the expression matrix
-cell_metadata = adata.compute_obs()    # Just cell metadata
-gene_metadata = adata.compute_var()    # Just gene metadata
+cell_metadata = adata.obs              # Cell metadata
+gene_metadata = adata.var              # Gene metadata
 
 # Or compute everything at once
 real_adata = adata.compute()
