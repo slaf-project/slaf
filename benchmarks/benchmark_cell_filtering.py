@@ -1,6 +1,5 @@
 import time
 
-import pandas as pd
 import scanpy as sc
 
 # Import shared utilities
@@ -8,8 +7,6 @@ from benchmark_utils import (
     clear_caches,
     get_object_memory_usage,
     get_slaf_memory_usage,
-    parse_filter_for_h5ad,
-    parse_filter_for_slaf,
 )
 
 from slaf.core.slaf import SLAFArray
@@ -20,130 +17,122 @@ def demo_realistic_cell_queries():
     scenarios = [
         # QC-based filtering (very common)
         {
-            "type": "filtering",
-            "operation": "filter_cells",
-            "filters": {"n_genes_by_counts": ">=500"},
+            "name": "min_genes_500",
             "description": "Cells with >=500 genes",
+            "h5ad_code": lambda adata: adata.obs[adata.obs.n_genes_by_counts >= 500],
+            "slaf_code": lambda slaf: slaf.filter_cells(n_genes_by_counts=">=500"),
         },
         {
-            "type": "filtering",
-            "operation": "filter_cells",
-            "filters": {"pct_counts_mt": "<=15"},
+            "name": "max_pct_mt_15",
             "description": "Cells with <=15% mitochondrial genes",
+            "h5ad_code": lambda adata: adata.obs[adata.obs.pct_counts_mt <= 15],
+            "slaf_code": lambda slaf: slaf.filter_cells(pct_counts_mt="<=15"),
         },
         {
-            "type": "filtering",
-            "operation": "filter_cells",
-            "filters": {"high_mito": False},
+            "name": "low_mito",
             "description": "Cells with low mitochondrial content",
+            "h5ad_code": lambda adata: adata.obs[~adata.obs.high_mito],
+            "slaf_code": lambda slaf: slaf.filter_cells(high_mito=False),
         },
         # Cluster-based filtering (common after clustering)
         {
-            "type": "filtering",
-            "operation": "filter_cells",
-            "filters": {"leiden": ["0", "1", "2"]},
+            "name": "clusters_0_1_2",
             "description": "Cells in clusters 0,1,2",
+            "h5ad_code": lambda adata: adata.obs[
+                adata.obs.leiden.isin(["0", "1", "2"])
+            ],
+            "slaf_code": lambda slaf: slaf.filter_cells(leiden=["0", "1", "2"]),
         },
         {
-            "type": "filtering",
-            "operation": "filter_cells",
-            "filters": {"leiden": "0"},
+            "name": "cluster_0",
             "description": "Cells in largest cluster (0)",
+            "h5ad_code": lambda adata: adata.obs[adata.obs.leiden == "0"],
+            "slaf_code": lambda slaf: slaf.filter_cells(leiden="0"),
         },
         # Batch filtering (very common)
         {
-            "type": "filtering",
-            "operation": "filter_cells",
-            "filters": {"batch": "batch_1"},
+            "name": "batch_1",
             "description": "Cells from batch_1",
+            "h5ad_code": lambda adata: adata.obs[adata.obs.batch == "batch_1"],
+            "slaf_code": lambda slaf: slaf.filter_cells(batch="batch_1"),
         },
         # Combined filtering (most realistic)
         {
-            "type": "filtering",
-            "operation": "filter_cells",
-            "filters": {"leiden": ["0", "1"], "batch": "batch_1"},
+            "name": "clusters_0_1_batch_1",
             "description": "Cells in clusters 0,1 from batch_1",
+            "h5ad_code": lambda adata: adata.obs[
+                (adata.obs.leiden.isin(["0", "1"])) & (adata.obs.batch == "batch_1")
+            ],
+            "slaf_code": lambda slaf: slaf.filter_cells(
+                leiden=["0", "1"], batch="batch_1"
+            ),
         },
         {
-            "type": "filtering",
-            "operation": "filter_cells",
-            "filters": {"n_genes_by_counts": ">=1000", "pct_counts_mt": "<=10"},
+            "name": "high_quality",
             "description": "High-quality cells (>=1000 genes, <=10% mt)",
+            "h5ad_code": lambda adata: adata.obs[
+                (adata.obs.n_genes_by_counts >= 1000) & (adata.obs.pct_counts_mt <= 10)
+            ],
+            "slaf_code": lambda slaf: slaf.filter_cells(
+                n_genes_by_counts=">=1000", pct_counts_mt="<=10"
+            ),
         },
         # Additional range queries with new operators
         {
-            "type": "filtering",
-            "operation": "filter_cells",
-            "filters": {"total_counts": ">=800", "total_counts_upper": "<=2000"},
+            "name": "total_counts_800_2000",
             "description": "Cells with 800-2000 total counts",
+            "h5ad_code": lambda adata: adata.obs[
+                (adata.obs.total_counts >= 800) & (adata.obs.total_counts <= 2000)
+            ],
+            "slaf_code": lambda slaf: slaf.filter_cells(total_counts=">=800").query(
+                "total_counts <= 2000"
+            ),
         },
         {
-            "type": "filtering",
-            "operation": "filter_cells",
-            "filters": {
-                "n_genes_by_counts": ">=200",
-                "n_genes_by_counts_upper": "<=1500",
-            },
+            "name": "genes_200_1500",
             "description": "Cells with 200-1500 genes",
+            "h5ad_code": lambda adata: adata.obs[
+                (adata.obs.n_genes_by_counts >= 200)
+                & (adata.obs.n_genes_by_counts <= 1500)
+            ],
+            "slaf_code": lambda slaf: slaf.filter_cells(
+                n_genes_by_counts=">=200"
+            ).query("n_genes_by_counts <= 1500"),
         },
     ]
     return scenarios
 
 
 def _measure_h5ad_cell_filtering(h5ad_path: str, scenario: dict):
-    """Measure h5ad cell filtering performance in isolation"""
+    """Measure h5ad cell filtering performance"""
     import gc
 
     gc.collect()
 
-    # h5ad load
+    # Load h5ad
     start = time.time()
     adata = sc.read_h5ad(h5ad_path)
     h5ad_load_time = time.time() - start
 
-    # Measure memory footprint of loaded data
+    # Measure memory footprint
     h5ad_load_memory = (
         get_object_memory_usage(adata.X)
         + get_object_memory_usage(adata.obs)
         + get_object_memory_usage(adata.var)
-        + (
-            get_object_memory_usage(adata.raw)
-            if hasattr(adata, "raw") and adata.raw is not None
-            else 0
-        )
-        + (get_object_memory_usage(adata.uns) if hasattr(adata, "uns") else 0)
     )
 
-    # Parse filter for h5ad
-    h5ad_filter = parse_filter_for_h5ad(scenario["filters"])
-
-    # h5ad query
+    # Execute the filtering operation
     start = time.time()
-    mask = pd.Series([True] * adata.n_obs, index=adata.obs.index)
-    for column, (op, value) in h5ad_filter.items():
-        if column in adata.obs.columns:
-            if op == "eq":
-                if isinstance(value, list):
-                    mask &= adata.obs[column].isin(value)
-                else:
-                    mask &= adata.obs[column] == value
-            elif op == "gt":
-                mask &= adata.obs[column] > value
-            elif op == "lt":
-                mask &= adata.obs[column] < value
-            elif op == "ge":
-                mask &= adata.obs[column] >= value
-            elif op == "le":
-                mask &= adata.obs[column] <= value
-        else:
-            # Handle missing columns gracefully
-            mask = pd.Series([False] * adata.n_obs, index=adata.obs.index)
-            break
-
-    filtered_cells = adata.obs[mask]
-    h5ad_query_time = time.time() - start
-    h5ad_query_memory = get_object_memory_usage(filtered_cells)
-    h5ad_count = len(filtered_cells)
+    try:
+        result = scenario["h5ad_code"](adata)
+        h5ad_query_time = time.time() - start
+        h5ad_query_memory = get_object_memory_usage(result)
+        h5ad_count = len(result)
+    except Exception as e:
+        print(f"h5ad filtering failed: {e}")
+        h5ad_query_time = 0
+        h5ad_query_memory = 0
+        h5ad_count = 0
 
     # Clean up
     del adata
@@ -159,28 +148,31 @@ def _measure_h5ad_cell_filtering(h5ad_path: str, scenario: dict):
 
 
 def _measure_slaf_cell_filtering(slaf_path: str, scenario: dict):
-    """Measure SLAF cell filtering performance in isolation"""
+    """Measure SLAF cell filtering performance"""
     import gc
 
     gc.collect()
 
-    # slaf load
+    # Load SLAF
     start = time.time()
     slaf = SLAFArray(slaf_path)
     slaf_init_time = time.time() - start
 
-    # Measure memory footprint of loaded metadata
+    # Measure memory footprint
     slaf_load_memory = get_slaf_memory_usage(slaf)
 
-    # Parse filter for SLAF
-    slaf_filter = parse_filter_for_slaf(scenario["filters"])
-
-    # slaf query using filter_cells method
+    # Execute the filtering operation
     start = time.time()
-    filtered_cells_slaf = slaf.filter_cells(**slaf_filter)
-    slaf_query_time = time.time() - start
-    slaf_query_memory = get_object_memory_usage(filtered_cells_slaf)
-    slaf_count = len(filtered_cells_slaf)
+    try:
+        result = scenario["slaf_code"](slaf)
+        slaf_query_time = time.time() - start
+        slaf_query_memory = get_object_memory_usage(result)
+        slaf_count = len(result)
+    except Exception as e:
+        print(f"SLAF filtering failed: {e}")
+        slaf_query_time = 0
+        slaf_query_memory = 0
+        slaf_count = 0
 
     # Clean up
     del slaf
@@ -264,7 +256,7 @@ def benchmark_cell_filtering(
     results = []
     for i, scenario in enumerate(scenarios):
         if verbose:
-            print(f"Running scenario {i + 1}/{len(scenarios)}: {scenario['filters']}")
+            print(f"Running scenario {i + 1}/{len(scenarios)}: {scenario['name']}")
 
         # Clear caches at the start of each scenario
         clear_caches()
@@ -303,3 +295,23 @@ def benchmark_cell_filtering(
             continue
 
     return results
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Benchmark cell filtering")
+    parser.add_argument("h5ad_path", help="Path to h5ad file")
+    parser.add_argument("slaf_path", help="Path to SLAF dataset")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+
+    args = parser.parse_args()
+
+    results = benchmark_cell_filtering(
+        args.h5ad_path, args.slaf_path, verbose=args.verbose
+    )
+
+    # Print results table
+    from benchmark_utils import print_benchmark_table
+
+    print_benchmark_table(results, scenario_type="Cell Filtering")

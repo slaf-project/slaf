@@ -73,40 +73,6 @@ def get_sparse_matrix_size(sparse_matrix):
     return total
 
 
-def parse_filter_for_h5ad(filter_dict):
-    """Convert filter dict to h5ad-compatible format"""
-    parsed = {}
-    for key, value in filter_dict.items():
-        if isinstance(value, str) and value.startswith(">="):
-            parsed[key] = ("ge", float(value[2:]))
-        elif isinstance(value, str) and value.startswith("<="):
-            parsed[key] = ("le", float(value[2:]))
-        elif isinstance(value, str) and value.startswith(">"):
-            parsed[key] = ("gt", float(value[1:]))
-        elif isinstance(value, str) and value.startswith("<"):
-            parsed[key] = ("lt", float(value[1:]))
-        else:
-            parsed[key] = ("eq", value)
-    return parsed
-
-
-def parse_filter_for_slaf(filter_dict):
-    """Convert filter dict to SLAF SQL-compatible format"""
-    parsed = {}
-    for key, value in filter_dict.items():
-        if isinstance(value, str) and value.startswith(">="):
-            parsed[key] = f">= {value[2:]}"
-        elif isinstance(value, str) and value.startswith("<="):
-            parsed[key] = f"<= {value[2:]}"
-        elif isinstance(value, str) and value.startswith(">"):
-            parsed[key] = f"> {value[1:]}"
-        elif isinstance(value, str) and value.startswith("<"):
-            parsed[key] = f"< {value[1:]}"
-        else:
-            parsed[key] = value
-    return parsed
-
-
 def print_benchmark_table(
     results: list[dict], dataset_name: str = "", scenario_type: str = ""
 ):
@@ -251,7 +217,9 @@ def _print_rich_table(
         slaf_total_memory = result.get("slaf_total_memory_mb", 0)
 
         # Calculate memory efficiency (h5ad total / SLAF total)
-        if slaf_total_memory > 0.1:  # Avoid division by very small numbers
+        if (
+            slaf_total_memory > 0.01
+        ):  # Lower threshold to catch small but meaningful differences
             mem_efficiency = h5ad_total_memory / slaf_total_memory
             mem_efficiency_text = f"{mem_efficiency:.1f}x"
             # Color code memory efficiency
@@ -259,7 +227,7 @@ def _print_rich_table(
                 mem_efficiency_text = f"[green]{mem_efficiency_text}[/green]"
             else:
                 mem_efficiency_text = f"[red]{mem_efficiency_text}[/red]"
-        elif h5ad_total_memory > 0.1:  # h5ad used memory but SLAF didn't
+        elif h5ad_total_memory > 0.01:  # h5ad used memory but SLAF didn't
             mem_efficiency_text = "[green]>100x[/green]"  # SLAF is much more efficient
         else:  # Both used negligible memory
             mem_efficiency_text = "~1x"

@@ -355,6 +355,12 @@ def _measure_slaf_scanpy_preprocessing(slaf_path: str, scenario: dict):
         if scenario["type"] == "qc_metrics":
             if scenario["operation"] == "calculate_qc_metrics":
                 result = pp.calculate_qc_metrics(lazy_adata, inplace=False)
+                # Materialize the QC metrics results (returns tuple of DataFrames)
+                if result is not None:
+                    cell_qc, gene_qc = result
+                    # Force computation by accessing the data
+                    _ = cell_qc.to_dict() if hasattr(cell_qc, "to_dict") else cell_qc
+                    _ = gene_qc.to_dict() if hasattr(gene_qc, "to_dict") else gene_qc
 
         elif scenario["type"] == "filtering":
             if scenario["operation"] == "filter_cells":
@@ -371,6 +377,9 @@ def _measure_slaf_scanpy_preprocessing(slaf_path: str, scenario: dict):
                     max_genes=max_genes,
                     inplace=False,
                 )
+                # Materialize the filtered result (returns LazyAnnData)
+                if result is not None:
+                    result = result.compute()
 
             elif scenario["operation"] == "filter_genes":
                 min_counts = scenario.get("min_counts")
@@ -382,6 +391,9 @@ def _measure_slaf_scanpy_preprocessing(slaf_path: str, scenario: dict):
                     min_cells=min_cells,
                     inplace=False,
                 )
+                # Materialize the filtered result (returns LazyAnnData)
+                if result is not None:
+                    result = result.compute()
 
         elif scenario["type"] == "normalization":
             if scenario["operation"] == "normalize_total":
@@ -389,10 +401,16 @@ def _measure_slaf_scanpy_preprocessing(slaf_path: str, scenario: dict):
                 result = pp.normalize_total(
                     lazy_adata, target_sum=target_sum, inplace=False
                 )
+                # Materialize the normalized result (returns LazyAnnData)
+                if result is not None:
+                    result = result.compute()
 
         elif scenario["type"] == "transformation":
             if scenario["operation"] == "log1p":
                 result = pp.log1p(lazy_adata, inplace=False)
+                # Materialize the transformed result (returns LazyAnnData)
+                if result is not None:
+                    result = result.compute()
 
         elif scenario["type"] == "hvg":
             if scenario["operation"] == "highly_variable_genes":
@@ -413,6 +431,9 @@ def _measure_slaf_scanpy_preprocessing(slaf_path: str, scenario: dict):
                         min_disp=min_disp,
                         inplace=False,
                     )
+                # Materialize the HVG results (returns DataFrame)
+                if result is not None:
+                    _ = result.to_dict() if hasattr(result, "to_dict") else result
 
         elif scenario["type"] == "workflow":
             if scenario["operation"] == "qc_and_filter":
@@ -423,43 +444,46 @@ def _measure_slaf_scanpy_preprocessing(slaf_path: str, scenario: dict):
                 result = pp.filter_genes(
                     lazy_adata, min_counts=10, min_cells=5, inplace=False
                 )
+                # Materialize the final result (returns LazyAnnData)
+                if result is not None:
+                    result = result.compute()
 
         elif scenario["type"] == "transformed_ops":
             if scenario["operation"] == "normalize_then_slice":
                 # Apply normalization
                 pp.normalize_total(lazy_adata, target_sum=1e4, inplace=True)
-                # Slice the transformed data
+                # Slice the transformed data and materialize
                 slice_size = scenario["slice_size"]
-                result = lazy_adata.X[0 : slice_size[0], 0 : slice_size[1]]
+                result = lazy_adata.X[0 : slice_size[0], 0 : slice_size[1]].compute()
 
             elif scenario["operation"] == "log1p_then_slice":
                 # Apply log1p transformation
                 pp.log1p(lazy_adata, inplace=True)
-                # Slice the transformed data
+                # Slice the transformed data and materialize
                 slice_size = scenario["slice_size"]
-                result = lazy_adata.X[0 : slice_size[0], 0 : slice_size[1]]
+                result = lazy_adata.X[0 : slice_size[0], 0 : slice_size[1]].compute()
 
             elif scenario["operation"] == "normalize_log1p_then_slice":
                 # Apply both transformations
                 pp.normalize_total(lazy_adata, target_sum=1e4, inplace=True)
                 pp.log1p(lazy_adata, inplace=True)
-                # Slice the transformed data
+                # Slice the transformed data and materialize
                 slice_size = scenario["slice_size"]
-                result = lazy_adata.X[0 : slice_size[0], 0 : slice_size[1]]
+                result = lazy_adata.X[0 : slice_size[0], 0 : slice_size[1]].compute()
 
             elif scenario["operation"] == "transformed_aggregation":
                 # Apply transformations
                 pp.normalize_total(lazy_adata, target_sum=1e4, inplace=True)
                 pp.log1p(lazy_adata, inplace=True)
-                # Perform aggregation on transformed data
-                result = lazy_adata.X.mean(axis=0)
+                # Perform aggregation on transformed data and materialize
+                result = lazy_adata.X.mean(axis=0).compute()
 
             elif scenario["operation"] == "transformed_statistics":
                 # Apply transformations
                 pp.normalize_total(lazy_adata, target_sum=1e4, inplace=True)
                 pp.log1p(lazy_adata, inplace=True)
-                # Perform statistics on transformed data
-                result = lazy_adata.X.var(axis=1)
+                # Perform statistics on transformed data and materialize
+                result = lazy_adata.X.var(axis=1).compute()
 
         else:
             # Default operation
