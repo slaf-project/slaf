@@ -55,7 +55,7 @@ _We need **cloud-native, zero-copy, query-in-place storage systems**, rather tha
 
 ## **Win with SLAF**
 
-### Leverage pushdown filtering and SQL query optimization from the cloud
+### Leverage pushdown filtering and SQL query optimization from cloud-native OLAP databases
 
 <div class="grid" markdown>
 
