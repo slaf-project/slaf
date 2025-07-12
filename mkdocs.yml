@@ -153,16 +153,14 @@ nav:
   - Home: index.md
   - Quick Start: getting-started/quickstart.md
   - User Guide:
-      - Core Concepts: user-guide/core-concepts.md
+      - How SLAF Works: user-guide/how-slaf-works.md
       - Command Line Interface: user-guide/cli.md
-      - Data Loading: user-guide/data-loading.md
+      - Migrating to SLAF: user-guide/migrating-to-slaf.md
       - SQL Queries: user-guide/sql-queries.md
-      - Troubleshooting: user-guide/troubleshooting.md
   - Examples:
       - Getting Started: examples/getting-started.md
       - Lazy Processing: examples/lazy-processing.md
       - ML Training: examples/ml-training.md
-  - Benchmarks: benchmarks/performance.md
   - API Reference:
       - Core: api/core.md
       - Data: api/data.md
