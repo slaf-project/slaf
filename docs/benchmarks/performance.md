@@ -2,6 +2,44 @@
 
 SLAF delivers **capability expansion** for single-cell analysis - enabling workflows that are impractical or impossible with traditional tools due to memory constraints and performance limitations.
 
+## **Benchmark Setup**
+
+### Dataset
+
+- **Dataset**: A processed version of PBMC3K (2,695 cells × 1,863 genes)
+- **Size**: ~23 MB (h5ad format)
+
+```shell
+⚡  slaf info ../slaf-datasets/pbmc3k_processed.slaf
+SLAF Dataset
+  Shape: 2695 cells × 1863 genes
+  Format version: 0.1
+  Cell metadata columns: 9
+    n_genes, n_genes_by_counts, total_counts, leiden, batch...
+  Gene metadata columns: 12
+    gene_ids, n_cells, mt, n_cells_by_counts, mean_counts...
+  Record counts:
+    Cells: 2,695
+    Genes: 1,863
+    Expression records: 415,134
+  Optimizations:
+    use_integer_keys: True
+```
+
+### Hardware Configuration
+
+- **Machine**: Apple MacBook Pro with M1 Max
+- **Memory**: 32 GB RAM
+- **Storage**: NVMe SSD
+- **OS**: macOS 14.0
+
+### Test Environment
+
+- **Storage Type**: Local disk (not cloud object storage)
+- **Python**: 3.12.0
+
+> **Note**: These benchmarks represent performance on a high-end laptop. Production deployments on dedicated servers with faster storage and more memory may show different performance characteristics.
+
 ## **Metadata Filtering & Quality Control**
 
 SLAF provides **efficient metadata-only queries** that avoid loading expression data when only cell/gene metadata is needed, similar to using Polars or DuckDB for structured data queries.
