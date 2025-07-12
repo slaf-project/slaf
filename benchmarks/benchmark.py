@@ -226,9 +226,9 @@ def extract_cell_filtering_summary(results: list[dict]) -> dict[str, Any]:
         elif h5ad_mem <= 0.1 and slaf_mem <= 0.1:
             memory_efficiencies.append(1.0)
 
-    # Select representative scenarios
+    # Include all scenarios
     representative_scenarios = []
-    for result in results[:4]:  # First 4 scenarios
+    for result in results:
         h5ad_mem = result.get("h5ad_total_memory_mb", 0)
         slaf_mem = result.get("slaf_total_memory_mb", 0)
         representative_scenarios.append(
@@ -274,9 +274,9 @@ def extract_expression_queries_summary(results: list[dict]) -> dict[str, Any]:
         elif h5ad_mem <= 0.1 and slaf_mem <= 0.1:
             memory_efficiencies.append(1.0)
 
-    # Select representative scenarios
+    # Include all scenarios
     representative_scenarios = []
-    for result in results[:5]:  # First 5 scenarios
+    for result in results:
         h5ad_mem = result.get("h5ad_total_memory_mb", 0)
         slaf_mem = result.get("slaf_total_memory_mb", 0)
         representative_scenarios.append(
@@ -322,9 +322,9 @@ def extract_scanpy_preprocessing_summary(results: list[dict]) -> dict[str, Any]:
         elif h5ad_mem <= 0.1 and slaf_mem <= 0.1:
             memory_efficiencies.append(1.0)
 
-    # Select representative scenarios
+    # Include all scenarios
     representative_scenarios = []
-    for result in results[:5]:  # First 5 scenarios
+    for result in results:
         h5ad_mem = result.get("h5ad_total_memory_mb", 0)
         slaf_mem = result.get("slaf_total_memory_mb", 0)
         representative_scenarios.append(
@@ -481,20 +481,23 @@ def update_cell_filtering_section(content: str, summary: dict[str, Any]) -> str:
     if not scenarios:
         return content
 
+    # Create the table header and separator
+    header = "| Scenario                | Traditional Total (ms) | SLAF Total (ms) | Total Speedup | Memory Efficiency | Description          |"
+    separator = "| ----------------------- | ---------------------- | --------------- | ------------- | ----------------- | -------------------- |"
+
     # Create the table rows
     table_rows = []
-    for i, scenario in enumerate(scenarios[:4]):  # Use first 4 scenarios
-        row = f"| S{i + 1}       |   {scenario['h5ad_total_ms']:.1f} |    {scenario['slaf_total_ms']:.1f} |     {scenario['total_speedup']:.1f}x |     {scenario['memory_efficiency']:.1f}x | {scenario['description'][:50]}... |"
+    for i, scenario in enumerate(scenarios):  # Use all scenarios
+        row = f"| S{i + 1}       |   {scenario['h5ad_total_ms']:.1f} |    {scenario['slaf_total_ms']:.1f} |     {scenario['total_speedup']:.1f}x |     {scenario['memory_efficiency']:.1f}x | {scenario['description']} |"
         table_rows.append(row)
 
-    # Replace the table in the content
-    table_pattern = r"(\| Scenario.*?\n)(.*?)(\n.*?SUMMARY.*?\n)"
+    # Replace the table in the content - target the Metadata Filtering section specifically
+    table_pattern = r"(### Performance Results\n\n)(.*?)(\n\n\*\*Key Insight\*\*)"
 
     def replace_table(match):
-        header = match.group(1)
-        new_table = "\n".join(table_rows)
+        new_table = header + "\n" + separator + "\n" + "\n".join(table_rows)
         footer = match.group(3)
-        return header + new_table + "\n" + footer
+        return match.group(1) + new_table + "\n" + footer
 
     updated_content = re.sub(table_pattern, replace_table, content, flags=re.DOTALL)
 
@@ -509,20 +512,23 @@ def update_expression_queries_section(content: str, summary: dict[str, Any]) -> 
     if not scenarios:
         return content
 
+    # Create the table header and separator
+    header = "| Scenario                 | Traditional Total (ms) | SLAF Total (ms) | Total Speedup | Memory Efficiency | Description          |"
+    separator = "| ------------------------ | ---------------------- | --------------- | ------------- | ----------------- | -------------------- |"
+
     # Create the table rows
     table_rows = []
-    for i, scenario in enumerate(scenarios[:5]):  # Use first 5 scenarios
-        row = f"| S{i + 1}       |   {scenario['h5ad_total_ms']:.1f} |    {scenario['slaf_total_ms']:.1f} |     {scenario['total_speedup']:.1f}x |     {scenario['memory_efficiency']:.1f}x | {scenario['description'][:50]}... |"
+    for i, scenario in enumerate(scenarios):  # Use all scenarios
+        row = f"| S{i + 1}       |   {scenario['h5ad_total_ms']:.1f} |    {scenario['slaf_total_ms']:.1f} |     {scenario['total_speedup']:.1f}x |     {scenario['memory_efficiency']:.1f}x | {scenario['description']} |"
         table_rows.append(row)
 
-    # Replace the table in the content
-    table_pattern = r"(\| Scenario.*?\n)(.*?)(\n.*?SUMMARY.*?\n)"
+    # Replace the table in the content - target the Lazy Slicing section specifically
+    table_pattern = r"(## \*\*Lazy Slicing \(Expression Analysis\)\*\*.*?\n\n### Performance Results\n\n)(.*?)(\n\n\*\*Key Insight\*\*)"
 
     def replace_table(match):
-        header = match.group(1)
-        new_table = "\n".join(table_rows)
+        new_table = header + "\n" + separator + "\n" + "\n".join(table_rows)
         footer = match.group(3)
-        return header + new_table + "\n" + footer
+        return match.group(1) + new_table + "\n" + footer
 
     updated_content = re.sub(table_pattern, replace_table, content, flags=re.DOTALL)
 
@@ -537,20 +543,23 @@ def update_scanpy_preprocessing_section(content: str, summary: dict[str, Any]) -
     if not scenarios:
         return content
 
+    # Create the table header and separator
+    header = "| Operation                     | Traditional Total (ms) | SLAF Total (ms) | Total Speedup | Memory Efficiency | Description          |"
+    separator = "| ----------------------------- | ---------------------- | --------------- | ------------- | ----------------- | -------------------- |"
+
     # Create the table rows
     table_rows = []
-    for i, scenario in enumerate(scenarios[:5]):  # Use first 5 scenarios
-        row = f"| S{i + 1}       |   {scenario['h5ad_total_ms']:.1f} |    {scenario['slaf_total_ms']:.1f} |     {scenario['total_speedup']:.1f}x |     {scenario['memory_efficiency']:.1f}x | {scenario['description'][:50]}... |"
+    for i, scenario in enumerate(scenarios):  # Use all scenarios
+        row = f"| S{i + 1}       |   {scenario['h5ad_total_ms']:.1f} |    {scenario['slaf_total_ms']:.1f} |     {scenario['total_speedup']:.1f}x |     {scenario['memory_efficiency']:.1f}x | {scenario['description']} |"
         table_rows.append(row)
 
-    # Replace the table in the content
-    table_pattern = r"(\| Scenario.*?\n)(.*?)(\n.*?SUMMARY.*?\n)"
+    # Replace the table in the content - target the Lazy Computation section specifically
+    table_pattern = r"(## \*\*Lazy Computation \(Preprocessing Pipelines\)\*\*.*?\n\n### Performance Results\n\n)(.*?)(\n\n\*\*Key Insight\*\*)"
 
     def replace_table(match):
-        header = match.group(1)
-        new_table = "\n".join(table_rows)
+        new_table = header + "\n" + separator + "\n" + "\n".join(table_rows)
         footer = match.group(3)
-        return header + new_table + "\n" + footer
+        return match.group(1) + new_table + "\n" + footer
 
     updated_content = re.sub(table_pattern, replace_table, content, flags=re.DOTALL)
 
@@ -580,8 +589,8 @@ def update_tokenizer_section(content: str, summary: dict[str, Any]) -> str:
         row = f"| {desc:<50} | {scenario['cells_per_sec']:>8,} | {scenario['tokens_per_sec']:>10,} | {scenario['batch_size']:>10} | {scenario['max_genes']:>10} | ~{scenario['batch_size'] // 100 * 10 + 10}% |"
         table_rows.append(row)
 
-    # Replace the table in the content
-    table_pattern = r"(\| Configuration.*?\n)(.*?)(\n\n\*\*Key Insights:\*\*)"
+    # Replace the table in the content - target the High-Throughput Dataloading section specifically
+    table_pattern = r"(## \*\*High-Throughput Dataloading for GPU Training\*\*.*?\n\n### Performance Results\n\n\| Configuration.*?\n.*?\n)(.*?)(\n\n\*\*Key Insights:\*\*)"
 
     def replace_table(match):
         new_table = header + "\n" + separator + "\n" + "\n".join(table_rows)

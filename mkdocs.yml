@@ -160,6 +160,7 @@ nav:
       - Lazy Processing: examples/lazy-processing.md
       - ML Training: examples/ml-training.md
       - SQL Queries: examples/sql-queries.md
+  - Benchmarks: benchmarks/performance.md
   - API Reference:
       - Core: api/core.md
       - Data: api/data.md

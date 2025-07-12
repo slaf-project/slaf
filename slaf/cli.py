@@ -588,12 +588,12 @@ def benchmark(
         False, "--verbose", "-v", help="Verbose output (for run/all actions)"
     ),
     results_file: str = typer.Option(
-        "comprehensive_benchmark_results.json",
+        "benchmarks/comprehensive_benchmark_results.json",
         "--results",
         help="Results file path (for summary action)",
     ),
     summary_file: str = typer.Option(
-        "benchmark_summary.json",
+        "benchmarks/benchmark_summary.json",
         "--summary",
         help="Summary file path (for docs action)",
     ),

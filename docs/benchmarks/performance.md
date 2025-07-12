@@ -46,12 +46,18 @@ cluster_cells = slaf.filter_cells(leiden=["0", "1", "2"])
 
 ### Performance Results
 
-| Scenario                | Traditional Total (ms) | SLAF Total (ms) | Total Speedup | Memory Efficiency |
-| ----------------------- | ---------------------- | --------------- | ------------- | ----------------- |
-| Cells with ≥500 genes   | 39.7                   | 9.9             | **4.0x**      | **4.9x**          |
-| Cells with ≤15% mt      | 22.4                   | 8.5             | **2.6x**      | **4.6x**          |
-| Cells in clusters 0,1,2 | 19.6                   | 9.1             | **2.1x**      | **5.0x**          |
-| High-quality cells      | 18.5                   | 8.3             | **2.2x**      | **6.1x**          |
+| Scenario | Traditional Total (ms) | SLAF Total (ms) | Total Speedup | Memory Efficiency | Description                                 |
+| -------- | ---------------------- | --------------- | ------------- | ----------------- | ------------------------------------------- |
+| S1       | 37.0                   | 9.8             | 3.8x          | 4.9x              | Cells with >=500 genes                      |
+| S2       | 19.8                   | 8.1             | 2.4x          | 4.6x              | Cells with <=15% mitochondrial genes        |
+| S3       | 20.5                   | 9.0             | 2.3x          | 4.6x              | Cells with low mitochondrial content        |
+| S4       | 19.7                   | 8.7             | 2.3x          | 5.0x              | Cells in clusters 0,1,2                     |
+| S5       | 20.3                   | 8.5             | 2.4x          | 5.6x              | Cells in largest cluster (0)                |
+| S6       | 18.6                   | 8.1             | 2.3x          | 5.5x              | Cells from batch_1                          |
+| S7       | 18.4                   | 8.5             | 2.2x          | 5.8x              | Cells in clusters 0,1 from batch_1          |
+| S8       | 18.6                   | 8.1             | 2.3x          | 6.1x              | High-quality cells (>=1000 genes, <=10% mt) |
+| S9       | 18.5                   | 9.3             | 2.0x          | 5.8x              | Cells with 800-2000 total counts            |
+| S10      | 19.0                   | 9.0             | 2.1x          | 4.9x              | Cells with 200-1500 genes                   |
 
 **Key Insight**: The speedup comes from **faster metadata loading** (SLAF loads only metadata vs h5ad loading everything), while memory efficiency comes from **loading only the data you need**. This is similar to using Polars/DuckDB for structured data queries instead of pandas.
 
@@ -102,13 +108,19 @@ result = slaf.get_submatrix(
 
 ### Performance Results
 
-| Scenario                 | Traditional Total (ms) | SLAF Total (ms) | Total Speedup | Memory Efficiency |
-| ------------------------ | ---------------------- | --------------- | ------------- | ----------------- |
-| Single cell expression   | 18.9                   | 10.7            | **1.8x**      | **6.4x**          |
-| Two cells                | 18.5                   | 10.6            | **1.7x**      | **6.0x**          |
-| Single gene across cells | 21.4                   | 21.5            | 1.0x          | **6.4x**          |
-| 100×50 submatrix         | 18.4                   | 44.4            | 0.4x          | **6.0x**          |
-| 500×500 submatrix        | 18.3                   | 52.0            | 0.4x          | **1.2x**          |
+| Scenario | Traditional Total (ms) | SLAF Total (ms) | Total Speedup | Memory Efficiency | Description                  |
+| -------- | ---------------------- | --------------- | ------------- | ----------------- | ---------------------------- |
+| S1       | 18.5                   | 11.1            | 1.7x          | 6.4x              | Single cell expression       |
+| S2       | 20.3                   | 11.4            | 1.8x          | 6.2x              | Another single cell          |
+| S3       | 19.2                   | 11.0            | 1.7x          | 6.0x              | Two cells                    |
+| S4       | 18.3                   | 11.0            | 1.7x          | 5.8x              | Three cells                  |
+| S5       | 18.3                   | 21.3            | 0.9x          | 6.4x              | Single gene across all cells |
+| S6       | 18.3                   | 21.9            | 0.8x          | 6.3x              | Another single gene          |
+| S7       | 19.2                   | 26.8            | 0.7x          | 6.1x              | Two genes                    |
+| S8       | 19.1                   | 29.7            | 0.6x          | 6.1x              | Three genes                  |
+| S9       | 18.2                   | 44.9            | 0.4x          | 6.0x              | 100x50 submatrix             |
+| S10      | 18.8                   | 45.8            | 0.4x          | 3.5x              | 500x100 submatrix            |
+| S11      | 18.6                   | 51.3            | 0.4x          | 1.2x              | 500x500 submatrix            |
 
 **Key Insight**: The primary advantage is **memory efficiency** - SLAF loads only the slice of interest rather than the entire dataset. Speed benefits depend on slice size vs dataset size. This is similar to Zarr's chunked array access patterns.
 
@@ -168,13 +180,25 @@ expression = adata.X[cell_ids, gene_ids].compute()  # LazyExpressionMatrix.compu
 
 ### Performance Results
 
-| Operation                     | Traditional Total (ms) | SLAF Total (ms) | Total Speedup | Memory Efficiency |
-| ----------------------------- | ---------------------- | --------------- | ------------- | ----------------- |
-| Calculate QC metrics          | 115.4                  | 55.0            | **2.1x**      | **13.3x**         |
-| Filter cells (min_counts=500) | 23.6                   | 233.8           | 0.1x          | **1.0x**          |
-| Filter genes (min_counts=10)  | 32.7                   | 232.8           | 0.1x          | **1.7x**          |
-| Normalize total               | 25.2                   | 419.8           | 0.1x          | **1.7x**          |
-| Log1p transformation          | 23.1                   | 208.8           | 0.1x          | **0.6x**          |
+| Operation | Traditional Total (ms) | SLAF Total (ms) | Total Speedup | Memory Efficiency | Description                                        |
+| --------- | ---------------------- | --------------- | ------------- | ----------------- | -------------------------------------------------- |
+| S1        | 115.3                  | 45.7            | 2.5x          | 13.3x             | Calculate QC metrics                               |
+| S2        | 28.7                   | 220.8           | 0.1x          | 1.0x              | Filter cells (min_counts=500, min_genes=200)       |
+| S3        | 21.5                   | 21.9            | 1.0x          | 7.2x              | Filter cells (min_counts=1000, min_genes=500)      |
+| S4        | 31.0                   | 230.1           | 0.1x          | 1.7x              | Filter cells (max_counts=5000, max_genes=2500)     |
+| S5        | 31.0                   | 210.7           | 0.1x          | 1.7x              | Filter genes (min_counts=10, min_cells=5)          |
+| S6        | 30.5                   | 217.1           | 0.1x          | 1.7x              | Filter genes (min_counts=50, min_cells=10)         |
+| S7        | 24.9                   | 407.0           | 0.1x          | 1.7x              | Normalize total (target_sum=1e4)                   |
+| S8        | 20.7                   | 409.0           | 0.1x          | 1.7x              | Normalize total (target_sum=1e6)                   |
+| S9        | 21.5                   | 196.4           | 0.1x          | 0.6x              | Log1p transformation                               |
+| S10       | 24.9                   | 26.7            | 0.9x          | 10.4x             | Find highly variable genes                         |
+| S11       | 25.5                   | 27.1            | 0.9x          | 10.4x             | Find top 2000 highly variable genes                |
+| S12       | 36.5                   | 304.7           | 0.1x          | 0.9x              | QC metrics + cell filtering + gene filtering       |
+| S13       | 22.1                   | 139.0           | 0.2x          | 6.5x              | Normalize total + slice 100x50 submatrix (lazy)    |
+| S14       | 22.7                   | 45.4            | 0.5x          | 6.4x              | Log1p + slice 200x100 submatrix (lazy)             |
+| S15       | 23.4                   | 146.2           | 0.2x          | 5.5x              | Normalize + Log1p + slice 500x250 submatrix (lazy) |
+| S16       | 23.8                   | 51.2            | 0.5x          | 6.6x              | Normalize + Log1p + mean per gene (lazy)           |
+| S17       | 21.9                   | 50.3            | 0.4x          | 6.5x              | Normalize + Log1p + variance per cell (lazy)       |
 
 **Key Insight**: Lazy computation enables **complex preprocessing pipelines** that would cause memory explosions with traditional tools. The computation cost is paid when materializing results, but the memory efficiency enables workflows impossible with eager processing. This is similar to Dask's delayed computation patterns.
 
@@ -182,21 +206,20 @@ expression = adata.X[cell_ids, gene_ids].compute()  # LazyExpressionMatrix.compu
 
 ## **High-Throughput Dataloading for GPU Training**
 
-SLAF provides **streaming tokenization** that converts single-cell data into training-ready sequences for transformer models like scGPT and Geneformer.
+SLAF provides **high-throughput streaming** for GPU training workloads, enabling efficient tokenization and batching for large language models like scGPT and Geneformer.
 
 ### Performance Results
 
-| Configuration                  | Cells/sec | Tokens/sec | Batch Size | Max Genes | GPU Utilization |
-| ------------------------------ | --------- | ---------- | ---------- | --------- | --------------- |
-| scGPT small batch (32 cells, 512 genes)            |    1,861 |  1,909,606 |         32 |        512 | ~10% |
-| scGPT medium batch (128 cells, 1024 genes)         |    5,195 |  5,329,646 |        128 |       1024 | ~20% |
-| scGPT large batch (512 cells, 1024 genes)          |    9,250 |  9,490,393 |        512 |       1024 | ~60% |
-| scGPT xlarge batch (2048 cells, 1024 genes)        |   11,146 | 11,435,873 |       2048 |       1024 | ~210% |
-| Geneformer small batch (32 cells, 1024 genes)      |    1,933 |  1,979,732 |         32 |       1024 | ~10% |
-| Geneformer medium batch (128 cells, 2048 genes)    |    5,140 | 10,527,183 |        128 |       2048 | ~20% |
-| Geneformer large batch (512 cells, 2048 genes)     |   10,889 | 22,300,658 |        512 |       2048 | ~60% |
-| Geneformer xlarge batch (2048 cells, 2048 genes)   |   14,536 | 29,769,583 |       2048 |       2048 | ~210% |
-
+| Configuration                                    | Cells/sec | Tokens/sec | Batch Size | Max Genes | GPU Utilization |
+| ------------------------------------------------ | --------- | ---------- | ---------- | --------- | --------------- |
+| scGPT small batch (32 cells, 512 genes)          | 1,861     | 1,909,606  | 32         | 512       | ~10%            |
+| scGPT medium batch (128 cells, 1024 genes)       | 5,195     | 5,329,646  | 128        | 1024      | ~20%            |
+| scGPT large batch (512 cells, 1024 genes)        | 9,250     | 9,490,393  | 512        | 1024      | ~60%            |
+| scGPT xlarge batch (2048 cells, 1024 genes)      | 11,146    | 11,435,873 | 2048       | 1024      | ~210%           |
+| Geneformer small batch (32 cells, 1024 genes)    | 1,933     | 1,979,732  | 32         | 1024      | ~10%            |
+| Geneformer medium batch (128 cells, 2048 genes)  | 5,140     | 10,527,183 | 128        | 2048      | ~20%            |
+| Geneformer large batch (512 cells, 2048 genes)   | 10,889    | 22,300,658 | 512        | 2048      | ~60%            |
+| Geneformer xlarge batch (2048 cells, 2048 genes) | 14,536    | 29,769,583 | 2048       | 2048      | ~210%           |
 
 **Key Insights:**
 

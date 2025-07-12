@@ -8,3 +8,8 @@
 site
 .ruff_cache
 .mypy_cache
+# SLAF benchmark outputs
+benchmarks/comprehensive_benchmark_results.json
+benchmarks/benchmark_summary.json
+benchmarks/benchmark_output.txt
+benchmarks/benchmark_results.json
