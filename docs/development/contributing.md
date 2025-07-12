@@ -196,6 +196,46 @@ To include examples in documentation:
 - Review the [SLAF API reference](../api/core.md)
 - Open an issue on GitHub for specific problems
 
+## Running Benchmarks
+
+SLAF includes a comprehensive benchmarking system to measure performance improvements. The benchmark suite compares SLAF vs h5ad across multiple domains including cell filtering, gene filtering, expression queries, and more.
+
+### Quick Start
+
+```bash
+# Run all benchmarks on a dataset
+slaf benchmark run --datasets pbmc3k --auto-convert
+
+# Run specific benchmark types
+slaf benchmark run --datasets pbmc3k --types cell_filtering,expression_queries
+
+# Run complete workflow (benchmarks + summary + docs)
+slaf benchmark all --datasets pbmc3k --auto-convert
+```
+
+### Available Commands
+
+- `run`: Run benchmarks on specified datasets
+- `summary`: Generate documentation summary from results
+- `docs`: Update performance.md with benchmark data
+- `all`: Run complete workflow (benchmarks + summary + docs)
+
+### Benchmark Types
+
+Available benchmark types include:
+
+- `cell_filtering`: Metadata-only cell filtering operations
+- `gene_filtering`: Gene filtering and selection
+- `expression_queries`: Expression matrix slicing and queries
+- `scanpy_preprocessing`: Scanpy preprocessing pipeline operations
+- `tokenizers`: Tokenizer throughput for ML training
+- `dataloaders`: Dataloader overhead measurements
+- `anndata_ops`: Basic AnnData operations
+- `multi_process_scaling`: Multi-process scaling tests
+- `data_vs_tokenization_timing`: Timing breakdown analysis
+
+For detailed information about the benchmark system, including advanced usage, troubleshooting, and contributing new benchmarks, see the [Benchmarks Guide](benchmarks.md).
+
 ## CI/CD
 
 The project uses GitHub Actions for automated testing and deployment:

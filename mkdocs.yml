@@ -168,6 +168,7 @@ nav:
   - Development:
       - For Contributors: development/contributing.md
       - For Maintainers: development/maintaining.md
+      - Benchmarks: development/benchmarks.md
 
 # Extra
 extra:

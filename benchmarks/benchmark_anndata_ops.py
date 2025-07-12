@@ -128,7 +128,7 @@ def _measure_h5ad_anndata_op(h5ad_path: str, scenario: dict):
 
     elif scenario["type"] == "expression":
         if scenario["operation"] == "shape":
-            result = adata.X.shape
+            result = adata.X.shape if adata.X is not None else (0, 0)
         elif scenario["operation"] == "nnz":
             X = adata.X
             if X is None:
@@ -146,13 +146,16 @@ def _measure_h5ad_anndata_op(h5ad_path: str, scenario: dict):
                 result = 0.0
             elif hasattr(X, "nnz"):
                 nnz = X.nnz
-                result = nnz / (X.shape[0] * X.shape[1])
+                shape = X.shape
+                result = nnz / (shape[0] * shape[1])
             elif hasattr(X, "getnnz"):
                 nnz = X.getnnz()
-                result = nnz / (X.shape[0] * X.shape[1])
+                shape = X.shape
+                result = nnz / (shape[0] * shape[1])
             else:
                 nnz = np.count_nonzero(X)
-                result = nnz / (X.shape[0] * X.shape[1])
+                shape = X.shape
+                result = nnz / (shape[0] * shape[1])
     else:
         raise ValueError(f"Unknown scenario type: {scenario['type']}")
 
@@ -200,36 +203,49 @@ def _measure_slaf_anndata_op(slaf_path: str, scenario: dict):
     if scenario["type"] == "expression_slicing":
         if scenario["operation"] == "single_cell":
             cell_id = scenario["cell_id"]
-            result = slaf.get_cell_expression(cell_id)
+            # Convert integer index to cell ID string
+            cell_ids = slaf.obs.index[cell_id : cell_id + 1].tolist()
+            result = slaf.get_cell_expression(cell_ids[0])
         elif scenario["operation"] == "single_gene":
             gene_id = scenario["gene_id"]
-            result = slaf.get_gene_expression(gene_id)
+            # Convert integer index to gene ID string
+            gene_ids = slaf.var.index[gene_id : gene_id + 1].tolist()
+            result = slaf.get_gene_expression(gene_ids[0])
         elif scenario["operation"] == "submatrix":
             cell_start, cell_end = scenario["cell_range"]
             gene_start, gene_end = scenario["gene_range"]
-            result = slaf.get_expression_submatrix(
-                cell_start, cell_end, gene_start, gene_end
+            result = slaf.get_submatrix(
+                cell_selector=slice(cell_start, cell_end),
+                gene_selector=slice(gene_start, gene_end),
             )
 
     elif scenario["type"] == "metadata":
         if scenario["operation"] == "obs_access":
-            result = slaf.get_cells()
+            result = slaf.obs
         elif scenario["operation"] == "var_access":
-            result = slaf.get_genes()
+            result = slaf.var
         elif scenario["operation"] == "obs_subset":
             columns = scenario["columns"]
-            result = slaf.get_cells(columns=columns)
+            result = slaf.obs[columns]
         elif scenario["operation"] == "var_subset":
             columns = scenario["columns"]
-            result = slaf.get_genes(columns=columns)
+            result = slaf.var[columns]
 
     elif scenario["type"] == "expression":
         if scenario["operation"] == "shape":
             result = slaf.shape
         elif scenario["operation"] == "nnz":
-            result = slaf.get_nnz()
+            # Count non-zero elements using SQL query
+            nnz_result = slaf.query(
+                "SELECT COUNT(*) as nnz FROM expression WHERE value > 0"
+            )
+            result = nnz_result.iloc[0]["nnz"]
         elif scenario["operation"] == "density":
-            nnz = slaf.get_nnz()
+            # Count non-zero elements and calculate density
+            nnz_result = slaf.query(
+                "SELECT COUNT(*) as nnz FROM expression WHERE value > 0"
+            )
+            nnz = nnz_result.iloc[0]["nnz"]
             shape = slaf.shape
             result = nnz / (shape[0] * shape[1])
     else:

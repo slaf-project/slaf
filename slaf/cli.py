@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import typer
 
@@ -377,18 +378,43 @@ def generate_changelog(version: str) -> None:
 def release(
     action: str = typer.Argument(
         ...,
-        help="Action to perform",
+        help="Action to perform: prepare, publish, test, build, or check",
         case_sensitive=False,
     ),
     version: str | None = typer.Option(
-        None, "--version", "-v", help="New version (e.g., 0.1.1)"
+        None,
+        "--version",
+        "-v",
+        help="New version (e.g., 0.1.1) (for prepare/publish actions)",
     ),
     release_type: str = typer.Option(
-        "patch", "--type", "-t", help="Release type", case_sensitive=False
+        "patch",
+        "--type",
+        "-t",
+        help="Release type (for prepare action)",
+        case_sensitive=False,
     ),
-    no_tag: bool = typer.Option(False, "--no-tag", help="Don't create git tag"),
+    no_tag: bool = typer.Option(
+        False, "--no-tag", help="Don't create git tag (for publish action)"
+    ),
 ):
-    """Manage SLAF releases and publishing."""
+    r"""
+    Manage SLAF releases and publishing.
+
+    Actions:
+      prepare - Prepare a new release (update version, generate changelog)
+      publish - Publish a release (build, test, tag, prepare for PyPI)
+      test    - Run the test suite
+      build   - Build the package
+      check   - Build and check the package
+
+    Examples:
+      slaf release prepare --type minor
+      slaf release publish --version 0.2.0
+      slaf release test
+      slaf release build
+      slaf release check
+    """
 
     if action.lower() == "prepare":
         if not version:
@@ -529,6 +555,304 @@ def query(
     except Exception as e:
         typer.echo(f"❌ Query failed: {e}")
         raise typer.Exit(1) from e
+
+
+@app.command()
+def benchmark(
+    action: str = typer.Argument(
+        ...,
+        help="Action to perform: run, summary, docs, or all",
+        case_sensitive=False,
+    ),
+    datasets: list[str] = typer.Option(
+        ["pbmc3k"],
+        "--datasets",
+        "-d",
+        help="Dataset names to benchmark (for run/all actions)",
+    ),
+    data_dir: str = typer.Option(
+        None, "--data-dir", help="Directory containing datasets (for run/all actions)"
+    ),
+    types: list[str] = typer.Option(
+        None,
+        "--types",
+        "-t",
+        help="Specific benchmark types to run (for run/all actions)",
+    ),
+    auto_convert: bool = typer.Option(
+        False,
+        "--auto-convert",
+        help="Auto-convert h5ad to SLAF if needed (for run/all actions)",
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Verbose output (for run/all actions)"
+    ),
+    results_file: str = typer.Option(
+        "comprehensive_benchmark_results.json",
+        "--results",
+        help="Results file path (for summary action)",
+    ),
+    summary_file: str = typer.Option(
+        "benchmark_summary.json",
+        "--summary",
+        help="Summary file path (for docs action)",
+    ),
+    docs_file: str = typer.Option(
+        "docs/benchmarks/performance.md",
+        "--docs",
+        help="Performance docs file path (for docs action)",
+    ),
+):
+    r"""
+    Manage SLAF benchmarks and performance testing.
+
+    Actions:
+      run     - Run benchmarks on specified datasets
+      summary - Generate documentation summary from results
+      docs    - Update performance.md with benchmark data
+      all     - Run complete workflow (benchmarks + summary + docs)
+
+    Examples:
+      slaf benchmark run --datasets pbmc3k --auto-convert
+      slaf benchmark summary --results comprehensive_benchmark_results.json
+      slaf benchmark docs --summary benchmark_summary.json
+      slaf benchmark all --datasets pbmc3k --auto-convert
+    """
+
+    # Import benchmark functions
+    try:
+        import sys
+        from pathlib import Path
+
+        # Add benchmarks directory to path
+        benchmarks_dir = Path(__file__).parent.parent / "benchmarks"
+        if benchmarks_dir.exists():
+            sys.path.insert(0, str(benchmarks_dir))
+
+        from benchmark import (
+            generate_benchmark_summary,
+            run_benchmark_suite,
+            update_performance_docs,
+        )  # type: ignore
+    except ImportError as e:
+        typer.echo(f"❌ Failed to import benchmark modules: {e}")
+        typer.echo("Make sure you're in the project root directory")
+        raise typer.Exit(1) from e
+
+    # Set default data directory
+    if not data_dir:
+        data_dir = str(Path(__file__).parent.parent.parent / "slaf-datasets")
+
+    if action.lower() == "run":
+        typer.echo("🚀 Running SLAF benchmarks...")
+
+        data_path = Path(data_dir)
+        all_dataset_results = {}
+
+        for dataset_name in datasets:
+            typer.echo(f"\n🎯 Benchmarking dataset: {dataset_name}")
+            typer.echo("=" * 60)
+
+            # Find dataset files
+            h5ad_pattern = f"{dataset_name}*.h5ad"
+            h5ad_files = list(data_path.glob(h5ad_pattern))
+
+            if not h5ad_files:
+                typer.echo(f"❌ No h5ad file found for {dataset_name}")
+                typer.echo(f"   Looking for: {data_path / h5ad_pattern}")
+                continue
+
+            h5ad_path = h5ad_files[0]
+            slaf_path = data_path / f"{dataset_name}.slaf"
+
+            # Run benchmark suite for this dataset
+            dataset_results = run_benchmark_suite(
+                h5ad_path=str(h5ad_path),
+                slaf_path=str(slaf_path),
+                benchmark_types=types,
+                verbose=verbose,
+                auto_convert=auto_convert,
+            )
+
+            if dataset_results:
+                all_dataset_results[dataset_name] = dataset_results
+
+        # Save results
+        if all_dataset_results:
+            import json
+
+            import numpy as np
+
+            # Prepare results for JSON serialization
+            json_results: dict[str, Any] = {}
+            for dataset, results in all_dataset_results.items():
+                json_results[dataset] = {}
+                for benchmark_type, type_results in results.items():
+                    if benchmark_type == "data_vs_tokenization_timing":
+                        # Handle timing breakdown results (dictionary format)
+                        json_results[dataset][benchmark_type] = {}
+                        for k, v in type_results.items():
+                            if isinstance(v, dict):
+                                clean_dict = {}
+                                for dict_k, dict_v in v.items():
+                                    if isinstance(dict_v, np.integer | np.floating):
+                                        clean_dict[dict_k] = float(dict_v)
+                                    elif hasattr(dict_v, "to_dict"):
+                                        clean_dict[dict_k] = dict_v.to_dict()
+                                    elif hasattr(dict_v, "tolist"):
+                                        clean_dict[dict_k] = dict_v.tolist()
+                                    else:
+                                        clean_dict[dict_k] = dict_v
+                                json_results[dataset][benchmark_type][k] = clean_dict
+                            else:
+                                json_results[dataset][benchmark_type][k] = v
+                    else:
+                        # Handle standard list-based results
+                        json_results[dataset][benchmark_type] = []
+                        for result in type_results:
+                            clean_result = {}
+                            for k, v in result.items():
+                                if isinstance(v, np.integer | np.floating):
+                                    clean_result[k] = float(v)
+                                elif hasattr(v, "to_dict"):  # Handle pandas objects
+                                    clean_result[k] = v.to_dict()
+                                elif hasattr(v, "tolist"):  # Handle numpy arrays
+                                    clean_result[k] = v.tolist()
+                                else:
+                                    clean_result[k] = v
+                            json_results[dataset][benchmark_type].append(clean_result)
+
+            # Save comprehensive results
+            with open(results_file, "w") as f:
+                json.dump(json_results, f, indent=2)
+
+            typer.echo(f"\n💾 Results saved to: {results_file}")
+
+    elif action.lower() == "summary":
+        typer.echo("📊 Generating benchmark summary...")
+
+        if not Path(results_file).exists():
+            typer.echo(f"❌ Results file not found: {results_file}")
+            raise typer.Exit(1) from None
+
+        generate_benchmark_summary(results_file, summary_file)
+
+    elif action.lower() == "docs":
+        typer.echo("📝 Updating performance documentation...")
+
+        if not Path(summary_file).exists():
+            typer.echo(f"❌ Summary file not found: {summary_file}")
+            raise typer.Exit(1) from None
+
+        if not Path(docs_file).exists():
+            typer.echo(f"❌ Docs file not found: {docs_file}")
+            raise typer.Exit(1) from None
+
+        update_performance_docs(summary_file, docs_file)
+
+    elif action.lower() == "all":
+        typer.echo("🚀 Running complete benchmark workflow...")
+
+        # Step 1: Run benchmarks
+        typer.echo("\n📊 Step 1: Running benchmarks...")
+        data_path = Path(data_dir)
+        all_dataset_results = {}
+
+        for dataset_name in datasets:
+            typer.echo(f"\n🎯 Benchmarking dataset: {dataset_name}")
+            typer.echo("=" * 60)
+
+            # Find dataset files
+            h5ad_pattern = f"{dataset_name}*.h5ad"
+            h5ad_files = list(data_path.glob(h5ad_pattern))
+
+            if not h5ad_files:
+                typer.echo(f"❌ No h5ad file found for {dataset_name}")
+                typer.echo(f"   Looking for: {data_path / h5ad_pattern}")
+                continue
+
+            h5ad_path = h5ad_files[0]
+            slaf_path = data_path / f"{dataset_name}.slaf"
+
+            # Run benchmark suite for this dataset
+            dataset_results = run_benchmark_suite(
+                h5ad_path=str(h5ad_path),
+                slaf_path=str(slaf_path),
+                benchmark_types=types,
+                verbose=verbose,
+                auto_convert=auto_convert,
+            )
+
+            if dataset_results:
+                all_dataset_results[dataset_name] = dataset_results
+
+        # Save comprehensive results
+        if all_dataset_results:
+            import json
+
+            import numpy as np
+
+            # Prepare results for JSON serialization
+            json_results = {}
+            for dataset, results in all_dataset_results.items():
+                json_results[dataset] = {}
+                for benchmark_type, type_results in results.items():
+                    if benchmark_type == "data_vs_tokenization_timing":
+                        # Handle timing breakdown results (dictionary format)
+                        json_results[dataset][benchmark_type] = {}
+                        for k, v in type_results.items():
+                            if isinstance(v, dict):
+                                clean_dict = {}
+                                for dict_k, dict_v in v.items():
+                                    if isinstance(dict_v, np.integer | np.floating):
+                                        clean_dict[dict_k] = float(dict_v)
+                                    elif hasattr(dict_v, "to_dict"):
+                                        clean_dict[dict_k] = dict_v.to_dict()
+                                    elif hasattr(dict_v, "tolist"):
+                                        clean_dict[dict_k] = dict_v.tolist()
+                                    else:
+                                        clean_dict[dict_k] = dict_v
+                                json_results[dataset][benchmark_type][k] = clean_dict
+                            else:
+                                json_results[dataset][benchmark_type][k] = v
+                    else:
+                        # Handle standard list-based results
+                        json_results[dataset][benchmark_type] = []
+                        for result in type_results:
+                            clean_result = {}
+                            for k, v in result.items():
+                                if isinstance(v, np.integer | np.floating):
+                                    clean_result[k] = float(v)
+                                elif hasattr(v, "to_dict"):  # Handle pandas objects
+                                    clean_result[k] = v.to_dict()
+                                elif hasattr(v, "tolist"):  # Handle numpy arrays
+                                    clean_result[k] = v.tolist()
+                                else:
+                                    clean_result[k] = v
+                            json_results[dataset][benchmark_type].append(clean_result)
+
+            # Save comprehensive results
+            with open(results_file, "w") as f:
+                json.dump(json_results, f, indent=2)
+
+            typer.echo(f"\n💾 Results saved to: {results_file}")
+
+            # Step 2: Generate summary
+            typer.echo("\n📊 Step 2: Generating summary...")
+            generate_benchmark_summary(results_file, summary_file)
+
+            # Step 3: Update docs
+            typer.echo("\n📊 Step 3: Updating documentation...")
+            update_performance_docs(summary_file, docs_file)
+
+            typer.echo("\n✅ Complete workflow finished!")
+        else:
+            typer.echo("\n❌ No benchmarks completed successfully")
+
+    else:
+        typer.echo(f"❌ Unknown action: {action}")
+        typer.echo("Available actions: run, summary, docs, all")
+        raise typer.Exit(1) from None
 
 
 if __name__ == "__main__":

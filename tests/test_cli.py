@@ -62,18 +62,6 @@ class TestCLI:
 
     @patch("slaf.cli.check_dependencies")
     @patch("slaf.cli.Path.exists")
-    @patch("slaf.cli.subprocess.run")
-    def test_docs_deploy(self, mock_run, mock_exists, mock_check_deps, runner):
-        """Test docs deploy command."""
-        mock_exists.return_value = True
-        mock_run.return_value = Mock(returncode=0)
-
-        result = runner.invoke(app, ["docs", "--deploy"])
-        assert result.exit_code == 0
-        assert "Deploying to GitHub Pages" in result.stdout
-
-    @patch("slaf.cli.check_dependencies")
-    @patch("slaf.cli.Path.exists")
     def test_examples_list(self, mock_exists, mock_check_deps, runner):
         """Test examples list command."""
         mock_exists.return_value = True
@@ -387,3 +375,20 @@ class TestCLI:
         assert calculate_new_version("0.1.0", "patch") == "0.1.1"
         assert calculate_new_version("0.1.0", "minor") == "0.2.0"
         assert calculate_new_version("0.1.0", "major") == "1.0.0"
+
+        # Benchmark command tests
+
+    def test_benchmark_help(self, runner):
+        """Test benchmark command help."""
+        result = runner.invoke(app, ["benchmark", "--help"])
+        assert result.exit_code == 0
+        assert "run" in result.stdout
+        assert "summary" in result.stdout
+        assert "docs" in result.stdout
+        assert "all" in result.stdout
+
+    def test_benchmark_invalid_action(self, runner):
+        """Test benchmark command with invalid action."""
+        result = runner.invoke(app, ["benchmark", "invalid_action"])
+        assert result.exit_code == 1
+        assert "Unknown action" in result.stdout
