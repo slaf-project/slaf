@@ -271,5 +271,5 @@ Benefits:
 ## Next Steps
 
 - Learn about [Migrating to SLAF](../user-guide/migrating-to-slaf.md)
-- Explore [SQL Queries](../user-guide/sql-queries.md)
+- Explore [SQL Queries](../examples/sql-queries.md)
 - See [Examples](../examples/getting-started.md) for real-world usage

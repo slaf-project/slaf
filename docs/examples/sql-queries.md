@@ -143,3 +143,8 @@ results = slaf_array.query("""
     WHERE e.expression > cs.avg_counts
 """)
 ```
+
+## Next Steps
+
+- Explore the [User Guide](../user-guide/how-slaf-works.md) for detailed concepts
+- Check the [API Reference](../api/core.md) for complete documentation

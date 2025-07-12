@@ -99,19 +99,102 @@ slaf docs --build
 
 ### Working with Examples
 
-Our examples are written in marimo, that gets installed automatically with the dev dependencies.
+Our examples are written in [Marimo](https://marimo.io/) notebooks. Marimo provides an excellent interactive environment for data science and machine learning workflows.
+
+#### Interactive Development
 
 ```shell
 # Edit examples interactively
 cd examples
 marimo edit
 
-# After editing, export to HTML for docs
+# Run a specific example
+marimo edit examples/01-getting-started.py
+```
+
+#### Exporting Examples for Documentation
+
+After editing examples, export them to HTML for the documentation:
+
+```shell
+# Export all examples to HTML
 slaf examples --export
+
+# Export a specific example
+marimo export html examples/01-getting-started.py -o examples/01-getting-started.html
 
 # List available examples
 slaf examples --list
 ```
+
+#### Programmatic Export
+
+You can also export notebooks programmatically:
+
+```python
+import marimo
+
+# Export notebook to HTML
+marimo.export_html("examples/01-getting-started.py", "examples/01-getting-started.html")
+```
+
+#### Example Structure
+
+Our examples follow a consistent structure:
+
+- **01-getting-started.py**: Comprehensive introduction to SLAF
+- **02-lazy-processing.py**: Demonstrates lazy evaluation and processing
+- **03-ml-training-pipeline.py**: Shows ML training workflows
+
+#### Best Practices for Examples
+
+**For Interactive Use:**
+
+- Use descriptive cell names
+- Include markdown cells for explanations
+- Add progress indicators for long-running operations
+- Use the variables panel to explore data
+
+**For Documentation:**
+
+- Keep examples focused and concise
+- Include clear explanations in markdown cells
+- Use consistent formatting
+- Test examples with different datasets
+
+**For Export:**
+
+- Ensure all dependencies are available
+- Test the exported HTML in different browsers
+- Optimize for readability in static format
+- Include navigation if exporting multiple notebooks
+
+#### Embedding Examples in Documentation
+
+To include examples in documentation:
+
+1. Export the notebooks to HTML using Marimo's built-in export
+2. Place the HTML files in your documentation directory
+3. Include them using iframes:
+
+```html
+<iframe src="01-getting-started.html" width="100%" height="800px"></iframe>
+```
+
+#### Troubleshooting Examples
+
+**Common Issues:**
+
+1. **Import errors**: Ensure all dependencies are installed
+2. **Data not found**: Check file paths and dataset availability
+3. **Memory issues**: Use lazy evaluation for large datasets
+4. **Export problems**: Verify Marimo version and export options
+
+**Getting Help:**
+
+- Check the [Marimo documentation](https://docs.marimo.io/)
+- Review the [SLAF API reference](../api/core.md)
+- Open an issue on GitHub for specific problems
 
 ## CI/CD
 

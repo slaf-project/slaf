@@ -52,7 +52,6 @@ def docs(
     serve: bool = typer.Option(
         False, "--serve", "-s", help="Serve documentation locally"
     ),
-    deploy: bool = typer.Option(False, "--deploy", "-d", help="Deploy to GitHub Pages"),
 ):
     """Manage SLAF documentation."""
     check_dependencies()
@@ -81,16 +80,7 @@ def docs(
             typer.echo(f"❌ Failed to start server: {e}")
             raise typer.Exit(1) from e
 
-    if deploy:
-        typer.echo("🚀 Deploying to GitHub Pages...")
-        try:
-            subprocess.run([sys.executable, "-m", "mkdocs", "gh-deploy"], check=True)
-            typer.echo("✅ Documentation deployed successfully!")
-        except subprocess.CalledProcessError as e:
-            typer.echo(f"❌ Failed to deploy: {e}")
-            raise typer.Exit(1) from e
-
-    if not any([build, serve, deploy]):
+    if not any([build, serve]):
         # Default to serve if no options specified
         typer.echo("🌐 Starting documentation server...")
         typer.echo("📖 Open http://127.0.0.1:8000 in your browser")

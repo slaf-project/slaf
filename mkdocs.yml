@@ -154,25 +154,20 @@ nav:
   - Quick Start: getting-started/quickstart.md
   - User Guide:
       - How SLAF Works: user-guide/how-slaf-works.md
-      - Command Line Interface: user-guide/cli.md
       - Migrating to SLAF: user-guide/migrating-to-slaf.md
-      - SQL Queries: user-guide/sql-queries.md
   - Examples:
       - Getting Started: examples/getting-started.md
       - Lazy Processing: examples/lazy-processing.md
       - ML Training: examples/ml-training.md
+      - SQL Queries: examples/sql-queries.md
   - API Reference:
       - Core: api/core.md
       - Data: api/data.md
       - Integrations: api/integrations.md
       - ML: api/ml.md
   - Development:
-      - Overview: development/index.md
-      - Contributing: development/contributing.md
-      - Documentation: development/documentation.md
-      - CI/CD Pipeline: development/ci-cd.md
-      - Publishing: development/publishing.md
-      - Docstring Template: development/docstring_template.md
+      - For Contributors: development/contributing.md
+      - For Maintainers: development/maintaining.md
 
 # Extra
 extra:
