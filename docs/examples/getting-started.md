@@ -150,6 +150,6 @@ You can customize the examples for your specific use case:
 
 ## Next Steps
 
-- Explore the [User Guide](../user-guide/core-concepts.md) for detailed concepts
+- Explore the [User Guide](../user-guide/how-slaf-works.md) for detailed concepts
 - Check the [API Reference](../api/core.md) for complete documentation
 - Try the [other examples](lazy-processing.md) for advanced usage

@@ -256,7 +256,7 @@ slaf version
 
 ## Next Steps
 
-- Learn about [Core Concepts](core-concepts.md)
-- Explore [Data Loading](data-loading.md)
+- Learn about [How SLAF Works](how-slaf-works.md)
+- Explore [Migrating to SLAF](migrating-to-slaf.md)
 - Check the [API Reference](../api/core.md)
 - Try the [Examples](../examples/getting-started.md)

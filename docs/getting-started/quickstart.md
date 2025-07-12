@@ -268,7 +268,7 @@ slaf convert data.h5ad output.slaf
 
 ## Next Steps
 
-- Read the [User Guide](../user-guide/core-concepts.md) for detailed concepts
+- Read the [User Guide](../user-guide/how-slaf-works.md) for detailed concepts
 - Explore [Examples](../examples/getting-started.md) for real-world use cases
 - Check the [API Reference](../api/core.md) for complete documentation
 

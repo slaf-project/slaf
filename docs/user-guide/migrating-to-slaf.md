@@ -1,4 +1,4 @@
-# Data Loading
+# Migrating to SLAF
 
 This guide covers how to load data into SLAF from various formats and sources.
 
