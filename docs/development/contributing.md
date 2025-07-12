@@ -2,39 +2,34 @@
 
 Thank you for your interest in contributing to SLAF! This guide will help you get started.
 
-## Getting Started
+## Prerequisites
 
-### Prerequisites
+- **Python 3.10+** - SLAF requires Python 3.10 or higher
+- **Git** - For version control
+- **uv** - For dependency management (recommended)
 
-1. **Python 3.9+** - SLAF requires Python 3.9 or higher
-2. **Git** - For version control
-3. **uv** - For dependency management (recommended)
+## Development Setup
 
-### Development Setup
+```python
+# 1. Fork the repository on GitHub
+# Go to https://github.com/slaf-project/slaf and click "Fork"
 
-1. **Clone the repository**:
+# 2. Clone your fork
+git clone https://github.com/YOUR_USERNAME/slaf.git
+cd slaf
 
-   ```bash
-   git clone https://github.com/slaf-project/slaf.git
-   cd slaf
-   ```
+# 3. Add upstream remote
+git remote add upstream https://github.com/slaf-project/slaf.git
 
-2. **Install development dependencies**:
+# 4. Install development dependencies
+uv pip install -e ".[dev,test,docs]"
 
-   ```bash
-   uv sync --group dev
-   ```
+# 5. Install pre-commit hooks (runs linting/formatting automatically)
+uv run pre-commit install
 
-3. **Install in development mode**:
-
-   ```bash
-   uv pip install -e .
-   ```
-
-4. **Run tests**:
-   ```bash
-   pytest tests/
-   ```
+# 6. Run tests to verify setup
+pytest tests/
+```
 
 ## Development Workflow
 
@@ -46,37 +41,20 @@ git checkout -b feature/your-feature-name
 
 ### 2. Make Your Changes
 
-- Follow the existing code style
+- Follow the existing code style (enforced by pre-commit hooks)
 - Add tests for new functionality
 - Update documentation as needed
 - Add type hints to new functions
+- For API changes, follow the [docstring template](docstring_template.md)
 
-### 3. Run Tests and Checks
-
-```bash
-# Run all tests
-pytest tests/
-
-# Run linting
-ruff check .
-
-# Run type checking
-mypy slaf/
-
-# Run formatting
-ruff format .
-```
-
-### 4. Commit Your Changes
+### 3. Commit Your Changes
 
 ```bash
 git add .
 git commit -m "feat: add your feature description"
 ```
 
-Follow [conventional commits](https://www.conventionalcommits.org/) for commit messages.
-
-### 5. Push and Create a Pull Request
+### 4. Push and Create a Pull Request
 
 ```bash
 git push origin feature/your-feature-name
@@ -94,80 +72,62 @@ Then create a pull request on GitHub.
 - Keep functions focused and small
 - Use meaningful variable names
 
-### Documentation
+### Testing
 
-- Update docstrings for any changed functions
-- Add examples in docstrings where helpful
-- Update relevant documentation pages
-- Test documentation builds locally
-
-## Testing
-
-### Writing Tests
-
-- Place tests in the `tests/` directory
-- Use descriptive test names
-- Test both success and failure cases
-- Use fixtures for common test data
-
-### Running Tests
-
-```bash
+```python
 # Run all tests
-pytest
+uv run pytest tests/
 
 # Run specific test file
-pytest tests/test_slaf.py
+uv run pytest tests/test_slaf.py
 
 # Run with coverage
-pytest --cov=slaf tests/
+uv run pytest pytest --cov=slaf tests/
 ```
 
 ## Documentation
 
 ### Building Documentation
 
-```bash
-# Build docs
-slaf docs --build
-
-# Serve docs locally
+```shell
+# Serve docs locally for development
 slaf docs --serve
+
+# Build docs for testing
+slaf docs --build
 ```
 
-### Documentation Guidelines
+### Working with Examples
 
-- Write clear, concise explanations
-- Include code examples
-- Use proper markdown formatting
-- Test all code examples
+Our examples are written in marimo, that gets installed automatically with the dev dependencies.
 
-## Release Process
+```shell
+# Edit examples interactively
+cd examples
+marimo edit
 
-### For Maintainers
+# After editing, export to HTML for docs
+slaf examples --export
 
-1. **Update version** in `pyproject.toml`
-2. **Update changelog** with new features/fixes
-3. **Create release tag**:
-   ```bash
-   git tag v1.0.0
-   git push origin v1.0.0
-   ```
-4. **Build and publish**:
-   ```bash
-   uv build
-   uv publish
-   ```
+# List available examples
+slaf examples --list
+```
+
+## CI/CD
+
+The project uses GitHub Actions for automated testing and deployment:
+
+- **Tests**: Run on every push and pull request
+- **Documentation**: Automatically deployed to GitHub Pages on main branch
+- **Coverage**: Requires minimum 70% code coverage
+- **Security**: Automated vulnerability scanning
+
+All checks run automatically - you don't need to run them locally unless you want to catch issues early.
 
 ## Getting Help
 
-- **GitHub Issues**: Report bugs or request features
-- **Discussions**: Ask questions in GitHub Discussions
-- **Email**: Contact pavan.ramkumar@gmail.com
-
-## Code of Conduct
-
-We are committed to providing a welcoming and inclusive environment for all contributors. Please be respectful and constructive in all interactions.
+- 📖 **Documentation**: Check the [API Reference](../api/core.md)
+- 💬 **GitHub Issues**: Report bugs on [GitHub](https://github.com/slaf-project/slaf)
 
 ## License
 

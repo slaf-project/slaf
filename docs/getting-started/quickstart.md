@@ -242,12 +242,24 @@ print(f"Loaded expression matrix: {expression_matrix.shape}")
 
 ## Using the SLAF CLI
 
-SLAF includes a powerful command-line interface:
+SLAF includes a powerful command-line interface for common data operations:
+
+### Getting Help
 
 ```bash
-# Show version and help
-slaf version
+# Show general help
 slaf --help
+
+# Show help for specific command
+slaf convert --help
+slaf query --help
+```
+
+### Basic Commands
+
+```bash
+# Check SLAF version
+slaf version
 
 # Show info about your dataset
 slaf info my_dataset.slaf
@@ -259,21 +271,47 @@ slaf query my_dataset.slaf "SELECT COUNT(*) FROM cells"
 slaf convert data.h5ad output.slaf
 ```
 
-## Performance Tips
+### Common Use Cases
 
-- **Use integer IDs**: SLAF automatically maps string IDs to integers for faster queries
-- **Leverage SQL**: Complex operations are often faster with SQL than Python loops
-- **Lazy evaluation**: Use `.compute()` only when you need the actual data
-- **Batch operations**: Process data in batches for large datasets
+**Converting Datasets:**
+
+```bash
+# Convert an AnnData file
+slaf convert pbmc3k.h5ad pbmc3k.slaf
+
+# Convert with verbose output to see details
+slaf convert pbmc3k.h5ad pbmc3k.slaf --verbose
+```
+
+**Exploring Datasets:**
+
+```bash
+# Get basic info about a dataset
+slaf info pbmc3k.slaf
+
+# Run a simple query
+slaf query pbmc3k.slaf "SELECT cell_type, COUNT(*) FROM cells GROUP BY cell_type"
+
+# Export query results to CSV
+slaf query pbmc3k.slaf "SELECT * FROM cells WHERE cell_type = 'T cells'" --output t_cells.csv
+```
+
+**Data Analysis Pipeline:**
+
+```bash
+# Convert input data
+slaf convert input.h5ad output.slaf
+
+# Verify conversion
+slaf info output.slaf
+
+# Run analysis queries
+slaf query output.slaf "SELECT cell_type, AVG(total_counts) FROM cells GROUP BY cell_type"
+```
 
 ## Next Steps
 
 - Read the [User Guide](../user-guide/how-slaf-works.md) for detailed concepts
 - Explore [Examples](../examples/getting-started.md) for real-world use cases
 - Check the [API Reference](../api/core.md) for complete documentation
-
-## Getting Help
-
-- 📖 **Documentation**: This site contains comprehensive guides
-- 💬 **GitHub Issues**: Report bugs on [GitHub](https://github.com/slaf-project/slaf)
-- 📧 **Email**: Contact pavan.ramkumar@gmail.com for questions
+- Report bugs or make feature requests on [GitHub](https://github.com/slaf-project/slaf)
