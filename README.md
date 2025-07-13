@@ -23,21 +23,17 @@
 
 ## 📦 Installation
 
-### Using pip
-
 ```bash
-pip install slaf
-```
-
-### Using uv (recommended)
-
-```bash
+# Using uv (recommended)
 uv add slaf
-```
 
-### Development installation
+# Or pip
+pip install slaf
 
-```bash
+# Or conda
+conda install -c conda-forge slaf
+
+# Development installation
 git clone https://github.com/slaf-project/slaf.git
 cd slaf
 uv sync --dev
@@ -53,7 +49,7 @@ from slaf import SLAFArray
 # Load a SLAF dataset
 slaf = SLAFArray("path/to/dataset.slaf")
 
-# Decsribe the dataset
+# Describe the dataset
 print(slaf.info())
 
 # Execute SQL queries directly
@@ -262,51 +258,12 @@ slaf info dataset.slaf
 
 ## 📚 Documentation
 
-- [Getting Started Guide](docs/getting-started/)
-- [API Reference](docs/api/)
-- [Examples](docs/examples/)
-- [User Guide](docs/user-guide/)
-
-## 🧪 Development
-
-### Running Tests
-
-```bash
-uv run pytest
-```
-
-### Code Quality
-
-```bash
-# Run all quality checks (formatting, linting, type checking)
-pre-commit run --all-files
-```
-
-### Building Documentation
-
-```bash
-# Install docs dependencies
-uv sync --group docs
-
-# Build and serve docs (using CLI)
-slaf docs --build
-slaf docs --serve
-
-# Or use mkdocs directly
-mkdocs build
-mkdocs serve
-
-# Export examples to HTML
-slaf examples --export
-```
-
-## 🤝 Contributing
-
-We welcome contributions! Please see our [Contributing Guide](docs/development/contributing.md) for details.
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+- [Getting Started Guide](https://slaf-project.github.io/slaf/getting-started/)
+- [API Reference](https://slaf-project.github.io/slaf/api/)
+- [Examples](https://slaf-project.github.io/slaf/examples/)
+- [User Guide](https://slaf-project.github.io/slaf/user-guide/)
+- [Developers Guide](https://slaf-project.github.io/slaf/development/contributing/)
+- [Maintainers Guide](https://slaf-project.github.io/slaf/development/maintaining/)
 
 ## 🙏 Acknowledgments
 
