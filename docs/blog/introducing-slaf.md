@@ -16,19 +16,19 @@ Before diving into single-cell data, I want to share the experiences that direct
 
 ### The Zarr Revelation
 
-I remember struggling with video and image stack datasets using TIFF/memmap arrays. The heavy network, storage, and memory overheads were killing my production pipelines. When I switched to Zarr, it was effortlessly cheap and brought down my infrastructure costs dramatically.
+I remember struggling with video and image stack datasets using TIFF/memmap arrays. The heavy network, storage, and memory overheads were killing my production pipelines. When I switched to [Zarr](https://zarr.readthedocs.io/), it was effortlessly cheap and brought down my infrastructure costs dramatically.
 
 The key insight was **zero-copy, query-in-place architecture**. Instead of downloading entire datasets, Zarr let me access exactly the chunks I needed directly from cloud storage. This became a direct inspiration for SLAF's core design.
 
 ### The Dask Transition
 
-Combining Zarr with Dask for lazy compute was another revelation. I transitioned from a numpy codebase to a Dask codebase with minimal code changes. The same slicing operations that worked with numpy arrays suddenly became lazy - only computing when I called `.compute()`.
+Combining Zarr with [Dask](https://dask.org/) for lazy compute was another revelation. I transitioned from a numpy codebase to a Dask codebase with minimal code changes. The same slicing operations that worked with numpy arrays suddenly became lazy - only computing when I called `.compute()`.
 
 This **lazy slicing and computation** became another core principle of SLAF. Why should single-cell data be any different?
 
 ### The Lance + DuckDB Experience
 
-I've worked with 1-10M scale embeddings in interactive settings like exploratory dashboards for computer vision applications in microscopy. Using Lance for embeddings and metadata, combined with DuckDB/Polars for the query engine, led to interactive timescale experiences that would have been impossible with other object storage formats or impossibly expensive with vector databases.
+I've worked with 1-10M scale embeddings in interactive settings like exploratory dashboards for computer vision applications in microscopy. Using [Lance](https://lancedb.github.io/lance/) for embeddings and metadata, combined with [DuckDB](https://duckdb.org/)/[Polars](https://polars.rs/) for the query engine, led to interactive timescale experiences that would have been impossible with other object storage formats or impossibly expensive with vector databases.
 
 This combination of **cloud-native columnar storage with embedded OLAP engines** became the backbone of SLAF's architecture.
 
@@ -38,7 +38,7 @@ To understand why SLAF is needed, let's look at how single-cell data storage has
 
 ### The Early Days: MTX Format
 
-In the beginning, single-cell data came in simple MTX (Matrix Market) format - essentially TSV files with metadata. 10x Genomics and other vendors provided these straightforward formats that bioinformaticians could easily work with.
+In the beginning, single-cell data came in simple [MTX (Matrix Market)](https://math.nist.gov/MatrixMarket/formats.html) format - essentially TSV files with metadata. 10x Genomics and other vendors provided these straightforward formats that bioinformaticians could easily work with.
 
 ```bash
 # Typical MTX structure
@@ -51,11 +51,11 @@ This worked fine for datasets with 50k-100k cells. You could load everything int
 
 ### The H5AD Era
 
-As datasets grew, the community adopted H5AD (HDF5-based AnnData) as the de facto standard. This brought several advantages:
+As datasets grew, the community adopted [H5AD](https://anndata.readthedocs.io/en/stable/) (HDF5-based [AnnData](https://anndata.readthedocs.io/en/stable/)) as the de facto standard. This brought several advantages:
 
 - Hierarchical structure for metadata
 - Compression for storage efficiency
-- Integration with the Scanpy ecosystem
+- Integration with the [Scanpy](https://scanpy.readthedocs.io/) ecosystem
 
 H5AD became the lingua franca of single-cell analysis. But it had fundamental limitations:
 
@@ -68,9 +68,9 @@ H5AD became the lingua franca of single-cell analysis. But it had fundamental li
 
 The community has recognized these limitations and attempted solutions:
 
-**SOMA** (Single-cell Object Model for Arrays) is a collaboration between TileDB and the Chan Zuckerberg Initiative. It's designed for cloud-native, concurrent access but hasn't gained widespread adoption in the Scanpy ecosystem.
+**[SOMA](https://github.com/single-cell-data/SOMA)** (Single-cell Object Model for Arrays) is a collaboration between [TileDB](https://tiledb.com/) and the Chan Zuckerberg Initiative. It's designed for cloud-native, concurrent access but hasn't gained widespread adoption in the Scanpy ecosystem.
 
-**CxG** (Cell x Gene) is CZI's columnar store format specifically designed for serving UMAP data through the cellxgene frontend. It's optimized for visualization but not for analysis workflows.
+**[CxG](https://github.com/chanzuckerberg/cellxgene)** (Cell x Gene) is CZI's columnar store format specifically designed for serving UMAP data through the [cellxgene](https://github.com/chanzuckerberg/cellxgene) frontend. It's optimized for visualization but not for analysis workflows.
 
 While these are steps in the right direction, they haven't sufficiently integrated into existing bioinformatics workflows. The gap remains: we need cloud-native storage that works seamlessly with the tools bioinformaticians already use.
 
@@ -273,7 +273,7 @@ results = slaf_array.query("""
 
 ### Scanpy Compatible: Drop-in Replacement
 
-SLAF provides drop-in compatibility with existing Scanpy workflows:
+SLAF provides drop-in compatibility with existing [Scanpy](https://scanpy.readthedocs.io/) workflows:
 
 ```python
 # Load as lazy AnnData
