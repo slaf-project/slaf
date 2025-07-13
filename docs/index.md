@@ -53,6 +53,36 @@ _We need **cloud-native, zero-copy, query-in-place storage systems**, rather tha
 
 ---
 
+## **Who is SLAF for?**
+
+SLAF is designed for the modern single-cell ecosystem facing scale challenges:
+
+### **Bioinformaticians**
+
+Struggling with OOM errors and data transfer issues on 10M+ cell datasets. Can't do self-service analysis without infrastructure engineers. **SLAF eliminates the human bottleneck** with lazy evaluation.
+
+### **Foundation Model Builders**
+
+Need to maximize experiments per unit time and resource. Currently copying data per node on attached storage. **SLAF enables cloud-native streaming** to eliminate data duplication.
+
+### **Tech Leaders & Architects**
+
+Managing storage/compute infrastructure for teams. 5 bioinformaticians × 500GB dataset = 2.5TB of duplicated data. **SLAF provides zero-copy, query-in-place storage**.
+
+### **Tool Builders**
+
+Want to deliver better interactive experiences on massive datasets using commodity web services. **SLAF enables concurrent, cloud-scale access** with high QPS.
+
+### **Atlas Builders**
+
+Need to serve massive datasets to the research community. **SLAF provides cloud-native, zero-copy storage** for global distribution.
+
+### **Data Integrators**
+
+Harmonizing PB-scale datasets across atlases. **SLAF's SQL-native design** enables complex data integration with pushdown optimization.
+
+---
+
 ## **Win with SLAF**
 
 ### Leverage pushdown filtering and SQL query optimization from cloud-native OLAP databases

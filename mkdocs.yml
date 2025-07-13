@@ -170,6 +170,8 @@ nav:
       - For Contributors: development/contributing.md
       - For Maintainers: development/maintaining.md
       - Benchmarks: development/benchmarks.md
+  - Blog:
+      - Introducing SLAF: blog/introducing-slaf.md
 
 # Extra
 extra:
