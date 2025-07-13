@@ -258,10 +258,10 @@ slaf info dataset.slaf
 
 ## 📚 Documentation
 
-- [Getting Started Guide](https://slaf-project.github.io/slaf/getting-started/)
+- [Getting Started Guide](https://slaf-project.github.io/slaf/getting-started/quickstart/)
 - [API Reference](https://slaf-project.github.io/slaf/api/)
-- [Examples](https://slaf-project.github.io/slaf/examples/)
-- [User Guide](https://slaf-project.github.io/slaf/user-guide/)
+- [Examples](https://slaf-project.github.io/slaf/examples/getting-started/)
+- [User Guide](https://slaf-project.github.io/slaf/user-guide/how-slaf-works/)
 - [Developers Guide](https://slaf-project.github.io/slaf/development/contributing/)
 - [Maintainers Guide](https://slaf-project.github.io/slaf/development/maintaining/)
 
