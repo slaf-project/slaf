@@ -48,10 +48,20 @@ The release process is automated through GitHub Actions:
 
    - Go to `Actions` → `Prepare Release`
    - Choose release type: `patch`, `minor`, or `major`
-   - Review the generated PR
-   - Merge the PR to main branch
+   - The workflow will:
+     - Calculate the next version number
+     - Update `pyproject.toml` and `uv.lock`
+     - Generate a changelog with recent commits
+     - Create and push a release branch
+     - Provide direct links to create a PR
 
-2. **Create Release Tag**:
+2. **Create Pull Request**:
+
+   - Click the provided link in the workflow output
+   - Or go to: `https://github.com/slaf-project/slaf/compare/main...release-{VERSION}`
+   - Use the default title and description below
+
+3. **Create Release Tag**:
 
    ```bash
    git pull origin main
@@ -59,7 +69,7 @@ The release process is automated through GitHub Actions:
    git push origin v0.2.1
    ```
 
-3. **Automatic Publishing**:
+4. **Automatic Publishing**:
    - The release workflow automatically:
      - Builds the package
      - Runs tests
@@ -82,6 +92,39 @@ slaf release build
 
 # Check package
 slaf release check
+```
+
+### Default PR Title and Message
+
+When creating a release PR, use these defaults:
+
+**Title:**
+
+```
+Release 0.1.1
+```
+
+**Description:**
+
+```markdown
+## Release 0.1.1
+
+This PR prepares the release for version 0.1.1.
+
+### Changes:
+
+- Updated version in pyproject.toml
+- Updated uv.lock
+- Generated changelog
+
+### Next steps:
+
+1. Review the changes
+2. Merge this PR
+3. Create a tag: `git tag v0.1.1`
+4. Push the tag: `git push origin v0.1.1`
+
+The release workflow will automatically publish to PyPI when the tag is pushed.
 ```
 
 ## Package Configuration
