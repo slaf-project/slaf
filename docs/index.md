@@ -4,8 +4,8 @@
 
 <div class="grid cards" markdown>
 
-- :fontawesome-solid-bolt: **Lightning Fast**
-  SQL-level performance for data operations with **100x faster** random access than Parquet and **10x faster** filtering than HDF5.
+- :fontawesome-solid-database: **OLAP-Powered SQL**
+  Embedded, in-process OLAP engines for blazing-fast, pushdown SQL queries and advanced analytics.
 
 - :fontawesome-solid-memory: **Memory Efficient**
   Lazy evaluation means you only load what you need, perfect for large-scale single-cell analysis.
@@ -13,14 +13,14 @@
 - :fontawesome-solid-dna: **Scanpy Compatible**
   Drop-in replacement for AnnData workflows with familiar numpy-like slicing.
 
-- :fontawesome-solid-database: **OLAP-Powered SQL**
-  Embedded, in-process OLAP engines for blazing-fast, pushdown SQL queries and advanced analytics.
-
 - :fontawesome-solid-cloud: **Concurrent, Cloud-Scale Access**
   Built for distributed teams and interactive exploration with high QPS, zero-copy storage.
 
 - :fontawesome-solid-brain: **Foundation Model Ready**
   Designed for distributed ML training with SQL-level tokenization and pre-built dataloaders.
+
+- :fontawesome-solid-chart-line: **Visualization Ready**
+  Designed to keep your scGPT (or favorite) embeddings alongside your UMAPs and build interactive dashboards like cellxgene using vector search
 
 </div>
 
@@ -47,9 +47,7 @@ _New fundamentally different **AI-native workflows** have arrived._
 > - Train transformer-like foundation models with efficient tokenization
 > - Distribute workloads across nodes or GPUs by streaming random batches concurrently
 
-_We need **cloud-native, zero-copy, query-in-place storage systems**, rather than maintaining multiple copies of massive datasets per embedding model, node or experiment. Yet we don't want to get out of our comfort zone of numpy-like slicing of sparse matrices, and the anndata/scanpy idioms that we've built pipelines with over the years._
-
-**SLAF aims to be the modern companion of the bioinformatician turned AI engineer for these needs!**
+_We need **cloud-native, zero-copy, query-in-place storage systems**, rather than maintaining multiple copies of massive datasets per embedding model, node or experiment while continuing to experience the endorphins of numpy-like sparse matrix slicing, and the scanpy pipelines we've built over the years._
 
 ---
 
