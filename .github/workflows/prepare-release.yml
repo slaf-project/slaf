@@ -104,7 +104,17 @@ jobs:
       - name: Update version
         run: |
           # Update pyproject.toml with the calculated version
-          sed -i "s/version = \".*\"/version = \"${{ steps.version.outputs.new_version }}\"/" pyproject.toml
+          # Use awk to only update version in [project] section
+          awk -v new_version="${{ steps.version.outputs.new_version }}" '
+          /^\[project\]/ { in_project = 1 }
+          /^\[/ && !/^\[project\]/ { in_project = 0 }
+          in_project && /^[[:space:]]*version[[:space:]]*=/ {
+            print "version = \"" new_version "\""
+            next
+          }
+          { print }
+          ' pyproject.toml > pyproject.toml.tmp && mv pyproject.toml.tmp pyproject.toml
+
           echo "Updated pyproject.toml version to ${{ steps.version.outputs.new_version }}"
 
           # Update uv.lock to reflect the new version
