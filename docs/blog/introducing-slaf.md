@@ -125,7 +125,7 @@ Parquet stores data in compressed columnar chunks called "row groups" and stores
 - **Optimized metadata**: Efficient random access patterns with minimal metadata overhead
 - **Zero infrastructure**: A file on disk is a full database, like the next generation SQLite
 
-[DuckDB](https://duckdb.org/) takes a different but complementary approach: an embedded OLAP database written in C++ that provides a full database experience with zero infrastructure. While Lance focuses on the table format, DuckDB focuses on both its own storate format and a highly extensible query engine. Both eliminate the need for servers and configuration.
+[DuckDB](https://duckdb.org/) takes a different but complementary approach: an embedded OLAP database written in C++ that provides a full database experience with zero infrastructure. While Lance focuses on the table format, DuckDB focuses on both its own storage format and a highly extensible query engine. Both eliminate the need for servers and configuration.
 
 !!! success "Key Innovation #5"
 
@@ -299,7 +299,7 @@ SLAF could go in several directions and I'd like to get feedback on which of the
 
 **Distributed Computing**: Better support for distributed analysis workflows could enable truly massive-scale analysis beyond what any single machine can handle. This includes both distributed query execution and distributed training support for foundation models. What distributed computing patterns are most important for your large-scale analysis needs?
 
-**Scanpy Feature Parity**: We currently only support a couple of limited use cases from scanpy's preprocessing module. Building lazy operations for broader needs like PCA, UMAP, or different expression computations at scale could make SLAF a true drop-in replacement for existing scanpy workflows. This would enable researchers to run familiar analysis pipelines on datasets that would otherwise cause memory explosions. Which scanpy operations are most critical for your large-scale analysis workflows?
+**Scanpy Feature Parity**: We currently only support a couple of limited use cases from scanpy's preprocessing module. Building lazy operations for broader needs like PCA, UMAP, or differential expression computations at scale could make SLAF a true drop-in replacement for existing scanpy workflows. This would enable researchers to run familiar analysis pipelines on datasets that would otherwise cause memory explosions. Which scanpy operations are most critical for your large-scale analysis workflows?
 
 **Foundation Model Training Lifecycles**: Our current dataloader is basic - no smart shuffling, shard-aware streaming, async pre-fetching, or real-world benchmarks on multi-node training yet. SLAF could help frame and drive moonshots like "the $100 overnight scGPT training experiment" by driving up the efficiencies of multi-node, multi-GPU training and fine-tuning workloads. What training bottlenecks are most limiting your foundation model experiments?
 

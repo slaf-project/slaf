@@ -18,7 +18,7 @@ The project uses GitHub Actions for automated testing and deployment:
 ### Deployment
 
 - **Documentation**: Automatically deployed to GitHub Pages on main branch
-- **Coverage**: Uploaded to Codecov with 80% minimum requirement
+- **Coverage**: Uploaded to Codecov with 70% minimum requirement
 - **Security Reports**: Generated as artifacts
 
 ## Release Management
