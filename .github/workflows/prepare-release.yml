@@ -102,9 +102,11 @@ jobs:
         run: |
           # Update pyproject.toml with the calculated version
           sed -i "s/version = \".*\"/version = \"${{ steps.version.outputs.new_version }}\"/" pyproject.toml
+          echo "Updated pyproject.toml version to ${{ steps.version.outputs.new_version }}"
 
           # Update uv.lock to reflect the new version
           uv lock --no-upgrade
+          echo "Updated uv.lock"
 
       - name: Generate changelog
         run: |
@@ -123,11 +125,22 @@ jobs:
             echo "### Added" >> CHANGELOG.md
             git log --oneline --no-merges | sed 's/^/- /' >> CHANGELOG.md
           fi
+          echo "Generated changelog with commits since $LAST_TAG"
 
       - name: Commit changes
         run: |
+          # Show what files have changed
+          git status
+          git diff --cached || true
+
+          # Add and commit changes
           git add pyproject.toml uv.lock CHANGELOG.md
           git commit -m "Bump version to ${{ steps.version.outputs.new_version }}"
+
+          # Show the commit
+          git log --oneline -1
+
+          # Push to remote
           git push origin HEAD --force
 
       - name: Create Pull Request
