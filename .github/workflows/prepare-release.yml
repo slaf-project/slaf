@@ -60,20 +60,6 @@ jobs:
       - name: Determine version bump
         id: version
         run: |
-          if [ "${{ github.event.inputs.prerelease }}" = "true" ]; then
-            echo "prerelease=true" >> $GITHUB_OUTPUT
-            echo "release_type=prerelease" >> $GITHUB_OUTPUT
-          else
-            echo "prerelease=false" >> $GITHUB_OUTPUT
-            echo "release_type=${{ github.event.inputs.release_type }}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Create release branch
-        run: |
-          git checkout -b release/v${{ steps.version.outputs.release_type }}-$(date +%Y%m%d-%H%M%S)
-
-      - name: Update version
-        run: |
           # Get current version from pyproject.toml
           CURRENT_VERSION=$(grep 'version = ' pyproject.toml | cut -d'"' -f2)
           echo "Current version: $CURRENT_VERSION"
@@ -85,10 +71,12 @@ jobs:
           PATCH=${VERSION_PARTS[2]}
 
           # Calculate new version based on release type
-          if [ "${{ steps.version.outputs.prerelease }}" = "true" ]; then
+          if [ "${{ github.event.inputs.prerelease }}" = "true" ]; then
             NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}-alpha.$(date +%Y%m%d)"
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+            echo "release_type=prerelease" >> $GITHUB_OUTPUT
           else
-            case "${{ steps.version.outputs.release_type }}" in
+            case "${{ github.event.inputs.release_type }}" in
               "major")
                 NEW_VERSION="$((MAJOR + 1)).0.0"
                 ;;
@@ -99,13 +87,24 @@ jobs:
                 NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
                 ;;
             esac
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+            echo "release_type=${{ github.event.inputs.release_type }}" >> $GITHUB_OUTPUT
           fi
 
           echo "New version: $NEW_VERSION"
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
 
-          # Update pyproject.toml
-          sed -i "s/version = \".*\"/version = \"$NEW_VERSION\"/" pyproject.toml
+      - name: Create release branch
+        run: |
+          git checkout -b release-${{ steps.version.outputs.new_version }}
+
+      - name: Update version
+        run: |
+          # Update pyproject.toml with the calculated version
+          sed -i "s/version = \".*\"/version = \"${{ steps.version.outputs.new_version }}\"/" pyproject.toml
+
+          # Update uv.lock to reflect the new version
+          uv lock --no-upgrade
 
       - name: Generate changelog
         run: |
@@ -116,8 +115,8 @@ jobs:
           echo "" >> CHANGELOG.md
 
           # Get commits since last tag
-          if git tag --sort=-version:refname | head -1 > /dev/null 2>&1; then
-            LAST_TAG=$(git tag --sort=-version:refname | head -1)
+          LAST_TAG=$(git tag --sort=-version:refname | head -1 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
             echo "### Added" >> CHANGELOG.md
             git log --oneline --no-merges $LAST_TAG..HEAD | sed 's/^/- /' >> CHANGELOG.md
           else
@@ -127,7 +126,7 @@ jobs:
 
       - name: Commit changes
         run: |
-          git add pyproject.toml CHANGELOG.md
+          git add pyproject.toml uv.lock CHANGELOG.md
           git commit -m "Bump version to ${{ steps.version.outputs.new_version }}"
           git push origin HEAD
 
