@@ -96,7 +96,9 @@ jobs:
 
       - name: Create release branch
         run: |
+          # Create branch from current HEAD to ensure we have the latest changes
           git checkout -b release-${{ steps.version.outputs.new_version }}
+          echo "Created branch release-${{ steps.version.outputs.new_version }} from $(git rev-parse HEAD)"
 
       - name: Update version
         run: |
@@ -143,6 +145,22 @@ jobs:
           # Push to remote
           git push origin HEAD --force
 
+          # Verify we're on the right commit
+          echo "Current commit: $(git rev-parse HEAD)"
+          echo "Expected commit should be different from main"
+
+      - name: Verify branch exists
+        run: |
+          echo "Current branch: $(git branch --show-current)"
+          echo "Remote branches:"
+          git branch -r
+          echo "Local branches:"
+          git branch
+          echo "Differences from main:"
+          git diff main..HEAD --name-only || echo "No differences found"
+          echo "Commit differences:"
+          git log main..HEAD --oneline || echo "No commit differences"
+
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v5
         with:
@@ -168,3 +186,5 @@ jobs:
           branch: "release-${{ steps.version.outputs.new_version }}"
           base: "main"
           delete-branch: false
+          committer: GitHub <noreply@github.com>
+          author: GitHub <noreply@github.com>
