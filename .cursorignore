@@ -8,3 +8,5 @@
 site
 .ruff_cache
 .mypy_cache
+dist/
+.coverage
