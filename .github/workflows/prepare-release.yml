@@ -144,5 +144,5 @@ jobs:
             4. Push the tag: `git push origin v${{ steps.version.outputs.new_version }}`
 
             The release workflow will automatically publish to PyPI when the tag is pushed.
-          branch: release/${{ steps.version.outputs.new_version }}
+          branch: "release-${{ steps.version.outputs.new_version }}"
           delete-branch: false
