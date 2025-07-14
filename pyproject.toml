@@ -1,6 +1,6 @@
 [project]
 name = "slaf"
-version = "0.2.0"
+version = "0.1.0"
 description = "Sparse Lazy Array Format - MVP for single-cell data"
 authors = [{ name = "Pavan Ramkumar", email = "pavan.ramkumar@gmail.com" }]
 readme = "README.md"
@@ -39,6 +39,8 @@ dev = [
     "pytest>=8.0.0",
     "ruff==0.12.2",
     "mypy>=1.8.0",
+    "build>=1.0.0",
+    "twine>=4.0.0",
 
     # Marimo for demo
     "marimo>=0.14.0",
