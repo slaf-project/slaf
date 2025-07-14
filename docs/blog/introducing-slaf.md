@@ -233,27 +233,6 @@ For a detailed technical deep dive into SLAF's architecture, including SQL-nativ
 
 ---
 
-## Limitations and Future Work
-
-SLAF is a significant step forward, but it's an early project with a bus factor of 1.
-
-### Current Limitations
-
-- **Visualization**: Limited support for interactive visualization (coming soon)
-- **Embeddings**: No native support for cell/gene embeddings (in development)
-- **Migration**: Better tools to migrate from mtx / h5ad to SLAF (in progress)
-- **Feature Incomplete**: Doesn't have full parity with scanpy
-- **Ecosystem**: Limited integration with other single-cell tools
-
-### Future Work
-
-- **Embeddings Support**: Native storage and querying of cell/gene embeddings
-- **Visualization**: Integration with cellxgene and other visualization tools
-- **Distributed Computing**: Better support for distributed analysis workflows
-- **Schema Evolution**: Support for evolving data schemas over time
-
----
-
 ## Getting Started
 
 SLAF is designed to be easy to adopt. Here's how to get started:
@@ -306,9 +285,27 @@ converter.convert_anndata(adata, "output.slaf")
 
 ---
 
+## Future Directions and Community Feedback
+
+SLAF could go in several directions and I'd like to get feedback on which of them would benefit the community the most.
+
+**Visualization Integration**: We lack direct visualization support. A sketch of how SLAF could be more directly compatible with cellxgene might be super useful for Atlas builders to transition to SaaS-based analytics. This could enable interactive exploration of 100M-cell datasets without the infrastructure headaches that currently plague large-scale visualization. What visualization workflows would you prioritize?
+
+**Embeddings Support**: Native storage and querying of cell/gene embeddings could unlock entirely new AI-native workflows. Instead of computing embeddings separately and storing them in different systems, SLAF could store embeddings alongside expression data and enable queries like "find cells similar to this embedding" or "rank genes by embedding similarity." This would be particularly valuable for foundation model training and retrieval-augmented generation. What embedding use cases are most critical for your work?
+
+**Hosted Solution**: A cloud-hosted database version of SLAF could push query performance even further by eliminating the need for local storage entirely. This would enable true zero-infrastructure analysis where researchers query massive datasets directly from the cloud without any local setup. The challenge is balancing performance with cost. What query patterns and performance requirements would make this viable for your workflows?
+
+**Migration Tools**: Better tools to migrate from mtx/h5ad to SLAF could accelerate adoption significantly. This includes not just format conversion but intelligent optimization of hydrating the SLAF format for different dataset characteristics. What migration pain points are most blocking your adoption of new formats?
+
+**Distributed Computing**: Better support for distributed analysis workflows could enable truly massive-scale analysis beyond what any single machine can handle. This includes both distributed query execution and distributed training support for foundation models. What distributed computing patterns are most important for your large-scale analysis needs?
+
+**Scanpy Feature Parity**: We currently only support a couple of limited use cases from scanpy's preprocessing module. Building lazy operations for broader needs like PCA, UMAP, or different expression computations at scale could make SLAF a true drop-in replacement for existing scanpy workflows. This would enable researchers to run familiar analysis pipelines on datasets that would otherwise cause memory explosions. Which scanpy operations are most critical for your large-scale analysis workflows?
+
+---
+
 If you've read this far, thank you! You're definitely invested in the space.
 
-The single-cell data explosion isn't going to slow down. If anything, it's accelerating. We need tools that can keep up. SLAF is an early attempt to build the modern companion for bioinformaticians turned AI engineers. It's designed to handle the 100M-cell era while maintaining the familiar numpy-like slicing and Scanpy idioms that researchers have built their workflows around.
+The single-cell data explosion isn't going to slow down. If anything, it's accelerating. We need tools that can keep up. SLAF is an early attempt to build the modern companion for bioinformaticians turned AI engineers.
 
 I'm excited to see how you adopt and extend SLAF. Together, we can build the infrastructure needed for the next decade of single-cell research.
 
