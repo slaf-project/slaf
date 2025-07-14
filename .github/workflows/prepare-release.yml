@@ -162,29 +162,27 @@ jobs:
           git log main..HEAD --oneline || echo "No commit differences"
 
       - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          title: "Release ${{ steps.version.outputs.new_version }}"
-          body: |
-            ## Release ${{ steps.version.outputs.new_version }}
+        run: |
+          # Create PR using GitHub CLI
+          gh pr create \
+            --title "Release ${{ steps.version.outputs.new_version }}" \
+            --body "## Release ${{ steps.version.outputs.new_version }}
 
-            This PR prepares the release for version ${{ steps.version.outputs.new_version }}.
+          This PR prepares the release for version ${{ steps.version.outputs.new_version }}.
 
-            ### Changes:
-            - Updated version in pyproject.toml
-            - Updated uv.lock
-            - Generated changelog
+          ### Changes:
+          - Updated version in pyproject.toml
+          - Updated uv.lock
+          - Generated changelog
 
-            ### Next steps:
-            1. Review the changes
-            2. Merge this PR
-            3. Create a tag: `git tag v${{ steps.version.outputs.new_version }}`
-            4. Push the tag: `git push origin v${{ steps.version.outputs.new_version }}`
+          ### Next steps:
+          1. Review the changes
+          2. Merge this PR
+          3. Create a tag: \`git tag v${{ steps.version.outputs.new_version }}\`
+          4. Push the tag: \`git push origin v${{ steps.version.outputs.new_version }}\`
 
-            The release workflow will automatically publish to PyPI when the tag is pushed.
-          branch: "release-${{ steps.version.outputs.new_version }}"
-          base: "main"
-          delete-branch: false
-          committer: GitHub <noreply@github.com>
-          author: GitHub <noreply@github.com>
+          The release workflow will automatically publish to PyPI when the tag is pushed." \
+            --base main \
+            --head release-${{ steps.version.outputs.new_version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
