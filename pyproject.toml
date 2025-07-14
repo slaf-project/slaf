@@ -1,6 +1,6 @@
 [project]
 name = "slaf"
-version = "0.1.0"
+version = "0.1.1"
 description = "Sparse Lazy Array Format - MVP for single-cell data"
 authors = [{ name = "Pavan Ramkumar", email = "pavan.ramkumar@gmail.com" }]
 readme = "README.md"
@@ -81,7 +81,7 @@ where = ["."]
 include = ["slaf"]
 
 [tool.ruff]
-target-version = "py312"
+target-version = "0.1.1"
 line-length = 88
 unfixable = ["E501"]
 
