@@ -163,30 +163,10 @@ jobs:
           git log main..HEAD --oneline || echo "No commit differences"
 
       - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          title: "Release ${{ steps.version.outputs.new_version }}"
-          body: |
-            ## Release ${{ steps.version.outputs.new_version }}
-
-            This PR prepares the release for version ${{ steps.version.outputs.new_version }}.
-
-            ### Changes:
-            - Updated version in pyproject.toml
-            - Updated uv.lock
-            - Generated changelog
-
-            ### Next steps:
-            1. Review the changes
-            2. Merge this PR
-            3. Create a tag: `git tag v${{ steps.version.outputs.new_version }}`
-            4. Push the tag: `git push origin v${{ steps.version.outputs.new_version }}`
-
-            The release workflow will automatically publish to PyPI when the tag is pushed.
-          branch: "release-${{ steps.version.outputs.new_version }}"
-          base: "main"
-          delete-branch: false
-          committer: GitHub <noreply@github.com>
-          author: GitHub <noreply@github.com>
-          title-prefix: "Release: "
+        run: |
+          echo "✅ Release branch 'release-${{ steps.version.outputs.new_version }}' has been created and pushed!"
+          echo "📝 Please create a pull request manually:"
+          echo "   https://github.com/slaf-project/slaf/compare/main...release-${{ steps.version.outputs.new_version }}"
+          echo ""
+          echo "🔗 Or use this direct link:"
+          echo "   https://github.com/slaf-project/slaf/pull/new/release-${{ steps.version.outputs.new_version }}"
