@@ -142,6 +142,7 @@ jobs:
 
             ### Changes:
             - Updated version in pyproject.toml
+            - Updated uv.lock
             - Generated changelog
 
             ### Next steps:
@@ -152,4 +153,5 @@ jobs:
 
             The release workflow will automatically publish to PyPI when the tag is pushed.
           branch: "release-${{ steps.version.outputs.new_version }}"
+          base: "main"
           delete-branch: false
