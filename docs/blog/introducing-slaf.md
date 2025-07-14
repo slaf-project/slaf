@@ -211,14 +211,14 @@ Traditional workflows: filtering, normalization, PCA, clustering. New AI-native 
 
 SLAF is designed for the modern single-cell ecosystem facing scale challenges:
 
-| Persona                                  | Problem                                                                               | Current Reality                                                          | How SLAF Helps                                                                           |
-| ---------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
-| **Bioinformaticians**                    | OOM errors on 10M+ cell datasets, can't do self-service analysis                      | Need infrastructure engineers, wait weeks for provisioning               | Lazy evaluation eliminates OOM errors, enables 100M-cell analysis on laptop              |
-| **Foundation Model Builders**            | Spending more time on data engineering than model training, data transfer bottlenecks | Copy 500GB datasets to each node, experiments bottlenecked by throughput | Cloud-native streaming eliminates duplication, SQL queries enable efficient tokenization |
-| **Tech Leaders & Architects**            | Storage costs exploding, data multiplication problem                                  | 5 bioinformaticians × 500GB × 5 experiments = 12.5TB for 500GB data      | Zero-copy, query-in-place storage means one copy serves everyone                         |
-| **Tool Builders** (cellxgene developers) | Can't provide interactive experiences on massive datasets                             | Users wait minutes, need expensive infrastructure                        | Concurrent, cloud-scale access with high QPS, commodity web services                     |
-| **Atlas Builders** (CZI, etc.)           | Can't serve massive datasets to research community                                    | Datasets too large to download, expensive serving infrastructure         | Cloud-native, zero-copy storage enables global access without downloads                  |
-| **Data Integrators** (Elucidata, etc.)   | Complex data integration workflows don't scale                                        | Multiple data transfers, expensive compute for joins/aggregations        | SQL-native design enables complex integration with pushdown optimization                 |
+| Persona                                      | Problem                                                                               | Current Reality                                                          | How SLAF Helps                                                                           |
+| -------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| **Bioinformaticians**                        | OOM errors on 10M+ cell datasets, can't do self-service analysis                      | Need infrastructure engineers, wait weeks for provisioning               | Lazy evaluation eliminates OOM errors, enables 100M-cell analysis on laptop              |
+| **Foundation Model Builders**                | Spending more time on data engineering than model training, data transfer bottlenecks | Copy 500GB datasets to each node, experiments bottlenecked by throughput | Cloud-native streaming eliminates duplication, SQL queries enable efficient tokenization |
+| **Tech Leaders & Architects**                | Storage costs exploding, data multiplication problem                                  | 5 bioinformaticians × 500GB × 5 experiments = 12.5TB for 500GB data      | Zero-copy, query-in-place storage means one copy serves everyone                         |
+| **Tool Builders** (cellxgene, LatchBio etc.) | Can't provide interactive experiences on massive datasets                             | Users wait minutes, need expensive infrastructure                        | Concurrent, cloud-scale access with high QPS, commodity web services                     |
+| **Atlas Builders** (CZI, etc.)               | Can't serve massive datasets to research community                                    | Datasets too large to download, expensive serving infrastructure         | Cloud-native, zero-copy storage enables global access without downloads                  |
+| **Data Integrators** (Elucidata, etc.)       | Complex data integration workflows don't scale                                        | Multiple data transfers, expensive compute for joins/aggregations        | SQL-native design enables complex integration with pushdown optimization                 |
 
 ## How SLAF Works
 
@@ -300,6 +300,10 @@ SLAF could go in several directions and I'd like to get feedback on which of the
 **Distributed Computing**: Better support for distributed analysis workflows could enable truly massive-scale analysis beyond what any single machine can handle. This includes both distributed query execution and distributed training support for foundation models. What distributed computing patterns are most important for your large-scale analysis needs?
 
 **Scanpy Feature Parity**: We currently only support a couple of limited use cases from scanpy's preprocessing module. Building lazy operations for broader needs like PCA, UMAP, or different expression computations at scale could make SLAF a true drop-in replacement for existing scanpy workflows. This would enable researchers to run familiar analysis pipelines on datasets that would otherwise cause memory explosions. Which scanpy operations are most critical for your large-scale analysis workflows?
+
+**Foundation Model Training Lifecycles**: Our current dataloader is basic - no smart shuffling, shard-aware streaming, async pre-fetching, or real-world benchmarks on multi-node training yet. SLAF could help frame and drive moonshots like "the $100 overnight scGPT training experiment" by driving up the efficiencies of multi-node, multi-GPU training and fine-tuning workloads. What training bottlenecks are most limiting your foundation model experiments?
+
+**Cloud-Native Benchmarks**: Limited real-world benchmarks for cloud-native datasets. Today's benchmarks are all on local storage for small datasets. Would this be a blocker to adoption? What performance characteristics and benchmarks would give you confidence to adopt SLAF for production workloads?
 
 ---
 
