@@ -19,16 +19,24 @@ jobs:
         with:
           fetch-depth: 0 # Full history for changelog
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v1
         with:
-          python-version: "3.12"
+          version: "latest"
+
+      - name: Cache uv dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/uv
+            .uv
+          key: ${{ runner.os }}-uv-${{ hashFiles('pyproject.toml', 'uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-          pip install build twine
+          uv sync --extra dev
 
       - name: Extract version from tag
         id: version
@@ -43,15 +51,15 @@ jobs:
 
       - name: Run tests
         run: |
-          pytest tests/ --cov=slaf --cov-report=term-missing
+          uv run pytest tests/ --cov=slaf --cov-report=term-missing
 
       - name: Build package
         run: |
-          python -m build
+          uv run python -m build
 
       - name: Check package
         run: |
-          twine check dist/*
+          uv run twine check dist/*
 
       - name: Publish to Test PyPI
         if: contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc')
