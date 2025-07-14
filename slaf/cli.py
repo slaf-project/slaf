@@ -263,15 +263,39 @@ def get_current_version() -> str:
 
 
 def update_version(new_version: str) -> None:
-    """Update version in pyproject.toml."""
+    """Update version in pyproject.toml and uv.lock."""
     pyproject_path = Path("pyproject.toml")
     content = pyproject_path.read_text()
 
-    # Replace version
-    new_content = re.sub(r'version = "[^"]+"', f'version = "{new_version}"', content)
+    # Replace only the project version line, not other version-like strings
+    # Look for the specific line in the [project] section
+    lines = content.split("\n")
+    in_project_section = False
+    updated_lines = []
 
+    for line in lines:
+        if line.strip() == "[project]":
+            in_project_section = True
+        elif line.strip().startswith("[") and line.strip().endswith("]"):
+            in_project_section = False
+
+        if in_project_section and line.strip().startswith("version = "):
+            updated_lines.append(f'version = "{new_version}"')
+        else:
+            updated_lines.append(line)
+
+    new_content = "\n".join(updated_lines)
     pyproject_path.write_text(new_content)
     typer.echo(f"Updated version to {new_version}")
+
+    # Update uv.lock to reflect the new version
+    try:
+        typer.echo("Updating uv.lock...")
+        run_command("uv lock --no-upgrade")
+        typer.echo("Updated uv.lock")
+    except Exception as e:
+        typer.echo(f"Warning: Failed to update uv.lock: {e}")
+        typer.echo("You may need to run 'uv lock' manually")
 
 
 def calculate_new_version(current_version: str, release_type: str) -> str:
@@ -339,12 +363,17 @@ def generate_changelog(version: str) -> None:
     """Generate a basic changelog entry."""
     typer.echo("Generating changelog...")
 
+    # Get current date
+    from datetime import datetime
+
+    current_date = datetime.now().strftime("%Y-%m-%d")
+
     # Get commits since last tag
     result = run_command("git tag --sort=-version:refname | head -1", check=False)
     last_tag = result.stdout.strip()
 
     changelog_entry = f"""
-## [{version}] - $(date +%Y-%m-%d)
+## [{version}] - {current_date}
 
 ### Added
 """
