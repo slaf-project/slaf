@@ -190,6 +190,12 @@ def convert(
     format: str | None = typer.Option(
         None, "--format", "-f", help="Input format (auto-detected if not specified)"
     ),
+    chunked: bool = typer.Option(
+        False, "--chunked", "-c", help="Use chunked processing for memory efficiency"
+    ),
+    chunk_size: int = typer.Option(
+        10000, "--chunk-size", help="Number of cells per chunk (when using --chunked)"
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ):
     """Convert datasets to SLAF format."""
@@ -211,8 +217,11 @@ def convert(
 
     typer.echo(f"🔄 Converting {input_path} to SLAF format...")
 
+    if chunked:
+        typer.echo(f"📦 Using chunked processing (chunk size: {chunk_size:,} cells)")
+
     try:
-        converter = SLAFConverter()
+        converter = SLAFConverter(chunked=chunked, chunk_size=chunk_size)
 
         # Auto-detect format if not specified
         if not format:
@@ -224,7 +233,7 @@ def convert(
                 format = "anndata"  # Default
 
         if format == "anndata":
-            converter.convert_anndata(input_path, output_path)
+            converter.convert(input_path, output_path)
         else:
             typer.echo(f"❌ Unsupported format: {format}")
             raise typer.Exit(1) from None

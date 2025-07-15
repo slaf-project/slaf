@@ -175,7 +175,13 @@ class ChunkedH5ADReader:
             else:
                 index = index.astype(str)
             df = pd.DataFrame(obs_data, index=index)
-            df.index.name = "cell_id"
+            df.index.name = "index"  # Match scanpy behavior
+            return df
+        elif "index" in obs_data:
+            # Handle case where 'index' is a regular column (like in this dataset)
+            index_values = obs_data.pop("index")
+            df = pd.DataFrame(obs_data, index=index_values)
+            df.index.name = "index"  # Match scanpy behavior
             return df
         else:
             df = pd.DataFrame(obs_data)
@@ -208,9 +214,18 @@ class ChunkedH5ADReader:
             index = var["_index"][:]
             if index.dtype.kind in ("S", "O", "U"):
                 index = index.astype(str)
-            return pd.DataFrame(var_data, index=index)
+            df = pd.DataFrame(var_data, index=index)
+            df.index.name = "index"  # Match scanpy behavior
+            return df
+        elif "index" in var_data:
+            # Handle case where 'index' is a regular column (like in this dataset)
+            index_values = var_data.pop("index")
+            df = pd.DataFrame(var_data, index=index_values)
+            df.index.name = "index"  # Match scanpy behavior
+            return df
         else:
-            return pd.DataFrame(var_data)
+            df = pd.DataFrame(var_data)
+            return df
 
     def _read_sparse_chunk(self, start_row: int, end_row: int) -> sparse.csr_matrix:
         """Read a chunk from sparse matrix format"""

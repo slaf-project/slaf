@@ -317,14 +317,9 @@ class SLAFConverter:
                 var_df = var_df.reset_index(drop=True)
 
         else:
-            # Preserve original order
+            # Preserve original order and IDs
             obs_df["cell_id"] = obs_df.index.astype(str)
-            obs_df = obs_df.reset_index(drop=True)
-            var_df = var_df.reset_index(drop=True)
-
-        # Add integer IDs in sorted order
-        obs_df["cell_integer_id"] = range(len(obs_df))
-        var_df["gene_integer_id"] = range(len(var_df))
+            var_df["gene_id"] = var_df.index.astype(str)
 
         return obs_df, var_df
 
@@ -332,8 +327,17 @@ class SLAFConverter:
         self, obs_df: pd.DataFrame, var_df: pd.DataFrame, output_path: Path
     ):
         """Write sorted metadata tables"""
-        cell_metadata_table = self._create_metadata_table(obs_df, "cell_id")
-        gene_metadata_table = self._create_metadata_table(var_df, "gene_id")
+        # Create integer mappings to match traditional converter behavior
+        cell_id_mapping = self._create_id_mapping(obs_df.index, "cell")
+        gene_id_mapping = self._create_id_mapping(var_df.index, "gene")
+
+        # Create simplified metadata tables matching traditional converter
+        cell_metadata_table = self._create_metadata_table(
+            obs_df, "cell_id", integer_mapping=cell_id_mapping
+        )
+        gene_metadata_table = self._create_metadata_table(
+            var_df, "gene_id", integer_mapping=gene_id_mapping
+        )
 
         lance.write_dataset(
             cell_metadata_table, str(output_path / "cells.lance"), mode="overwrite"
