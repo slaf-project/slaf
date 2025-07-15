@@ -185,7 +185,7 @@ def examples(
 
 @app.command()
 def convert(
-    input_path: str = typer.Argument(..., help="Input file path (AnnData, HDF5, etc.)"),
+    input_path: str = typer.Argument(..., help="Input file or directory path"),
     output_path: str = typer.Argument(..., help="Output SLAF directory path"),
     format: str | None = typer.Option(
         None,
@@ -194,14 +194,17 @@ def convert(
         help="Input format: h5ad, 10x_mtx, 10x_h5, anndata, hdf5 (auto-detected if not specified)",
     ),
     chunked: bool = typer.Option(
-        False, "--chunked", "-c", help="Use chunked processing for memory efficiency"
+        False,
+        "--chunked",
+        "-c",
+        help="Use chunked processing for memory efficiency (supports all formats)",
     ),
     chunk_size: int = typer.Option(
         10000, "--chunk-size", help="Number of cells per chunk (when using --chunked)"
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ):
-    """Convert datasets to SLAF format."""
+    """Convert single-cell datasets to SLAF format with optimized storage."""
     try:
         from slaf.data import SLAFConverter
     except ImportError as e:

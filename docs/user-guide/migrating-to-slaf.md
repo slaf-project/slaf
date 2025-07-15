@@ -60,14 +60,24 @@ The converter automatically detects your input format based on:
 
 ### Large Dataset Conversion
 
-For datasets larger than available memory (100k cells or more, depending on RAM):
+SLAF supports **chunked conversion** for all input formats, enabling memory-efficient processing of large datasets:
+
+```bash
+# CLI chunked conversion (all formats supported)
+slaf convert large_data.h5ad output.slaf --chunked --chunk-size 10000
+slaf convert filtered_feature_bc_matrix/ output.slaf --chunked --chunk-size 5000
+slaf convert large_data.h5 output.slaf --chunked --chunk-size 15000
+```
 
 ```python
+# Python API chunked conversion
 from slaf.data import SLAFConverter
 
-# Use chunked processing for memory efficiency
+# Use chunked processing for memory efficiency (all formats)
 converter = SLAFConverter(chunked=True, chunk_size=10000)
 converter.convert("large_data.h5ad", "output.slaf")
+converter.convert("filtered_feature_bc_matrix/", "output.slaf")
+converter.convert("large_data.h5", "output.slaf")
 ```
 
 **When to use chunked conversion:**
@@ -75,6 +85,21 @@ converter.convert("large_data.h5ad", "output.slaf")
 - Datasets with 100k+ cells (depending on available RAM)
 - When you encounter memory errors during conversion
 - For optimal memory usage on large datasets
+- **All formats supported**: h5ad, 10x MTX, 10x H5
+
+**Chunked conversion benefits:**
+
+- **Memory efficient**: Processes data in chunks without loading entire dataset
+- **Format agnostic**: Works with all supported input formats
+- **Native readers**: Uses optimized chunked readers for each format
+- **Scalable**: Handle datasets larger than available RAM
+
+**Technical details:**
+
+- **Native chunked readers**: Each format (h5ad, 10x MTX, 10x H5) has optimized chunked readers
+- **Memory streaming**: Data is processed in configurable chunks to minimize memory usage
+- **Format detection**: Automatically selects the appropriate chunked reader based on input format
+- **Consistent API**: Same chunked interface works across all supported formats
 
 ## Current Support
 
@@ -107,6 +132,10 @@ slaf convert filtered_feature_bc_matrix/ output.slaf
 
 # Convert 10x H5 file
 slaf convert filtered_feature_bc_matrix.h5 output.slaf
+
+# Chunked conversion for large datasets
+slaf convert filtered_feature_bc_matrix/ output.slaf --chunked --chunk-size 5000
+slaf convert filtered_feature_bc_matrix.h5 output.slaf --chunked --chunk-size 10000
 ```
 
 ### From AnnData
@@ -114,6 +143,9 @@ slaf convert filtered_feature_bc_matrix.h5 output.slaf
 ```bash
 # Convert h5ad file
 slaf convert data.h5ad output.slaf
+
+# Chunked conversion for large h5ad files
+slaf convert large_data.h5ad output.slaf --chunked --chunk-size 15000
 ```
 
 ### From Python
@@ -126,6 +158,28 @@ converter = SLAFConverter()
 converter.convert("your_data.h5ad", "output.slaf")
 converter.convert("your_10x_directory/", "output.slaf")
 converter.convert("your_10x_file.h5", "output.slaf")
+
+# Chunked conversion for all formats
+converter = SLAFConverter(chunked=True, chunk_size=10000)
+converter.convert("large_data.h5ad", "output.slaf")
+converter.convert("large_10x_directory/", "output.slaf")
+converter.convert("large_10x_file.h5", "output.slaf")
+```
+
+### Memory-Efficient Processing Examples
+
+```python
+# Handle datasets larger than available RAM
+converter = SLAFConverter(chunked=True, chunk_size=5000)
+converter.convert("million_cells.h5ad", "output.slaf")
+
+# Process with custom chunk sizes
+converter = SLAFConverter(chunked=True, chunk_size=2000)
+converter.convert("dense_expression.h5ad", "output.slaf")
+
+# Combine with format detection
+converter = SLAFConverter(chunked=True, chunk_size=10000)
+converter.convert("unknown_format_data", "output.slaf")  # Auto-detects format
 ```
 
 ## Next Steps
