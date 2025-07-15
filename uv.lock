@@ -2875,8 +2875,8 @@ wheels = [
 ]
 
 [[package]]
-name = "slaf"
-version = "0.1.1"
+name = "slafdb"
+version = "0.1.2"
 source = { editable = "." }
 dependencies = [
     { name = "anndata" },
