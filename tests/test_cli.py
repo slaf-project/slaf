@@ -376,6 +376,246 @@ class TestCLI:
         assert calculate_new_version("0.1.0", "minor") == "0.2.0"
         assert calculate_new_version("0.1.0", "major") == "1.0.0"
 
+    # Multi-format conversion tests
+    @patch("slaf.cli.check_dependencies")
+    def test_convert_auto_detection_h5ad(self, mock_check_deps, runner):
+        """Test convert command with auto-detection for h5ad files."""
+
+        def exists_side_effect(self):
+            return str(self).endswith("input.h5ad")
+
+        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+            with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
+                mock_converter_instance = Mock()
+                mock_converter.return_value = mock_converter_instance
+
+                result = runner.invoke(app, ["convert", "input.h5ad", "output_dir"])
+
+                assert result.exit_code == 0
+                assert "Converting" in result.stdout
+                # Verify auto-detection was used (no explicit format)
+                mock_converter_instance.convert.assert_called_once_with(
+                    "input.h5ad", "output_dir"
+                )
+
+    @patch("slaf.cli.check_dependencies")
+    def test_convert_explicit_format_h5ad(self, mock_check_deps, runner):
+        """Test convert command with explicit h5ad format specification."""
+
+        def exists_side_effect(self):
+            return str(self).endswith("input.h5ad")
+
+        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+            with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
+                mock_converter_instance = Mock()
+                mock_converter.return_value = mock_converter_instance
+
+                result = runner.invoke(
+                    app, ["convert", "input.h5ad", "output_dir", "--format", "h5ad"]
+                )
+
+                assert result.exit_code == 0
+                assert "Converting" in result.stdout
+                # Verify explicit format was used
+                mock_converter_instance.convert.assert_called_once_with(
+                    "input.h5ad", "output_dir", input_format="h5ad"
+                )
+
+    @patch("slaf.cli.check_dependencies")
+    def test_convert_explicit_format_10x_mtx(self, mock_check_deps, runner):
+        """Test convert command with explicit 10x_mtx format specification."""
+
+        def exists_side_effect(self):
+            return str(self).endswith("mtx_dir")
+
+        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+            with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
+                mock_converter_instance = Mock()
+                mock_converter.return_value = mock_converter_instance
+
+                result = runner.invoke(
+                    app, ["convert", "mtx_dir", "output_dir", "--format", "10x_mtx"]
+                )
+
+                assert result.exit_code == 0
+                assert "Converting" in result.stdout
+                # Verify explicit format was used
+                mock_converter_instance.convert.assert_called_once_with(
+                    "mtx_dir", "output_dir", input_format="10x_mtx"
+                )
+
+    @patch("slaf.cli.check_dependencies")
+    def test_convert_explicit_format_10x_h5(self, mock_check_deps, runner):
+        """Test convert command with explicit 10x_h5 format specification."""
+
+        def exists_side_effect(self):
+            return str(self).endswith("data.h5")
+
+        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+            with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
+                mock_converter_instance = Mock()
+                mock_converter.return_value = mock_converter_instance
+
+                result = runner.invoke(
+                    app, ["convert", "data.h5", "output_dir", "--format", "10x_h5"]
+                )
+
+                assert result.exit_code == 0
+                assert "Converting" in result.stdout
+                # Verify explicit format was used
+                mock_converter_instance.convert.assert_called_once_with(
+                    "data.h5", "output_dir", input_format="10x_h5"
+                )
+
+    @patch("slaf.cli.check_dependencies")
+    def test_convert_format_mapping_anndata(self, mock_check_deps, runner):
+        """Test convert command with legacy 'anndata' format mapping."""
+
+        def exists_side_effect(self):
+            return str(self).endswith("input.h5ad")
+
+        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+            with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
+                mock_converter_instance = Mock()
+                mock_converter.return_value = mock_converter_instance
+
+                result = runner.invoke(
+                    app, ["convert", "input.h5ad", "output_dir", "--format", "anndata"]
+                )
+
+                assert result.exit_code == 0
+                assert "Converting" in result.stdout
+                # Verify format mapping was applied
+                mock_converter_instance.convert.assert_called_once_with(
+                    "input.h5ad", "output_dir", input_format="h5ad"
+                )
+
+    @patch("slaf.cli.check_dependencies")
+    def test_convert_format_mapping_hdf5(self, mock_check_deps, runner):
+        """Test convert command with legacy 'hdf5' format mapping."""
+
+        def exists_side_effect(self):
+            return str(self).endswith("data.h5")
+
+        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+            with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
+                mock_converter_instance = Mock()
+                mock_converter.return_value = mock_converter_instance
+
+                result = runner.invoke(
+                    app, ["convert", "data.h5", "output_dir", "--format", "hdf5"]
+                )
+
+                assert result.exit_code == 0
+                assert "Converting" in result.stdout
+                # Verify format mapping was applied
+                mock_converter_instance.convert.assert_called_once_with(
+                    "data.h5", "output_dir", input_format="10x_h5"
+                )
+
+    @patch("slaf.cli.check_dependencies")
+    def test_convert_chunked_processing(self, mock_check_deps, runner):
+        """Test convert command with chunked processing."""
+
+        def exists_side_effect(self):
+            return str(self).endswith("input.h5ad")
+
+        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+            with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
+                mock_converter_instance = Mock()
+                mock_converter.return_value = mock_converter_instance
+
+                result = runner.invoke(
+                    app,
+                    [
+                        "convert",
+                        "input.h5ad",
+                        "output_dir",
+                        "--chunked",
+                        "--chunk-size",
+                        "5000",
+                    ],
+                )
+
+                assert result.exit_code == 0
+                assert "Converting" in result.stdout
+                assert "Using chunked processing" in result.stdout
+                # Verify chunked processing was used
+                mock_converter.assert_called_once_with(chunked=True, chunk_size=5000)
+
+    @patch("slaf.cli.check_dependencies")
+    def test_convert_verbose_output(self, mock_check_deps, runner):
+        """Test convert command with verbose output."""
+
+        def exists_side_effect(self):
+            return str(self).endswith("input.h5ad")
+
+        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+            with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
+                mock_converter_instance = Mock()
+                mock_converter.return_value = mock_converter_instance
+
+                # Mock SLAFArray for verbose output
+                with patch("slaf.SLAFArray", create=True) as mock_slaf:
+                    mock_dataset = Mock()
+                    mock_dataset.shape = (1000, 20000)
+                    mock_dataset.obs.columns = ["cell_type", "batch"]
+                    mock_dataset.var.columns = ["gene_symbol", "highly_variable"]
+                    mock_slaf.return_value = mock_dataset
+
+                    result = runner.invoke(
+                        app, ["convert", "input.h5ad", "output_dir", "--verbose"]
+                    )
+
+                    assert result.exit_code == 0
+                    assert "Converting" in result.stdout
+                    assert "Dataset info:" in result.stdout
+                    assert "1,000 cells" in result.stdout
+                    assert "20,000 genes" in result.stdout
+
+    @patch("slaf.cli.check_dependencies")
+    def test_convert_output_directory_exists(self, mock_check_deps, runner):
+        """Test convert command when output directory already exists."""
+
+        def exists_side_effect(self):
+            return str(self).endswith("input.h5ad") or str(self).endswith("output_dir")
+
+        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+            result = runner.invoke(app, ["convert", "input.h5ad", "output_dir"])
+            assert result.exit_code == 1
+            assert "Output directory already exists" in result.stdout
+
+    @patch("slaf.cli.check_dependencies")
+    def test_convert_conversion_error(self, mock_check_deps, runner):
+        """Test convert command when conversion fails."""
+
+        def exists_side_effect(self):
+            return str(self).endswith("input.h5ad")
+
+        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+            with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
+                mock_converter_instance = Mock()
+                mock_converter_instance.convert.side_effect = ValueError(
+                    "Conversion failed"
+                )
+                mock_converter.return_value = mock_converter_instance
+
+                result = runner.invoke(app, ["convert", "input.h5ad", "output_dir"])
+                assert result.exit_code == 1
+                assert "Conversion failed" in result.stdout
+
+    @patch("slaf.cli.check_dependencies")
+    def test_convert_help(self, mock_check_deps, runner):
+        """Test convert command help text."""
+        result = runner.invoke(app, ["convert", "--help"])
+        assert result.exit_code == 0
+        assert "Input file path" in result.stdout
+        assert "Output SLAF directory path" in result.stdout
+        assert "Input format" in result.stdout
+        assert "h5ad, 10x_mtx, 10x_h5" in result.stdout
+        assert "chunked" in result.stdout
+        assert "verbose" in result.stdout
+
         # Benchmark command tests
 
     def test_benchmark_help(self, runner):
