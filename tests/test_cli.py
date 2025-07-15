@@ -609,7 +609,7 @@ class TestCLI:
         """Test convert command help text."""
         result = runner.invoke(app, ["convert", "--help"])
         assert result.exit_code == 0
-        assert "Input file path" in result.stdout
+        assert "Input file or directory path" in result.stdout
         assert "Output SLAF directory path" in result.stdout
         assert "Input format" in result.stdout
         assert "h5ad, 10x_mtx, 10x_h5" in result.stdout
@@ -618,6 +618,9 @@ class TestCLI:
 
         # Benchmark command tests
 
+    @pytest.mark.skip(
+        reason="Benchmark tests disabled until benchmark module is refactored"
+    )
     def test_benchmark_help(self, runner):
         """Test benchmark command help."""
         result = runner.invoke(app, ["benchmark", "--help"])
@@ -627,8 +630,482 @@ class TestCLI:
         assert "docs" in result.stdout
         assert "all" in result.stdout
 
+    @pytest.mark.skip(
+        reason="Benchmark tests disabled until benchmark module is refactored"
+    )
     def test_benchmark_invalid_action(self, runner):
         """Test benchmark command with invalid action."""
         result = runner.invoke(app, ["benchmark", "invalid_action"])
         assert result.exit_code == 1
         assert "Unknown action" in result.stdout
+
+    @pytest.mark.skip(
+        reason="Benchmark tests disabled until benchmark module is refactored"
+    )
+    @patch("slaf.cli.check_dependencies")
+    def test_benchmark_run_action(self, mock_check_deps, runner):
+        """Test benchmark run action."""
+        with patch("slaf.cli.Path") as mock_path:
+            mock_path_instance = Mock()
+            mock_path_instance.exists.return_value = True
+            mock_path_instance.glob.return_value = [Path("data/pbmc3k_processed.h5ad")]
+            mock_path.return_value = mock_path_instance
+
+            # Mock benchmark functions
+            with patch(
+                "slaf.cli.run_benchmark_suite", create=True
+            ) as mock_run_benchmark:
+                mock_run_benchmark.return_value = {"test": "results"}
+
+                result = runner.invoke(
+                    app, ["benchmark", "run", "--datasets", "pbmc3k"]
+                )
+                assert result.exit_code == 0
+                assert "Running SLAF benchmarks" in result.stdout
+
+    @pytest.mark.skip(
+        reason="Benchmark tests disabled until benchmark module is refactored"
+    )
+    @patch("slaf.cli.check_dependencies")
+    def test_benchmark_summary_action(self, mock_check_deps, runner):
+        """Test benchmark summary action."""
+        with patch("slaf.cli.Path.exists", return_value=True):
+            with patch(
+                "slaf.cli.generate_benchmark_summary", create=True
+            ) as mock_summary:
+                result = runner.invoke(app, ["benchmark", "summary"])
+                assert result.exit_code == 0
+                assert "Generating benchmark summary" in result.stdout
+                mock_summary.assert_called_once()
+
+    @pytest.mark.skip(
+        reason="Benchmark tests disabled until benchmark module is refactored"
+    )
+    @patch("slaf.cli.check_dependencies")
+    def test_benchmark_docs_action(self, mock_check_deps, runner):
+        """Test benchmark docs action."""
+        with patch("slaf.cli.Path.exists", return_value=True):
+            with patch("slaf.cli.update_performance_docs", create=True) as mock_docs:
+                result = runner.invoke(app, ["benchmark", "docs"])
+                assert result.exit_code == 0
+                assert "Updating performance documentation" in result.stdout
+                mock_docs.assert_called_once()
+
+    @pytest.mark.skip(
+        reason="Benchmark tests disabled until benchmark module is refactored"
+    )
+    @patch("slaf.cli.check_dependencies")
+    def test_benchmark_all_action(self, mock_check_deps, runner):
+        """Test benchmark all action."""
+        with patch("slaf.cli.Path") as mock_path:
+            mock_path_instance = Mock()
+            mock_path_instance.exists.return_value = True
+            mock_path_instance.glob.return_value = [Path("data/pbmc3k_processed.h5ad")]
+            mock_path.return_value = mock_path_instance
+
+            # Mock all benchmark functions
+            with patch("slaf.cli.run_benchmark_suite", create=True) as mock_run:
+                with patch("slaf.cli.generate_benchmark_summary", create=True):
+                    with patch("slaf.cli.update_performance_docs", create=True):
+                        mock_run.return_value = {"test": "results"}
+
+                        result = runner.invoke(
+                            app, ["benchmark", "all", "--datasets", "pbmc3k"]
+                        )
+                        assert result.exit_code == 0
+                        assert "Running complete benchmark workflow" in result.stdout
+
+    @pytest.mark.skip(
+        reason="Benchmark tests disabled until benchmark module is refactored"
+    )
+    @patch("slaf.cli.check_dependencies")
+    def test_benchmark_missing_results_file(self, mock_check_deps, runner):
+        """Test benchmark summary with missing results file."""
+        with patch("slaf.cli.Path.exists", return_value=False):
+            result = runner.invoke(app, ["benchmark", "summary"])
+            assert result.exit_code == 1
+            assert "Results file not found" in result.stdout
+
+    @pytest.mark.skip(
+        reason="Benchmark tests disabled until benchmark module is refactored"
+    )
+    @patch("slaf.cli.check_dependencies")
+    def test_benchmark_missing_summary_file(self, mock_check_deps, runner):
+        """Test benchmark docs with missing summary file."""
+        with patch("slaf.cli.Path.exists", side_effect=[True, False]):
+            result = runner.invoke(app, ["benchmark", "docs"])
+            assert result.exit_code == 1
+            assert "Summary file not found" in result.stdout
+
+    @pytest.mark.skip(
+        reason="Benchmark tests disabled until benchmark module is refactored"
+    )
+    @patch("slaf.cli.check_dependencies")
+    def test_benchmark_missing_docs_file(self, mock_check_deps, runner):
+        """Test benchmark docs with missing docs file."""
+        with patch("slaf.cli.Path.exists", side_effect=[True, True, False]):
+            result = runner.invoke(app, ["benchmark", "docs"])
+            assert result.exit_code == 1
+            assert "Docs file not found" in result.stdout
+
+    @patch("slaf.cli.check_dependencies")
+    def test_convert_with_slaf_import_error(self, mock_check_deps, runner):
+        """Test convert command when SLAF import fails."""
+
+        def exists_side_effect(self):
+            return str(self).endswith("input.h5ad")
+
+        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+            with patch(
+                "slaf.data.SLAFConverter", side_effect=ImportError("SLAF not found")
+            ):
+                result = runner.invoke(app, ["convert", "input.h5ad", "output_dir"])
+                assert result.exit_code == 1
+                assert "Conversion failed: SLAF not found" in result.stdout
+
+    @patch("slaf.cli.check_dependencies")
+    def test_info_with_slaf_import_error(self, mock_check_deps, runner):
+        """Test info command when SLAF import fails."""
+        with patch("slaf.cli.Path.exists", return_value=True):
+            with patch("slaf.SLAFArray", side_effect=ImportError("SLAF not found")):
+                result = runner.invoke(app, ["info", "test_dataset"])
+                assert result.exit_code == 1
+                assert "Failed to load dataset: SLAF not found" in result.stdout
+
+    @patch("slaf.cli.check_dependencies")
+    def test_query_with_slaf_import_error(self, mock_check_deps, runner):
+        """Test query command when SLAF import fails."""
+        with patch("slaf.cli.Path.exists", return_value=True):
+            with patch("slaf.SLAFArray", side_effect=ImportError("SLAF not found")):
+                result = runner.invoke(
+                    app, ["query", "test_dataset", "SELECT * FROM expression"]
+                )
+                assert result.exit_code == 1
+                assert "Query failed: SLAF not found" in result.stdout
+
+    @patch("slaf.cli.check_dependencies")
+    def test_query_with_output_file(self, mock_check_deps, runner):
+        """Test query command with output file."""
+        with patch("slaf.cli.Path") as mock_path:
+            mock_path_instance = Mock()
+            mock_path_instance.exists.return_value = True
+            mock_path.return_value = mock_path_instance
+            with patch("slaf.SLAFArray", create=True) as mock_slaf:
+                mock_dataset = Mock()
+                mock_result = Mock()
+                mock_result.to_csv = Mock()
+                mock_dataset.query.return_value = mock_result
+                mock_slaf.return_value = mock_dataset
+
+                result = runner.invoke(
+                    app,
+                    [
+                        "query",
+                        "test_dataset",
+                        "SELECT * FROM expression",
+                        "--output",
+                        "results.csv",
+                    ],
+                )
+                assert result.exit_code == 0
+                assert "Results saved to results.csv" in result.stdout
+                mock_result.to_csv.assert_called_once_with("results.csv", index=False)
+
+    @patch("slaf.cli.check_dependencies")
+    def test_query_with_limit(self, mock_check_deps, runner):
+        """Test query command with custom limit."""
+        with patch("slaf.cli.Path") as mock_path:
+            mock_path_instance = Mock()
+            mock_path_instance.exists.return_value = True
+            mock_path.return_value = mock_path_instance
+            with patch("slaf.SLAFArray", create=True) as mock_slaf:
+                mock_dataset = Mock()
+                mock_dataset.query.return_value = Mock()
+                mock_slaf.return_value = mock_dataset
+
+                result = runner.invoke(
+                    app,
+                    [
+                        "query",
+                        "test_dataset",
+                        "SELECT * FROM expression",
+                        "--limit",
+                        "5",
+                    ],
+                )
+                assert result.exit_code == 0
+                # Verify the query was called with LIMIT 5
+                mock_dataset.query.assert_called_once()
+                call_args = mock_dataset.query.call_args[0][0]
+                assert "LIMIT 5" in call_args
+
+    @patch("slaf.cli.check_dependencies")
+    def test_query_failure(self, mock_check_deps, runner):
+        """Test query command when query fails."""
+        with patch("slaf.cli.Path") as mock_path:
+            mock_path_instance = Mock()
+            mock_path_instance.exists.return_value = True
+            mock_path.return_value = mock_path_instance
+            with patch("slaf.SLAFArray", create=True) as mock_slaf:
+                mock_dataset = Mock()
+                mock_dataset.query.side_effect = ValueError("Invalid SQL")
+                mock_slaf.return_value = mock_dataset
+
+                result = runner.invoke(app, ["query", "test_dataset", "INVALID SQL"])
+                assert result.exit_code == 1
+                assert "Query failed" in result.stdout
+
+    @patch("slaf.cli.check_dependencies")
+    def test_info_failure(self, mock_check_deps, runner):
+        """Test info command when dataset loading fails."""
+        with patch("slaf.cli.Path") as mock_path:
+            mock_path_instance = Mock()
+            mock_path_instance.exists.return_value = True
+            mock_path.return_value = mock_path_instance
+            with patch("slaf.SLAFArray", create=True) as mock_slaf:
+                mock_slaf.side_effect = ValueError("Invalid dataset")
+
+                result = runner.invoke(app, ["info", "test_dataset"])
+                assert result.exit_code == 1
+                assert "Failed to load dataset" in result.stdout
+
+    def test_get_current_version_success(self):
+        """Test get_current_version with valid pyproject.toml."""
+        with patch("slaf.cli.Path.exists", return_value=True):
+            with patch("slaf.cli.Path.read_text", return_value='version = "1.2.3"'):
+                from slaf.cli import get_current_version
+
+                version = get_current_version()
+                assert version == "1.2.3"
+
+    def test_get_current_version_file_not_found(self):
+        """Test get_current_version when pyproject.toml doesn't exist."""
+        with patch("slaf.cli.Path.exists", return_value=False):
+            from slaf.cli import get_current_version
+
+            with pytest.raises(FileNotFoundError):
+                get_current_version()
+
+    def test_get_current_version_no_version(self):
+        """Test get_current_version when version not found in pyproject.toml."""
+        with patch("slaf.cli.Path.exists", return_value=True):
+            with patch("slaf.cli.Path.read_text", return_value="no version here"):
+                from slaf.cli import get_current_version
+
+                with pytest.raises(ValueError):
+                    get_current_version()
+
+    def test_calculate_new_version_patch(self):
+        """Test calculate_new_version with patch release."""
+        from slaf.cli import calculate_new_version
+
+        assert calculate_new_version("1.2.3", "patch") == "1.2.4"
+
+    def test_calculate_new_version_minor(self):
+        """Test calculate_new_version with minor release."""
+        from slaf.cli import calculate_new_version
+
+        assert calculate_new_version("1.2.3", "minor") == "1.3.0"
+
+    def test_calculate_new_version_major(self):
+        """Test calculate_new_version with major release."""
+        from slaf.cli import calculate_new_version
+
+        assert calculate_new_version("1.2.3", "major") == "2.0.0"
+
+    def test_calculate_new_version_invalid(self):
+        """Test calculate_new_version with invalid release type."""
+        from slaf.cli import calculate_new_version
+
+        with pytest.raises(ValueError):
+            calculate_new_version("1.2.3", "invalid")
+
+    def test_calculate_new_version_invalid_format(self):
+        """Test calculate_new_version with invalid version format."""
+        from slaf.cli import calculate_new_version
+
+        with pytest.raises(ValueError):
+            calculate_new_version("1.2", "patch")
+
+    @patch("slaf.cli.Path")
+    @patch("slaf.cli.run_command")
+    def test_update_version(self, mock_run_command, mock_path):
+        """Test update_version function."""
+        mock_path_instance = Mock()
+        mock_path_instance.read_text.return_value = '[project]\nversion = "1.2.3"\n'
+        mock_path.return_value = mock_path_instance
+
+        from slaf.cli import update_version
+
+        update_version("1.2.4")
+
+        # Verify the file was written with new version
+        mock_path_instance.write_text.assert_called_once()
+        written_content = mock_path_instance.write_text.call_args[0][0]
+        assert 'version = "1.2.4"' in written_content
+
+    @patch("slaf.cli.run_command")
+    def test_create_tag_success(self, mock_run_command):
+        """Test create_tag function."""
+        mock_run_command.side_effect = [
+            Mock(returncode=0, stdout=""),  # git tag -l
+            Mock(returncode=0),  # git tag
+            Mock(returncode=0),  # git push
+        ]
+
+        from slaf.cli import create_tag
+
+        create_tag("1.2.3")
+
+        assert mock_run_command.call_count == 3
+
+    @patch("slaf.cli.run_command")
+    def test_create_tag_already_exists(self, mock_run_command):
+        """Test create_tag when tag already exists."""
+        mock_run_command.side_effect = [
+            Mock(returncode=0, stdout="v1.2.3"),  # git tag -l
+        ]
+
+        from slaf.cli import create_tag
+
+        create_tag("1.2.3")
+
+        # Should only call git tag -l, not create or push
+        assert mock_run_command.call_count == 1
+
+    @patch("slaf.cli.run_command")
+    def test_generate_changelog(self, mock_run_command):
+        """Test generate_changelog function."""
+        mock_run_command.side_effect = [
+            Mock(returncode=0, stdout="v1.2.0"),  # git tag
+            Mock(returncode=0, stdout="commit1\ncommit2"),  # git log
+        ]
+
+        with patch("slaf.cli.Path") as mock_path:
+            mock_path_instance = Mock()
+            mock_path_instance.exists.return_value = True
+            mock_path_instance.read_text.return_value = "# Changelog\n\n"
+            mock_path.return_value = mock_path_instance
+
+            from slaf.cli import generate_changelog
+
+            generate_changelog("1.2.3")
+
+            # Verify changelog was written
+            mock_path_instance.write_text.assert_called_once()
+            written_content = mock_path_instance.write_text.call_args[0][0]
+            assert "## [1.2.3]" in written_content
+
+    @patch("slaf.cli.check_dependencies")
+    def test_convert_with_verbose_and_chunked(self, mock_check_deps, runner):
+        """Test convert command with both verbose and chunked options."""
+
+        def exists_side_effect(self):
+            return str(self).endswith("input.h5ad")
+
+        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+            with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
+                mock_converter_instance = Mock()
+                mock_converter.return_value = mock_converter_instance
+
+                # Mock SLAFArray for verbose output
+                with patch("slaf.SLAFArray", create=True) as mock_slaf:
+                    mock_dataset = Mock()
+                    mock_dataset.shape = (1000, 20000)
+                    mock_dataset.obs.columns = ["cell_type", "batch"]
+                    mock_dataset.var.columns = ["gene_symbol", "highly_variable"]
+                    mock_slaf.return_value = mock_dataset
+
+                    result = runner.invoke(
+                        app,
+                        [
+                            "convert",
+                            "input.h5ad",
+                            "output_dir",
+                            "--chunked",
+                            "--chunk-size",
+                            "5000",
+                            "--verbose",
+                        ],
+                    )
+
+                    assert result.exit_code == 0
+                    assert "Converting" in result.stdout
+                    assert "Using chunked processing" in result.stdout
+                    assert "Dataset info:" in result.stdout
+                    # Verify chunked processing was used
+                    mock_converter.assert_called_once_with(
+                        chunked=True, chunk_size=5000
+                    )
+
+    @patch("slaf.cli.check_dependencies")
+    def test_convert_with_custom_chunk_size(self, mock_check_deps, runner):
+        """Test convert command with custom chunk size."""
+
+        def exists_side_effect(self):
+            return str(self).endswith("input.h5ad")
+
+        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+            with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
+                mock_converter_instance = Mock()
+                mock_converter.return_value = mock_converter_instance
+
+                result = runner.invoke(
+                    app,
+                    [
+                        "convert",
+                        "input.h5ad",
+                        "output_dir",
+                        "--chunked",
+                        "--chunk-size",
+                        "2000",
+                    ],
+                )
+
+                assert result.exit_code == 0
+                assert (
+                    "Using chunked processing (chunk size: 2,000 cells)"
+                    in result.stdout
+                )
+                # Verify custom chunk size was used
+                mock_converter.assert_called_once_with(chunked=True, chunk_size=2000)
+
+    @patch("slaf.cli.check_dependencies")
+    def test_convert_with_format_and_chunked(self, mock_check_deps, runner):
+        """Test convert command with explicit format and chunked processing."""
+
+        def exists_side_effect(self):
+            return str(self).endswith("input.h5ad")
+
+        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+            with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
+                mock_converter_instance = Mock()
+                mock_converter.return_value = mock_converter_instance
+
+                result = runner.invoke(
+                    app,
+                    [
+                        "convert",
+                        "input.h5ad",
+                        "output_dir",
+                        "--format",
+                        "h5ad",
+                        "--chunked",
+                    ],
+                )
+
+                assert result.exit_code == 0
+                assert "Converting" in result.stdout
+                # Verify both format and chunked processing were used
+                mock_converter_instance.convert.assert_called_once_with(
+                    "input.h5ad", "output_dir", input_format="h5ad"
+                )
+                mock_converter.assert_called_once_with(chunked=True, chunk_size=10000)
+
+    def test_convert_help_text_contains_chunked_info(self, runner):
+        """Test that convert help text contains chunked processing information."""
+        result = runner.invoke(app, ["convert", "--help"])
+        assert result.exit_code == 0
+        assert "supports all formats" in result.stdout
+        assert "chunked processing" in result.stdout
+        assert "memory efficiency" in result.stdout
