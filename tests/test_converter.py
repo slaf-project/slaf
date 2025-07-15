@@ -264,8 +264,9 @@ class TestSLAFConverter:
         (mtx_dir / "barcodes.tsv").write_text("cell1\ncell2\ncell3")
         (mtx_dir / "genes.tsv").write_text("gene1\tGENE1\ngene2\tGENE2\ngene3\tGENE3")
 
-        converter = SLAFConverter()
-        detected_format = converter._detect_format(str(mtx_dir))
+        from slaf.data.utils import detect_format
+
+        detected_format = detect_format(str(mtx_dir))
         assert detected_format == "10x_mtx"
 
     def test_10x_h5_format_detection(self, temp_dir):
@@ -274,8 +275,9 @@ class TestSLAFConverter:
         h5_file = Path(temp_dir) / "data.h5"
         h5_file.write_text("mock h5 content")
 
-        converter = SLAFConverter()
-        detected_format = converter._detect_format(str(h5_file))
+        from slaf.data.utils import detect_format
+
+        detected_format = detect_format(str(h5_file))
         assert detected_format == "10x_h5"
 
     def test_h5ad_format_detection(self, temp_dir):
@@ -284,16 +286,17 @@ class TestSLAFConverter:
         h5ad_file = Path(temp_dir) / "data.h5ad"
         h5ad_file.write_text("mock h5ad content")
 
-        converter = SLAFConverter()
-        detected_format = converter._detect_format(str(h5ad_file))
+        from slaf.data.utils import detect_format
+
+        detected_format = detect_format(str(h5ad_file))
         assert detected_format == "h5ad"
 
     def test_format_detection_invalid_file(self):
         """Test format detection with invalid file"""
-        converter = SLAFConverter()
+        from slaf.data.utils import detect_format
 
         with pytest.raises(ValueError, match="Cannot detect format for"):
-            converter._detect_format("nonexistent_file.txt")
+            detect_format("nonexistent_file.txt")
 
     def test_convert_10x_mtx_format(self, temp_dir):
         """Test conversion from 10x MTX format"""
@@ -545,6 +548,233 @@ class TestSLAFConverter:
         assert "cell_integer_id" not in cells_df.columns
         assert "gene_integer_id" not in genes_df.columns
 
+    def test_convert_10x_mtx_chunked(self, temp_dir):
+        """Test chunked conversion from 10x MTX format"""
+        import pandas as pd
+        from scipy import sparse
+        from scipy.io import mmwrite
+
+        # Create a mock 10x MTX directory with real data
+        mtx_dir = Path(temp_dir) / "filtered_feature_bc_matrix"
+        mtx_dir.mkdir(exist_ok=True)
+
+        # Create small test data
+        n_cells, n_genes = 5, 3
+        X = np.random.randint(0, 10, (n_cells, n_genes))
+        X_sparse = sparse.csr_matrix(X)
+
+        # Write matrix.mtx
+        matrix_path = mtx_dir / "matrix.mtx"
+        mmwrite(str(matrix_path), X_sparse.T)  # Transpose for MTX format
+
+        # Write barcodes.tsv
+        barcodes_path = mtx_dir / "barcodes.tsv"
+        cell_names = [f"cell_{i}" for i in range(n_cells)]
+        pd.DataFrame(cell_names).to_csv(
+            barcodes_path, sep="\t", header=False, index=False
+        )
+
+        # Write genes.tsv
+        genes_path = mtx_dir / "genes.tsv"
+        gene_data = {
+            "gene_id": [f"ENSG_{i:08d}" for i in range(n_genes)],
+            "gene_symbol": [f"GENE_{i}" for i in range(n_genes)],
+        }
+        pd.DataFrame(gene_data).to_csv(genes_path, sep="\t", header=False, index=False)
+
+        # Convert to SLAF with chunked processing
+        output_path = Path(temp_dir) / "test_10x_mtx_chunked.slaf"
+        converter = SLAFConverter(
+            chunked=True, chunk_size=2
+        )  # Small chunk size for testing
+        converter.convert(str(mtx_dir), str(output_path))
+
+        # Verify output structure
+        assert (output_path / "expression.lance").exists()
+        assert (output_path / "cells.lance").exists()
+        assert (output_path / "genes.lance").exists()
+        assert (output_path / "config.json").exists()
+
+        # Verify data consistency
+        expression_dataset = lance.dataset(output_path / "expression.lance")
+        expression_df = expression_dataset.to_table().to_pandas()
+
+        # Check that we have the expected number of non-zero entries
+        expected_nonzero = np.count_nonzero(X)
+        actual_nonzero = len(expression_df)
+        assert actual_nonzero == expected_nonzero
+
+    def test_convert_10x_h5_chunked(self, temp_dir):
+        """Test chunked conversion from 10x H5 format"""
+        import scanpy as sc
+        from scipy import sparse
+
+        # Create test data
+        n_cells, n_genes = 5, 3
+        X = np.random.randint(0, 10, (n_cells, n_genes))
+        X_sparse = sparse.csr_matrix(X)
+
+        obs = pd.DataFrame(
+            {"cell_type": ["type1"] * n_cells, "batch": ["batch1"] * n_cells},
+            index=pd.Index([f"cell_{i}" for i in range(n_cells)]),
+        )
+
+        var = pd.DataFrame(
+            {
+                "gene_symbol": [f"GENE_{i}" for i in range(n_genes)],
+                "highly_variable": [True] * n_genes,
+            },
+            index=pd.Index([f"ENSG_{i:08d}" for i in range(n_genes)]),
+        )
+
+        adata = sc.AnnData(X=X_sparse, obs=obs, var=var)
+
+        # Save as H5 file (simulating 10x H5 format)
+        h5_file = Path(temp_dir) / "data.h5"
+        adata.write_h5ad(h5_file)
+
+        # Convert to SLAF with chunked processing
+        output_path = Path(temp_dir) / "test_10x_h5_chunked.slaf"
+        converter = SLAFConverter(
+            chunked=True, chunk_size=2
+        )  # Small chunk size for testing
+        converter.convert(str(h5_file), str(output_path))
+
+        # Verify output structure
+        assert (output_path / "expression.lance").exists()
+        assert (output_path / "cells.lance").exists()
+        assert (output_path / "genes.lance").exists()
+        assert (output_path / "config.json").exists()
+
+        # Verify data consistency
+        expression_dataset = lance.dataset(output_path / "expression.lance")
+        expression_df = expression_dataset.to_table().to_pandas()
+
+        # Check that we have the expected number of non-zero entries
+        expected_nonzero = np.count_nonzero(X)
+        actual_nonzero = len(expression_df)
+        assert actual_nonzero == expected_nonzero
+
+    def test_convert_10x_mtx_chunked_vs_non_chunked(self, temp_dir):
+        """Test that chunked and non-chunked conversion produce identical results for 10x MTX format"""
+        import pandas as pd
+        from scipy import sparse
+        from scipy.io import mmwrite
+
+        # Create a mock 10x MTX directory
+        mtx_dir = Path(temp_dir) / "filtered_feature_bc_matrix"
+        mtx_dir.mkdir(exist_ok=True)
+
+        n_cells, n_genes = 4, 2
+        X = np.random.randint(0, 10, (n_cells, n_genes))
+        X_sparse = sparse.csr_matrix(X)
+
+        # Write MTX files
+        matrix_path = mtx_dir / "matrix.mtx"
+        mmwrite(str(matrix_path), X_sparse.T)
+
+        barcodes_path = mtx_dir / "barcodes.tsv"
+        cell_names = [f"cell_{i}" for i in range(n_cells)]
+        pd.DataFrame(cell_names).to_csv(
+            barcodes_path, sep="\t", header=False, index=False
+        )
+
+        genes_path = mtx_dir / "genes.tsv"
+        gene_data = {
+            "gene_id": [f"ENSG_{i:08d}" for i in range(n_genes)],
+            "gene_symbol": [f"GENE_{i}" for i in range(n_genes)],
+        }
+        pd.DataFrame(gene_data).to_csv(genes_path, sep="\t", header=False, index=False)
+
+        # Convert with chunked processing
+        output_chunked = Path(temp_dir) / "test_10x_mtx_chunked.slaf"
+        converter_chunked = SLAFConverter(chunked=True, chunk_size=2)
+        converter_chunked.convert(str(mtx_dir), str(output_chunked))
+
+        # Convert without chunked processing
+        output_non_chunked = Path(temp_dir) / "test_10x_mtx_non_chunked.slaf"
+        converter_non_chunked = SLAFConverter(chunked=False)
+        converter_non_chunked.convert(str(mtx_dir), str(output_non_chunked))
+
+        # Compare expression data
+        chunked_expression = (
+            lance.dataset(output_chunked / "expression.lance").to_table().to_pandas()
+        )
+        non_chunked_expression = (
+            lance.dataset(output_non_chunked / "expression.lance")
+            .to_table()
+            .to_pandas()
+        )
+
+        # Sort both by cell_id and gene_id for comparison
+        chunked_sorted = chunked_expression.sort_values(
+            ["cell_id", "gene_id"]
+        ).reset_index(drop=True)
+        non_chunked_sorted = non_chunked_expression.sort_values(
+            ["cell_id", "gene_id"]
+        ).reset_index(drop=True)
+
+        pd.testing.assert_frame_equal(chunked_sorted, non_chunked_sorted)
+
+    def test_convert_10x_h5_chunked_vs_non_chunked(self, temp_dir):
+        """Test that chunked and non-chunked conversion produce identical results for 10x H5 format"""
+        import scanpy as sc
+        from scipy import sparse
+
+        # Create test data
+        n_cells, n_genes = 4, 2
+        X = np.random.randint(0, 10, (n_cells, n_genes))
+        X_sparse = sparse.csr_matrix(X)
+
+        obs = pd.DataFrame(
+            {"cell_type": ["type1"] * n_cells, "batch": ["batch1"] * n_cells},
+            index=pd.Index([f"cell_{i}" for i in range(n_cells)]),
+        )
+
+        var = pd.DataFrame(
+            {
+                "gene_symbol": [f"GENE_{i}" for i in range(n_genes)],
+                "highly_variable": [True] * n_genes,
+            },
+            index=pd.Index([f"ENSG_{i:08d}" for i in range(n_genes)]),
+        )
+
+        adata = sc.AnnData(X=X_sparse, obs=obs, var=var)
+
+        # Save as H5 file (simulating 10x H5 format)
+        h5_file = Path(temp_dir) / "data.h5"
+        adata.write_h5ad(h5_file)
+
+        # Convert with chunked processing
+        output_chunked = Path(temp_dir) / "test_10x_h5_chunked.slaf"
+        converter_chunked = SLAFConverter(chunked=True, chunk_size=2)
+        converter_chunked.convert(str(h5_file), str(output_chunked))
+
+        # Convert without chunked processing
+        output_non_chunked = Path(temp_dir) / "test_10x_h5_non_chunked.slaf"
+        converter_non_chunked = SLAFConverter(chunked=False)
+        converter_non_chunked.convert(str(h5_file), str(output_non_chunked))
+
+        # Compare expression data
+        chunked_expression = (
+            lance.dataset(output_chunked / "expression.lance").to_table().to_pandas()
+        )
+        non_chunked_expression = (
+            lance.dataset(output_non_chunked / "expression.lance")
+            .to_table()
+            .to_pandas()
+        )
+
+        # Sort both by cell_id and gene_id for comparison
+        chunked_sorted = chunked_expression.sort_values(
+            ["cell_id", "gene_id"]
+        ).reset_index(drop=True)
+        non_chunked_sorted = non_chunked_expression.sort_values(
+            ["cell_id", "gene_id"]
+        ).reset_index(drop=True)
+
+        pd.testing.assert_frame_equal(chunked_sorted, non_chunked_sorted)
+
     def test_auto_detection_vs_explicit_format(self, temp_dir):
         """Test that auto-detection and explicit format specification produce identical results"""
         import scanpy as sc
@@ -682,12 +912,14 @@ class TestSLAFConverter:
             pd.DataFrame(gene_data).to_csv(f, sep="\t", header=False, index=False)
 
         # Test format detection
-        converter = SLAFConverter()
-        detected_format = converter._detect_format(str(mtx_dir))
+        from slaf.data.utils import detect_format
+
+        detected_format = detect_format(str(mtx_dir))
         assert detected_format == "10x_mtx"
 
         # Convert to SLAF (should work with scanpy's read_10x_mtx)
         output_path = Path(temp_dir) / "test_10x_mtx_compressed.slaf"
+        converter = SLAFConverter()
         converter.convert(str(mtx_dir), str(output_path))
 
         # Verify output structure
@@ -790,9 +1022,7 @@ class TestSLAFConverter:
         assert schema.field("gene_integer_id").type == pa.int32()
         assert schema.field("value").type == pa.float32()
 
-    def test_chunked_conversion_creates_same_structure(
-        self, small_sample_adata, temp_dir
-    ):
+    def test_convert_h5ad_chunked_structure(self, small_sample_adata, temp_dir):
         """Test that chunked conversion creates the same structure as traditional conversion"""
         # Save sample data as h5ad
         h5ad_path = Path(temp_dir) / "test.h5ad"
@@ -829,10 +1059,8 @@ class TestSLAFConverter:
 
         assert config_traditional == config_chunked
 
-    def test_chunked_vs_traditional_identical_output(
-        self, small_sample_adata, temp_dir
-    ):
-        """Test that chunked and traditional conversion produce identical data and metadata"""
+    def test_convert_h5ad_chunked_vs_non_chunked(self, small_sample_adata, temp_dir):
+        """Test that chunked and non-chunked conversion produce identical results for h5ad format"""
         # Save sample data as h5ad
         h5ad_path = Path(temp_dir) / "test.h5ad"
         small_sample_adata.write(h5ad_path)

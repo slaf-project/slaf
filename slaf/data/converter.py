@@ -10,7 +10,8 @@ import pyarrow as pa
 import scanpy as sc
 from scipy import sparse
 
-from .chunked_reader import ChunkedH5ADReader
+from .chunked_reader import create_chunked_reader
+from .utils import detect_format
 
 
 class SLAFConverter:
@@ -173,7 +174,7 @@ class SLAFConverter:
             Error: Cannot detect format for: unknown_file.txt
         """
         if input_format == "auto":
-            input_format = self._detect_format(input_path)
+            input_format = detect_format(input_path)
 
         if input_format == "h5ad":
             self._convert_h5ad(input_path, output_path)
@@ -199,28 +200,6 @@ class SLAFConverter:
         # Convert the AnnData object
         self._convert_anndata(adata, output_path)
 
-    def _detect_format(self, input_path: str) -> str:
-        """Auto-detect input format based on file structure"""
-        path = Path(input_path)
-
-        if path.suffix == ".h5ad":
-            return "h5ad"
-        elif path.suffix == ".h5":
-            return "10x_h5"
-        elif path.is_dir():
-            # Check for 10x MTX files (both old and new formats)
-            if (path / "matrix.mtx").exists() or (path / "matrix.mtx.gz").exists():
-                # Check for either genes.tsv or features.tsv (old vs new 10x format)
-                if (
-                    (path / "genes.tsv").exists()
-                    or (path / "genes.tsv.gz").exists()
-                    or (path / "features.tsv").exists()
-                    or (path / "features.tsv.gz").exists()
-                ):
-                    return "10x_mtx"
-
-        raise ValueError(f"Cannot detect format for: {input_path}")
-
     def _convert_h5ad(self, h5ad_path: str, output_path: str):
         """Convert h5ad file to SLAF format (existing logic)"""
         print(f"Converting {h5ad_path} to SLAF format...")
@@ -242,39 +221,49 @@ class SLAFConverter:
         """Convert 10x MTX directory to SLAF format"""
         print(f"Converting 10x MTX directory {mtx_dir} to SLAF format...")
 
-        # Use scanpy to read MTX files
-        try:
-            adata = sc.read_10x_mtx(mtx_dir)
-        except Exception as e:
-            print(f"Error reading 10x MTX files: {e}")
-            print(
-                "Please ensure the directory contains matrix.mtx and either genes.tsv or features.tsv files"
-            )
-            raise ValueError(
-                f"Failed to read 10x MTX format from {mtx_dir}: {e}"
-            ) from e
+        if self.chunked:
+            # Use native chunked reader for 10x MTX
+            print("Using native chunked reader for 10x MTX...")
+            self._convert_chunked(mtx_dir, output_path)
+        else:
+            # Use scanpy to read MTX files
+            try:
+                adata = sc.read_10x_mtx(mtx_dir)
+            except Exception as e:
+                print(f"Error reading 10x MTX files: {e}")
+                print(
+                    "Please ensure the directory contains matrix.mtx and either genes.tsv or features.tsv files"
+                )
+                raise ValueError(
+                    f"Failed to read 10x MTX format from {mtx_dir}: {e}"
+                ) from e
 
-        print(f"Loaded: {adata.n_obs} cells × {adata.n_vars} genes")
+            print(f"Loaded: {adata.n_obs} cells × {adata.n_vars} genes")
 
-        # Convert using existing AnnData conversion logic
-        self._convert_anndata(adata, output_path)
+            # Convert using existing AnnData conversion logic
+            self._convert_anndata(adata, output_path)
 
     def _convert_10x_h5(self, h5_path: str, output_path: str):
         """Convert 10x H5 file to SLAF format"""
         print(f"Converting 10x H5 file {h5_path} to SLAF format...")
 
-        # Try to read as 10x H5 first, fall back to regular h5ad
-        try:
-            adata = sc.read_10x_h5(h5_path, genome="X")
-        except Exception:
-            # Fall back to reading as regular h5ad
-            print("Reading as regular h5ad file...")
-            adata = sc.read_h5ad(h5_path)
+        if self.chunked:
+            # Use native chunked reader for 10x H5
+            print("Using native chunked reader for 10x H5...")
+            self._convert_chunked(h5_path, output_path)
+        else:
+            # Try to read as 10x H5 first, fall back to regular h5ad
+            try:
+                adata = sc.read_10x_h5(h5_path, genome="X")
+            except Exception:
+                # Fall back to reading as regular h5ad
+                print("Reading as regular h5ad file...")
+                adata = sc.read_h5ad(h5_path)
 
-        print(f"Loaded: {adata.n_obs} cells × {adata.n_vars} genes")
+            print(f"Loaded: {adata.n_obs} cells × {adata.n_vars} genes")
 
-        # Convert using existing AnnData conversion logic
-        self._convert_anndata(adata, output_path)
+            # Convert using existing AnnData conversion logic
+            self._convert_anndata(adata, output_path)
 
     def _convert_anndata(self, adata, output_path: str):
         """Internal method to convert AnnData object to SLAF format"""
@@ -354,7 +343,7 @@ class SLAFConverter:
         """Convert h5ad file using chunked processing with sorted-by-construction approach"""
         print(f"Processing in chunks of {self.chunk_size} cells...")
 
-        with ChunkedH5ADReader(h5ad_path) as reader:
+        with create_chunked_reader(h5ad_path) as reader:
             print(f"Loaded: {reader.n_obs} cells × {reader.n_vars} genes")
 
             # Create output directory
@@ -386,7 +375,7 @@ class SLAFConverter:
             self._save_config(output_path_obj, (reader.n_obs, reader.n_vars))
             print(f"Conversion complete! Saved to {output_path}")
 
-    def _sort_metadata_globally(self, reader: ChunkedH5ADReader):
+    def _sort_metadata_globally(self, reader):
         """Sort metadata by common query patterns for optimal performance"""
         obs_df = reader.get_obs_metadata()
         var_df = reader.get_var_metadata()
@@ -450,7 +439,7 @@ class SLAFConverter:
         )
 
     def _expression_chunk_iterator_sorted_by_construction(
-        self, reader: ChunkedH5ADReader
+        self, reader
     ) -> Iterator[pa.RecordBatch]:
         """Iterator that produces naturally sorted chunks by construction"""
         total_chunks = (reader.n_obs + self.chunk_size - 1) // self.chunk_size
@@ -468,7 +457,7 @@ class SLAFConverter:
             yield from chunk_table.to_batches()
 
     def _chunk_to_coo_table_sorted_by_construction(
-        self, chunk, obs_slice, reader: ChunkedH5ADReader, global_cell_offset: int
+        self, chunk, obs_slice, reader, global_cell_offset: int
     ):
         """Convert chunk to COO format with sequential integer IDs for natural sorting"""
         if sparse.issparse(chunk):
@@ -479,6 +468,28 @@ class SLAFConverter:
         # Get cell and gene names for this chunk
         chunk_cell_names = reader.obs_names[obs_slice]
         chunk_gene_names = reader.var_names
+
+        # Debug: Check dimensions
+        print(f"Debug: chunk shape: {chunk.shape}")
+        print(f"Debug: coo_chunk shape: {coo_chunk.shape}")
+        print(f"Debug: chunk_cell_names length: {len(chunk_cell_names)}")
+        print(f"Debug: chunk_gene_names length: {len(chunk_gene_names)}")
+        print(
+            f"Debug: coo_chunk.col max: {coo_chunk.col.max() if len(coo_chunk.col) > 0 else 'empty'}"
+        )
+        print(
+            f"Debug: coo_chunk.row max: {coo_chunk.row.max() if len(coo_chunk.row) > 0 else 'empty'}"
+        )
+
+        # Validate indices before accessing
+        if len(coo_chunk.col) > 0 and coo_chunk.col.max() >= len(chunk_gene_names):
+            raise ValueError(
+                f"Column index {coo_chunk.col.max()} is out of bounds for gene names array of length {len(chunk_gene_names)}"
+            )
+        if len(coo_chunk.row) > 0 and coo_chunk.row.max() >= len(chunk_cell_names):
+            raise ValueError(
+                f"Row index {coo_chunk.row.max()} is out of bounds for cell names array of length {len(chunk_cell_names)}"
+            )
 
         # Create arrays
         cell_ids = chunk_cell_names[coo_chunk.row].astype(str)
