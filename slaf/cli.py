@@ -188,7 +188,10 @@ def convert(
     input_path: str = typer.Argument(..., help="Input file path (AnnData, HDF5, etc.)"),
     output_path: str = typer.Argument(..., help="Output SLAF directory path"),
     format: str | None = typer.Option(
-        None, "--format", "-f", help="Input format (auto-detected if not specified)"
+        None,
+        "--format",
+        "-f",
+        help="Input format: h5ad, 10x_mtx, 10x_h5, anndata, hdf5 (auto-detected if not specified)",
     ),
     chunked: bool = typer.Option(
         False, "--chunked", "-c", help="Use chunked processing for memory efficiency"
@@ -223,20 +226,21 @@ def convert(
     try:
         converter = SLAFConverter(chunked=chunked, chunk_size=chunk_size)
 
-        # Auto-detect format if not specified
-        if not format:
-            if input_path.endswith(".h5ad") or input_path.endswith(".h5"):
-                format = "anndata"
-            elif input_path.endswith(".h5"):
-                format = "hdf5"
-            else:
-                format = "anndata"  # Default
-
-        if format == "anndata":
-            converter.convert(input_path, output_path)
+        # Use the new converter with auto-detection
+        if format:
+            # Convert CLI format names to converter format names
+            format_mapping = {
+                "anndata": "h5ad",
+                "hdf5": "10x_h5",
+                "10x_mtx": "10x_mtx",
+                "10x_h5": "10x_h5",
+                "h5ad": "h5ad",
+            }
+            input_format = format_mapping.get(format, format)
+            converter.convert(input_path, output_path, input_format=input_format)
         else:
-            typer.echo(f"❌ Unsupported format: {format}")
-            raise typer.Exit(1) from None
+            # Use auto-detection
+            converter.convert(input_path, output_path)
 
         typer.echo(f"✅ Successfully converted to {output_path}")
 
