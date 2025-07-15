@@ -498,7 +498,11 @@ class ChunkedH5ADReader(BaseChunkedReader):
         for chunk, obs_slice in self.iter_chunks(chunk_size=chunk_size):
             if self._is_sparse():
                 # For sparse matrices, extract the specific genes
-                chunk_genes = chunk[:, gene_indices].toarray()
+                chunk_slice = chunk[:, gene_indices]
+                if isinstance(chunk_slice, sparse.csr_matrix):
+                    chunk_genes = chunk_slice.toarray()
+                else:
+                    chunk_genes = chunk_slice
             else:
                 chunk_genes = chunk[:, gene_indices]
 
@@ -609,10 +613,14 @@ class Chunked10xMTXReader(BaseChunkedReader):
 
     @property
     def obs_names(self) -> np.ndarray:
+        if self._barcodes is None:
+            raise RuntimeError("Barcodes not initialized")
         return self._barcodes
 
     @property
     def var_names(self) -> np.ndarray:
+        if self._genes is None:
+            raise RuntimeError("Genes not initialized")
         return self._genes
 
     def get_obs_metadata(self) -> pd.DataFrame:
