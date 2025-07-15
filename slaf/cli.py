@@ -648,6 +648,27 @@ def benchmark(
         help="Performance docs file path (for docs action)",
     ),
 ):
+    """
+    Manage SLAF benchmarks and performance testing.
+
+    Actions:
+      run     - Run benchmarks on specified datasets
+      summary - Generate documentation summary from results
+      docs    - Update performance.md with benchmark data
+      all     - Run complete workflow (benchmarks + summary + docs)
+
+    Examples:
+      slaf benchmark run --datasets pbmc3k --auto-convert
+      slaf benchmark summary --results comprehensive_benchmark_results.json
+      slaf benchmark docs --summary benchmark_summary.json
+      slaf benchmark all --datasets pbmc3k --auto-convert
+    """
+
+    # Temporarily disabled until benchmark module is refactored
+    typer.echo("❌ Benchmark command is temporarily disabled")
+    typer.echo("   The benchmark module needs to be refactored into a proper module")
+    typer.echo("   before this command can be used.")
+    raise typer.Exit(1)
     r"""
     Manage SLAF benchmarks and performance testing.
 
