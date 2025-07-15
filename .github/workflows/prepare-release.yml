@@ -51,7 +51,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv sync --extra dev
+          uv sync --extra dev --extra test
 
       - name: Configure Git
         run: |
