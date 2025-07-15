@@ -25,13 +25,13 @@
 
 ```bash
 # Using uv (recommended)
-uv add slaf
+uv add slafdb
 
 # Or pip
-pip install slaf
+pip install slafdb
 
 # Or conda
-conda install -c conda-forge slaf
+conda install -c conda-forge slafdb
 
 # Development installation
 git clone https://github.com/slaf-project/slaf.git

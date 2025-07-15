@@ -241,10 +241,10 @@ SLAF is designed to be easy to adopt. Here's how to get started:
 
 ```bash
 # Using uv (recommended)
-uv add slaf
+uv add slafdb
 
 # Or pip
-pip install slaf
+pip install slafdb
 ```
 
 ### Basic Usage

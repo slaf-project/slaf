@@ -8,13 +8,13 @@ Install SLAF using your preferred package manager:
 
 ```bash
 # Using uv (recommended)
-uv add slaf
+uv add slafdb
 
 # Or pip
-pip install slaf
+pip install slafdb
 
 # Or conda
-conda install -c conda-forge slaf
+conda install -c conda-forge slafdb
 ```
 
 For development dependencies (including documentation):
@@ -24,7 +24,7 @@ For development dependencies (including documentation):
 uv pip install -e ".[docs,dev,test]"
 
 # Or using pip
-pip install slaf[docs,dev,test]
+pip install slafdb[docs,dev,test]
 ```
 
 ## Your First SLAF Experience
