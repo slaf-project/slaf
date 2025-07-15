@@ -250,7 +250,479 @@ class TestSLAFConverter:
         assert "optimizations" in config
         assert config["optimizations"]["use_integer_keys"]
 
-    # Chunked converter tests
+    # 10x Format Conversion Tests
+    def test_10x_mtx_format_detection(self, temp_dir):
+        """Test auto-detection of 10x MTX format"""
+        # Create a mock 10x MTX directory structure
+        mtx_dir = Path(temp_dir) / "filtered_feature_bc_matrix"
+        mtx_dir.mkdir(exist_ok=True)
+
+        # Create mock MTX files
+        (mtx_dir / "matrix.mtx").write_text(
+            "%%MatrixMarket matrix coordinate integer general\n3 3 3\n1 1 1\n2 2 2\n3 3 3"
+        )
+        (mtx_dir / "barcodes.tsv").write_text("cell1\ncell2\ncell3")
+        (mtx_dir / "genes.tsv").write_text("gene1\tGENE1\ngene2\tGENE2\ngene3\tGENE3")
+
+        converter = SLAFConverter()
+        detected_format = converter._detect_format(str(mtx_dir))
+        assert detected_format == "10x_mtx"
+
+    def test_10x_h5_format_detection(self, temp_dir):
+        """Test auto-detection of 10x H5 format"""
+        # Create a mock H5 file
+        h5_file = Path(temp_dir) / "data.h5"
+        h5_file.write_text("mock h5 content")
+
+        converter = SLAFConverter()
+        detected_format = converter._detect_format(str(h5_file))
+        assert detected_format == "10x_h5"
+
+    def test_h5ad_format_detection(self, temp_dir):
+        """Test auto-detection of h5ad format"""
+        # Create a mock h5ad file
+        h5ad_file = Path(temp_dir) / "data.h5ad"
+        h5ad_file.write_text("mock h5ad content")
+
+        converter = SLAFConverter()
+        detected_format = converter._detect_format(str(h5ad_file))
+        assert detected_format == "h5ad"
+
+    def test_format_detection_invalid_file(self):
+        """Test format detection with invalid file"""
+        converter = SLAFConverter()
+
+        with pytest.raises(ValueError, match="Cannot detect format for"):
+            converter._detect_format("nonexistent_file.txt")
+
+    def test_convert_10x_mtx_format(self, temp_dir):
+        """Test conversion from 10x MTX format"""
+        import pandas as pd
+        from scipy import sparse
+        from scipy.io import mmwrite
+
+        # Create a mock 10x MTX directory with real data
+        mtx_dir = Path(temp_dir) / "filtered_feature_bc_matrix"
+        mtx_dir.mkdir(exist_ok=True)
+
+        # Create small test data
+        n_cells, n_genes = 5, 3
+        X = np.random.randint(0, 10, (n_cells, n_genes))
+        X_sparse = sparse.csr_matrix(X)
+
+        # Write matrix.mtx
+        matrix_path = mtx_dir / "matrix.mtx"
+        mmwrite(str(matrix_path), X_sparse.T)  # Transpose for MTX format
+
+        # Write barcodes.tsv
+        barcodes_path = mtx_dir / "barcodes.tsv"
+        cell_names = [f"cell_{i}" for i in range(n_cells)]
+        pd.DataFrame(cell_names).to_csv(
+            barcodes_path, sep="\t", header=False, index=False
+        )
+
+        # Write genes.tsv
+        genes_path = mtx_dir / "genes.tsv"
+        gene_data = {
+            "gene_id": [f"ENSG_{i:08d}" for i in range(n_genes)],
+            "gene_symbol": [f"GENE_{i}" for i in range(n_genes)],
+        }
+        pd.DataFrame(gene_data).to_csv(genes_path, sep="\t", header=False, index=False)
+
+        # Convert to SLAF
+        output_path = Path(temp_dir) / "test_10x_mtx.slaf"
+        converter = SLAFConverter()
+        converter.convert(str(mtx_dir), str(output_path))
+
+        # Verify output structure
+        assert (output_path / "expression.lance").exists()
+        assert (output_path / "cells.lance").exists()
+        assert (output_path / "genes.lance").exists()
+        assert (output_path / "config.json").exists()
+
+        # Verify data consistency
+        expression_dataset = lance.dataset(output_path / "expression.lance")
+        expression_df = expression_dataset.to_table().to_pandas()
+
+        # Check that we have the expected number of non-zero entries
+        expected_nonzero = np.count_nonzero(X)
+        actual_nonzero = len(expression_df)
+        assert actual_nonzero == expected_nonzero
+
+    def test_convert_10x_h5_format(self, temp_dir):
+        """Test conversion from 10x H5 format"""
+        import scanpy as sc
+        from scipy import sparse
+
+        # Create a mock H5 file by saving AnnData as h5ad
+        # (This simulates the fallback behavior for non-standard H5 files)
+        n_cells, n_genes = 5, 3
+        X = np.random.randint(0, 10, (n_cells, n_genes))
+        X_sparse = sparse.csr_matrix(X)
+
+        obs = pd.DataFrame(
+            {"cell_type": ["type1"] * n_cells, "batch": ["batch1"] * n_cells},
+            index=pd.Index([f"cell_{i}" for i in range(n_cells)]),
+        )
+
+        var = pd.DataFrame(
+            {
+                "gene_symbol": [f"GENE_{i}" for i in range(n_genes)],
+                "highly_variable": [True] * n_genes,
+            },
+            index=pd.Index([f"ENSG_{i:08d}" for i in range(n_genes)]),
+        )
+
+        adata = sc.AnnData(X=X_sparse, obs=obs, var=var)
+
+        # Save as H5 file (simulating 10x H5 format)
+        h5_file = Path(temp_dir) / "data.h5"
+        adata.write_h5ad(h5_file)
+
+        # Convert to SLAF
+        output_path = Path(temp_dir) / "test_10x_h5.slaf"
+        converter = SLAFConverter()
+        converter.convert(str(h5_file), str(output_path))
+
+        # Verify output structure
+        assert (output_path / "expression.lance").exists()
+        assert (output_path / "cells.lance").exists()
+        assert (output_path / "genes.lance").exists()
+        assert (output_path / "config.json").exists()
+
+        # Verify data consistency
+        expression_dataset = lance.dataset(output_path / "expression.lance")
+        expression_df = expression_dataset.to_table().to_pandas()
+
+        # Check that we have the expected number of non-zero entries
+        expected_nonzero = np.count_nonzero(X)
+        actual_nonzero = len(expression_df)
+        assert actual_nonzero == expected_nonzero
+
+    def test_convert_with_explicit_format_specification(self, temp_dir):
+        """Test conversion with explicit format specification"""
+        import scanpy as sc
+        from scipy import sparse
+
+        # Create test data
+        n_cells, n_genes = 3, 2
+        X = np.random.randint(0, 5, (n_cells, n_genes))
+        X_sparse = sparse.csr_matrix(X)
+
+        obs = pd.DataFrame(
+            {"cell_type": ["type1"] * n_cells},
+            index=pd.Index([f"cell_{i}" for i in range(n_cells)]),
+        )
+
+        var = pd.DataFrame(
+            {"gene_symbol": [f"GENE_{i}" for i in range(n_genes)]},
+            index=pd.Index([f"ENSG_{i:08d}" for i in range(n_genes)]),
+        )
+
+        adata = sc.AnnData(X=X_sparse, obs=obs, var=var)
+
+        # Save as h5ad
+        h5ad_file = Path(temp_dir) / "data.h5ad"
+        adata.write_h5ad(h5ad_file)
+
+        # Convert with explicit format specification
+        output_path = Path(temp_dir) / "test_explicit_format.slaf"
+        converter = SLAFConverter()
+        converter.convert(str(h5ad_file), str(output_path), input_format="h5ad")
+
+        # Verify output
+        assert (output_path / "expression.lance").exists()
+        assert (output_path / "cells.lance").exists()
+        assert (output_path / "genes.lance").exists()
+
+    def test_convert_unsupported_format(self, temp_dir):
+        """Test conversion with unsupported format"""
+        # Create a dummy file
+        dummy_file = Path(temp_dir) / "dummy.txt"
+        dummy_file.write_text("dummy content")
+
+        converter = SLAFConverter()
+
+        with pytest.raises(ValueError, match="Unsupported format"):
+            converter.convert(
+                str(dummy_file),
+                str(Path(temp_dir) / "output.slaf"),
+                input_format="unsupported",
+            )
+
+    def test_convert_10x_mtx_with_integer_keys(self, temp_dir):
+        """Test 10x MTX conversion with integer key optimization"""
+        import pandas as pd
+        from scipy import sparse
+        from scipy.io import mmwrite
+
+        # Create mock 10x MTX directory
+        mtx_dir = Path(temp_dir) / "filtered_feature_bc_matrix"
+        mtx_dir.mkdir(exist_ok=True)
+
+        n_cells, n_genes = 4, 2
+        X = np.random.randint(0, 10, (n_cells, n_genes))
+        X_sparse = sparse.csr_matrix(X)
+
+        # Write MTX files
+        matrix_path = mtx_dir / "matrix.mtx"
+        mmwrite(str(matrix_path), X_sparse.T)
+
+        barcodes_path = mtx_dir / "barcodes.tsv"
+        cell_names = [f"cell_{i}" for i in range(n_cells)]
+        pd.DataFrame(cell_names).to_csv(
+            barcodes_path, sep="\t", header=False, index=False
+        )
+
+        genes_path = mtx_dir / "genes.tsv"
+        gene_data = {
+            "gene_id": [f"ENSG_{i:08d}" for i in range(n_genes)],
+            "gene_symbol": [f"GENE_{i}" for i in range(n_genes)],
+        }
+        pd.DataFrame(gene_data).to_csv(genes_path, sep="\t", header=False, index=False)
+
+        # Convert with integer keys
+        output_path = Path(temp_dir) / "test_10x_mtx_int_keys.slaf"
+        converter = SLAFConverter(use_integer_keys=True)
+        converter.convert(str(mtx_dir), str(output_path))
+
+        # Verify integer keys in metadata
+        cells_dataset = lance.dataset(output_path / "cells.lance")
+        cells_df = cells_dataset.to_table().to_pandas()
+
+        genes_dataset = lance.dataset(output_path / "genes.lance")
+        genes_df = genes_dataset.to_table().to_pandas()
+
+        assert "cell_integer_id" in cells_df.columns
+        assert "gene_integer_id" in genes_df.columns
+
+        # Check sequential integer IDs
+        np.testing.assert_array_equal(
+            cells_df["cell_integer_id"].values, range(n_cells)
+        )
+        np.testing.assert_array_equal(
+            genes_df["gene_integer_id"].values, range(n_genes)
+        )
+
+    def test_convert_10x_h5_without_integer_keys(self, temp_dir):
+        """Test 10x H5 conversion without integer key optimization"""
+        import scanpy as sc
+        from scipy import sparse
+
+        # Create test data
+        n_cells, n_genes = 3, 2
+        X = np.random.randint(0, 5, (n_cells, n_genes))
+        X_sparse = sparse.csr_matrix(X)
+
+        obs = pd.DataFrame(
+            {"cell_type": ["type1"] * n_cells},
+            index=pd.Index([f"cell_{i}" for i in range(n_cells)]),
+        )
+
+        var = pd.DataFrame(
+            {"gene_symbol": [f"GENE_{i}" for i in range(n_genes)]},
+            index=pd.Index([f"ENSG_{i:08d}" for i in range(n_genes)]),
+        )
+
+        adata = sc.AnnData(X=X_sparse, obs=obs, var=var)
+
+        # Save as H5 file
+        h5_file = Path(temp_dir) / "data.h5"
+        adata.write_h5ad(h5_file)
+
+        # Convert without integer keys
+        output_path = Path(temp_dir) / "test_10x_h5_no_int_keys.slaf"
+        converter = SLAFConverter(use_integer_keys=False)
+        converter.convert(str(h5_file), str(output_path))
+
+        # Verify no integer keys in metadata
+        cells_dataset = lance.dataset(output_path / "cells.lance")
+        cells_df = cells_dataset.to_table().to_pandas()
+
+        genes_dataset = lance.dataset(output_path / "genes.lance")
+        genes_df = genes_dataset.to_table().to_pandas()
+
+        assert "cell_integer_id" not in cells_df.columns
+        assert "gene_integer_id" not in genes_df.columns
+
+    def test_auto_detection_vs_explicit_format(self, temp_dir):
+        """Test that auto-detection and explicit format specification produce identical results"""
+        import scanpy as sc
+        from scipy import sparse
+
+        # Create test data
+        n_cells, n_genes = 3, 2
+        X = np.random.randint(0, 5, (n_cells, n_genes))
+        X_sparse = sparse.csr_matrix(X)
+
+        obs = pd.DataFrame(
+            {"cell_type": ["type1"] * n_cells},
+            index=pd.Index([f"cell_{i}" for i in range(n_cells)]),
+        )
+
+        var = pd.DataFrame(
+            {"gene_symbol": [f"GENE_{i}" for i in range(n_genes)]},
+            index=pd.Index([f"ENSG_{i:08d}" for i in range(n_genes)]),
+        )
+
+        adata = sc.AnnData(X=X_sparse, obs=obs, var=var)
+
+        # Save as h5ad
+        h5ad_file = Path(temp_dir) / "data.h5ad"
+        adata.write_h5ad(h5ad_file)
+
+        # Convert with auto-detection
+        output_auto = Path(temp_dir) / "test_auto.slaf"
+        converter_auto = SLAFConverter()
+        converter_auto.convert(str(h5ad_file), str(output_auto))
+
+        # Convert with explicit format
+        output_explicit = Path(temp_dir) / "test_explicit.slaf"
+        converter_explicit = SLAFConverter()
+        converter_explicit.convert(
+            str(h5ad_file), str(output_explicit), input_format="h5ad"
+        )
+
+        # Compare expression data
+        auto_expression = (
+            lance.dataset(output_auto / "expression.lance").to_table().to_pandas()
+        )
+        explicit_expression = (
+            lance.dataset(output_explicit / "expression.lance").to_table().to_pandas()
+        )
+
+        pd.testing.assert_frame_equal(auto_expression, explicit_expression)
+
+    def test_10x_formats_with_metadata_preservation(self, temp_dir):
+        """Test that 10x format conversion preserves metadata correctly"""
+        import pandas as pd
+        from scipy import sparse
+        from scipy.io import mmwrite
+
+        # Create mock 10x MTX with rich metadata
+        mtx_dir = Path(temp_dir) / "filtered_feature_bc_matrix"
+        mtx_dir.mkdir(exist_ok=True)
+
+        n_cells, n_genes = 4, 3
+        X = np.random.randint(0, 10, (n_cells, n_genes))
+        X_sparse = sparse.csr_matrix(X)
+
+        # Write MTX files
+        matrix_path = mtx_dir / "matrix.mtx"
+        mmwrite(str(matrix_path), X_sparse.T)
+
+        barcodes_path = mtx_dir / "barcodes.tsv"
+        cell_names = [f"cell_{i}" for i in range(n_cells)]
+        pd.DataFrame(cell_names).to_csv(
+            barcodes_path, sep="\t", header=False, index=False
+        )
+
+        genes_path = mtx_dir / "genes.tsv"
+        gene_data = {
+            "gene_id": [f"ENSG_{i:08d}" for i in range(n_genes)],
+            "gene_symbol": [f"GENE_{i}" for i in range(n_genes)],
+        }
+        pd.DataFrame(gene_data).to_csv(genes_path, sep="\t", header=False, index=False)
+
+        # Convert to SLAF
+        output_path = Path(temp_dir) / "test_10x_metadata.slaf"
+        converter = SLAFConverter()
+        converter.convert(str(mtx_dir), str(output_path))
+
+        # Verify metadata tables exist and have expected structure
+        cells_dataset = lance.dataset(output_path / "cells.lance")
+        cells_df = cells_dataset.to_table().to_pandas()
+
+        genes_dataset = lance.dataset(output_path / "genes.lance")
+        genes_df = genes_dataset.to_table().to_pandas()
+
+        # Check that cell and gene IDs are preserved
+        assert "cell_id" in cells_df.columns
+        assert "gene_id" in genes_df.columns
+
+        # Check that we have the right number of cells and genes
+        assert len(cells_df) == n_cells
+        assert len(genes_df) == n_genes
+
+    def test_10x_mtx_compressed_format(self, temp_dir):
+        """Test conversion from compressed 10x MTX format"""
+        import gzip
+
+        import pandas as pd
+        from scipy import sparse
+        from scipy.io import mmwrite
+
+        # Create mock 10x MTX directory with compressed files
+        mtx_dir = Path(temp_dir) / "filtered_feature_bc_matrix"
+        mtx_dir.mkdir(exist_ok=True)
+
+        n_cells, n_genes = 3, 2
+        X = np.random.randint(0, 10, (n_cells, n_genes))
+        X_sparse = sparse.csr_matrix(X)
+
+        # Write compressed matrix.mtx.gz
+        matrix_path = mtx_dir / "matrix.mtx.gz"
+        with gzip.open(matrix_path, "wb") as f:
+            mmwrite(f, X_sparse.T)
+
+        # Write compressed barcodes.tsv.gz
+        barcodes_path = mtx_dir / "barcodes.tsv.gz"
+        cell_names = [f"cell_{i}" for i in range(n_cells)]
+        with gzip.open(barcodes_path, "wt") as f:
+            pd.DataFrame(cell_names).to_csv(f, sep="\t", header=False, index=False)
+
+        # Write compressed features.tsv.gz (newer 10x format with 3 columns)
+        features_path = mtx_dir / "features.tsv.gz"
+        gene_data = {
+            "gene_id": [f"ENSG_{i:08d}" for i in range(n_genes)],
+            "gene_symbol": [f"GENE_{i}" for i in range(n_genes)],
+            "feature_type": ["Gene Expression"] * n_genes,
+        }
+        with gzip.open(features_path, "wt") as f:
+            pd.DataFrame(gene_data).to_csv(f, sep="\t", header=False, index=False)
+
+        # Test format detection
+        converter = SLAFConverter()
+        detected_format = converter._detect_format(str(mtx_dir))
+        assert detected_format == "10x_mtx"
+
+        # Convert to SLAF (should work with scanpy's read_10x_mtx)
+        output_path = Path(temp_dir) / "test_10x_mtx_compressed.slaf"
+        converter.convert(str(mtx_dir), str(output_path))
+
+        # Verify output structure
+        assert (output_path / "expression.lance").exists()
+        assert (output_path / "cells.lance").exists()
+        assert (output_path / "genes.lance").exists()
+
+    def test_error_handling_invalid_10x_mtx(self, temp_dir):
+        """Test error handling for invalid 10x MTX directory"""
+        # Create directory without required files
+        mtx_dir = Path(temp_dir) / "invalid_mtx"
+        mtx_dir.mkdir(exist_ok=True)
+
+        # Only create matrix.mtx, missing barcodes and genes
+        (mtx_dir / "matrix.mtx").write_text("invalid content")
+
+        converter = SLAFConverter()
+
+        # Should fail when trying to read with scanpy
+        with pytest.raises((ValueError, RuntimeError, OSError)):
+            converter.convert(str(mtx_dir), str(Path(temp_dir) / "output.slaf"))
+
+    def test_error_handling_invalid_10x_h5(self, temp_dir):
+        """Test error handling for invalid 10x H5 file"""
+        # Create invalid H5 file
+        h5_file = Path(temp_dir) / "invalid.h5"
+        h5_file.write_text("not a valid h5 file")
+
+        converter = SLAFConverter()
+
+        # Should fail when trying to read
+        with pytest.raises((ValueError, RuntimeError, OSError)):
+            converter.convert(str(h5_file), str(Path(temp_dir) / "output.slaf"))
+
+    # Chunked reader tests
     def test_chunked_reader_basic(self, sample_h5ad_file):
         """Test basic chunked reader functionality"""
         # Test chunked reader
