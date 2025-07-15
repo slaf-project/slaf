@@ -19,6 +19,7 @@ dependencies = [
     # Single-cell ecosystem
     "scanpy>=1.11.2",
     "anndata>=0.11.4",
+    "h5py>=3.10.0",    # For chunked H5AD reading
     # Utilities
     "orjson>=3.10.15",         # Fast JSON serialization
     "tqdm>=4.67.0",            # Progress bars

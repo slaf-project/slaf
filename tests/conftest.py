@@ -368,3 +368,46 @@ def temp_dir():
     temp_dir = tempfile.mkdtemp()
     yield temp_dir
     shutil.rmtree(temp_dir)
+
+
+@pytest.fixture
+def sample_h5ad_file():
+    """Create a sample h5ad file for chunked reader testing"""
+    import tempfile
+
+    import h5py
+
+    with tempfile.NamedTemporaryFile(suffix=".h5ad", delete=False) as tmp:
+        with h5py.File(tmp.name, "w") as f:
+            # Create a simple sparse matrix (2x2)
+            data = np.array([1.0, 2.0, 3.0, 4.0])
+            indices = np.array([0, 1, 0, 1])
+            indptr = np.array([0, 2, 4])
+
+            # Create X group with sparse format
+            x_group = f.create_group("X")
+            x_group.create_dataset("data", data=data)
+            x_group.create_dataset("indices", data=indices)
+            x_group.create_dataset("indptr", data=indptr)
+
+            # Create obs group
+            obs_group = f.create_group("obs")
+            obs_group.create_dataset("_index", data=np.array([b"cell_0", b"cell_1"]))
+            obs_group.create_dataset("cell_type", data=np.array([b"type_A", b"type_B"]))
+
+            # Create var group
+            var_group = f.create_group("var")
+            var_group.create_dataset("_index", data=np.array([b"gene_0", b"gene_1"]))
+            var_group.create_dataset("highly_variable", data=np.array([True, False]))
+
+        yield tmp.name
+        # Cleanup
+        Path(tmp.name).unlink()
+
+
+@pytest.fixture
+def chunked_converter():
+    """Create a chunked converter instance for testing"""
+    from slaf.data.converter import SLAFConverter
+
+    return SLAFConverter(chunked=True, chunk_size=1000)

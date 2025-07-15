@@ -1,4 +1,5 @@
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -7,6 +8,9 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import scanpy as sc
+from scipy import sparse
+
+from .chunked_reader import ChunkedH5ADReader
 
 
 class SLAFConverter:
@@ -55,6 +59,9 @@ class SLAFConverter:
     def __init__(
         self,
         use_integer_keys: bool = True,
+        chunked: bool = False,
+        chunk_size: int = 1000,
+        sort_metadata: bool = False,
     ):
         """
         Initialize converter with optimization options.
@@ -63,6 +70,8 @@ class SLAFConverter:
             use_integer_keys: Use integer keys instead of strings in sparse data.
                              This saves significant memory and improves query performance.
                              Set to False only if you need to preserve original string IDs.
+            chunked: Use chunked processing for memory efficiency (no scanpy dependency).
+            chunk_size: Size of each chunk when chunked=True.
 
         Examples:
             >>> # Default optimization (recommended)
@@ -70,12 +79,20 @@ class SLAFConverter:
             >>> print(f"Using integer keys: {converter.use_integer_keys}")
             Using integer keys: True
 
+            >>> # Chunked processing for large datasets
+            >>> converter = SLAFConverter(chunked=True, chunk_size=1000)
+            >>> print(f"Chunked processing: {converter.chunked}")
+            Chunked processing: True
+
             >>> # Disable integer key optimization
             >>> converter = SLAFConverter(use_integer_keys=False)
             >>> print(f"Using integer keys: {converter.use_integer_keys}")
             Using integer keys: False
         """
         self.use_integer_keys = use_integer_keys
+        self.chunked = chunked
+        self.chunk_size = chunk_size
+        self.sort_metadata = sort_metadata
 
     def convert(self, h5ad_path: str, output_path: str):
         """
@@ -104,6 +121,14 @@ class SLAFConverter:
             Loaded: 2700 cells × 32738 genes
             Conversion complete! Saved to pbmc3k.slaf
 
+            >>> # Convert with chunked processing
+            >>> converter = SLAFConverter(chunked=True, chunk_size=1000)
+            >>> converter.convert("large_data.h5ad", "output.slaf")
+            Converting large_data.h5ad to SLAF format...
+            Optimizations: int_keys=True, chunked=True
+            Processing in chunks of 1000 cells...
+            Conversion complete! Saved to output.slaf
+
             >>> # Convert with custom output path
             >>> converter.convert("data.h5ad", "/path/to/output/dataset.slaf")
             Converting data.h5ad to SLAF format...
@@ -119,17 +144,28 @@ class SLAFConverter:
             Error: [Errno 2] No such file or directory: 'nonexistent.h5ad'
         """
         print(f"Converting {h5ad_path} to SLAF format...")
-        print(f"Optimizations: int_keys={self.use_integer_keys}")
+        print(
+            f"Optimizations: int_keys={self.use_integer_keys}, chunked={self.chunked}, sort_metadata={self.sort_metadata}"
+        )
 
-        # Load h5ad
-        adata = sc.read_h5ad(h5ad_path)
-        print(f"Loaded: {adata.n_obs} cells × {adata.n_vars} genes")
+        if self.chunked:
+            self._convert_chunked(h5ad_path, output_path)
+        else:
+            # Load h5ad using scanpy
+            adata = sc.read_h5ad(h5ad_path)
+            print(f"Loaded: {adata.n_obs} cells × {adata.n_vars} genes")
 
-        # Convert the loaded AnnData object
-        self._convert_anndata(adata, output_path)
+            # Convert the loaded AnnData object
+            self._convert_anndata(adata, output_path)
 
     def convert_anndata(self, adata, output_path: str):
         """Convert AnnData object to SLAF format with COO-style expression table"""
+        if self.chunked:
+            raise ValueError(
+                "convert_anndata() not supported in chunked mode. "
+                "Use convert() with file path instead."
+            )
+
         print("Converting AnnData object to SLAF format...")
         print(f"Optimizations: int_keys={self.use_integer_keys}")
         print(f"Loaded: {adata.n_obs} cells × {adata.n_vars} genes")
@@ -162,11 +198,39 @@ class SLAFConverter:
 
         # Convert metadata
         print("Converting metadata...")
+
+        # Sort metadata to match chunked converter behavior
+        obs_df = adata.obs.copy()
+        var_df = adata.var.copy()
+
+        if self.sort_metadata:
+            sort_columns = []
+            if "cell_type" in obs_df.columns:
+                sort_columns.append("cell_type")
+            if "batch" in obs_df.columns:
+                sort_columns.append("batch")
+
+            if sort_columns:
+                obs_df = obs_df.sort_values(sort_columns).reset_index(drop=True)
+            else:
+                obs_df = obs_df.reset_index(drop=True)
+
+            sort_columns = []
+            if "highly_variable" in var_df.columns:
+                sort_columns.append("highly_variable")
+            if "means" in var_df.columns:
+                sort_columns.append("means")
+
+            if sort_columns:
+                var_df = var_df.sort_values(sort_columns).reset_index(drop=True)
+            else:
+                var_df = var_df.reset_index(drop=True)
+
         cell_metadata_table = self._create_metadata_table(
-            df=adata.obs, entity_id_col="cell_id", integer_mapping=cell_id_mapping
+            df=obs_df, entity_id_col="cell_id", integer_mapping=cell_id_mapping
         )
         gene_metadata_table = self._create_metadata_table(
-            df=adata.var, entity_id_col="gene_id", integer_mapping=gene_id_mapping
+            df=var_df, entity_id_col="gene_id", integer_mapping=gene_id_mapping
         )
 
         # Write all Lance tables
@@ -182,6 +246,216 @@ class SLAFConverter:
         # Save config
         self._save_config(output_path_obj, adata.shape)
         print(f"Conversion complete! Saved to {output_path}")
+
+    def _convert_chunked(self, h5ad_path: str, output_path: str):
+        """Convert h5ad file using chunked processing with sorted-by-construction approach"""
+        print(f"Processing in chunks of {self.chunk_size} cells...")
+
+        with ChunkedH5ADReader(h5ad_path) as reader:
+            print(f"Loaded: {reader.n_obs} cells × {reader.n_vars} genes")
+
+            # Create output directory
+            output_path_obj = Path(output_path)
+            output_path_obj.mkdir(exist_ok=True)
+
+            # Read and sort metadata
+            obs_df, var_df = self._sort_metadata_globally(reader)
+
+            # Write sorted metadata tables
+            self._write_sorted_metadata(obs_df, var_df, output_path_obj)
+
+            # Stream expression data with sorted-by-construction
+            expression_iterator = (
+                self._expression_chunk_iterator_sorted_by_construction(reader)
+            )
+
+            lance.write_dataset(
+                expression_iterator,
+                str(output_path_obj / "expression.lance"),
+                schema=self._get_expression_schema(),
+                mode="overwrite",
+            )
+
+            # Create optimized indices
+            self._create_optimized_indices(output_path_obj)
+
+            # Save config
+            self._save_config(output_path_obj, (reader.n_obs, reader.n_vars))
+            print(f"Conversion complete! Saved to {output_path}")
+
+    def _sort_metadata_globally(self, reader: ChunkedH5ADReader):
+        """Sort metadata by common query patterns for optimal performance"""
+        obs_df = reader.get_obs_metadata()
+        var_df = reader.get_var_metadata()
+
+        if self.sort_metadata:
+            # Sort cells by common query patterns
+            sort_columns = []
+            if "cell_type" in obs_df.columns:
+                sort_columns.append("cell_type")
+            if "batch" in obs_df.columns:
+                sort_columns.append("batch")
+
+            if sort_columns:
+                # Preserve original cell IDs before sorting
+                obs_df["cell_id"] = obs_df.index.astype(str)
+                obs_df = obs_df.sort_values(sort_columns).reset_index(drop=True)
+            else:
+                obs_df["cell_id"] = obs_df.index.astype(str)
+                obs_df = obs_df.reset_index(drop=True)
+
+            # Sort genes by expression patterns
+            sort_columns = []
+            if "highly_variable" in var_df.columns:
+                sort_columns.append("highly_variable")
+            if "means" in var_df.columns:
+                sort_columns.append("means")
+
+            if sort_columns:
+                var_df = var_df.sort_values(sort_columns).reset_index(drop=True)
+            else:
+                var_df = var_df.reset_index(drop=True)
+
+        else:
+            # Preserve original order
+            obs_df["cell_id"] = obs_df.index.astype(str)
+            obs_df = obs_df.reset_index(drop=True)
+            var_df = var_df.reset_index(drop=True)
+
+        # Add integer IDs in sorted order
+        obs_df["cell_integer_id"] = range(len(obs_df))
+        var_df["gene_integer_id"] = range(len(var_df))
+
+        return obs_df, var_df
+
+    def _write_sorted_metadata(
+        self, obs_df: pd.DataFrame, var_df: pd.DataFrame, output_path: Path
+    ):
+        """Write sorted metadata tables"""
+        cell_metadata_table = self._create_metadata_table(obs_df, "cell_id")
+        gene_metadata_table = self._create_metadata_table(var_df, "gene_id")
+
+        lance.write_dataset(
+            cell_metadata_table, str(output_path / "cells.lance"), mode="overwrite"
+        )
+        lance.write_dataset(
+            gene_metadata_table, str(output_path / "genes.lance"), mode="overwrite"
+        )
+
+    def _expression_chunk_iterator_sorted_by_construction(
+        self, reader: ChunkedH5ADReader
+    ) -> Iterator[pa.RecordBatch]:
+        """Iterator that produces naturally sorted chunks by construction"""
+        total_chunks = (reader.n_obs + self.chunk_size - 1) // self.chunk_size
+
+        for chunk_idx, (chunk, obs_slice) in enumerate(
+            reader.iter_chunks(chunk_size=self.chunk_size)
+        ):
+            print(f"Processing chunk {chunk_idx + 1}/{total_chunks} ({obs_slice})")
+
+            # Convert chunk to COO format with sequential integer IDs
+            chunk_table = self._chunk_to_coo_table_sorted_by_construction(
+                chunk, obs_slice, reader, chunk_idx * self.chunk_size
+            )
+
+            yield from chunk_table.to_batches()
+
+    def _chunk_to_coo_table_sorted_by_construction(
+        self, chunk, obs_slice, reader: ChunkedH5ADReader, global_cell_offset: int
+    ):
+        """Convert chunk to COO format with sequential integer IDs for natural sorting"""
+        if sparse.issparse(chunk):
+            coo_chunk = chunk.tocoo()
+        else:
+            coo_chunk = sparse.coo_matrix(chunk)
+
+        # Get cell and gene names for this chunk
+        chunk_cell_names = reader.obs_names[obs_slice]
+        chunk_gene_names = reader.var_names
+
+        # Create arrays
+        cell_ids = chunk_cell_names[coo_chunk.row].astype(str)
+        gene_ids = chunk_gene_names[coo_chunk.col].astype(str)
+
+        # Integer IDs are sequential within each chunk
+        # This ensures natural sorting by (cell_integer_id, gene_integer_id)
+        cell_integer_ids = (global_cell_offset + coo_chunk.row).astype(np.int32)
+        gene_integer_ids = coo_chunk.col.astype(np.int32)
+
+        # Create table - naturally sorted by construction
+        table = pa.table(
+            {
+                "cell_id": pa.array(cell_ids),
+                "gene_id": pa.array(gene_ids),
+                "cell_integer_id": pa.array(cell_integer_ids),
+                "gene_integer_id": pa.array(gene_integer_ids),
+                "value": pa.array(coo_chunk.data.astype(np.float32)),
+            }
+        )
+
+        return table
+
+    def _get_expression_schema(self):
+        """Get the schema for expression table"""
+        return pa.schema(
+            [
+                ("cell_id", pa.string()),
+                ("gene_id", pa.string()),
+                ("cell_integer_id", pa.int32()),
+                ("gene_integer_id", pa.int32()),
+                ("value", pa.float32()),
+            ]
+        )
+
+    def _create_optimized_indices(self, output_path: Path):
+        """Create indices optimized for common query patterns"""
+        print("Creating optimized indices for query performance...")
+
+        # Expression table indices
+        expression_path = output_path / "expression.lance"
+        if expression_path.exists():
+            dataset = lance.dataset(str(expression_path))
+
+            # Primary indices for range queries
+            dataset.create_scalar_index("cell_integer_id", "BTREE")
+            dataset.create_scalar_index("gene_integer_id", "BTREE")
+
+            # Composite index for cell-gene lookups
+            # Note: Lance may not support composite indices yet, so we'll create individual indices
+            dataset.create_scalar_index("cell_integer_id", "BTREE")
+            dataset.create_scalar_index("gene_integer_id", "BTREE")
+
+            # String indices for exact matches
+            dataset.create_scalar_index("cell_id", "BTREE")
+            dataset.create_scalar_index("gene_id", "BTREE")
+
+        # Metadata table indices
+        for table_name in ["cells", "genes"]:
+            table_path = output_path / f"{table_name}.lance"
+            if table_path.exists():
+                dataset = lance.dataset(str(table_path))
+
+                # Integer ID indices for joins
+                integer_id_col = f"{table_name[:-1]}_integer_id"
+                if integer_id_col in dataset.schema.names:
+                    dataset.create_scalar_index(integer_id_col, "BTREE")
+
+                # Common metadata columns
+                common_columns = {
+                    "cells": [
+                        "cell_type",
+                        "batch",
+                        "total_counts",
+                        "n_genes_by_counts",
+                    ],
+                    "genes": ["highly_variable", "means", "dispersions"],
+                }
+
+                for col in common_columns.get(table_name, []):
+                    if col in dataset.schema.names:
+                        dataset.create_scalar_index(col, "BTREE")
+
+        print("Index creation complete!")
 
     def _create_id_mapping(self, entity_ids, entity_type: str) -> list[dict[str, Any]]:
         """Create mapping from original entity IDs to integer indices"""
@@ -331,11 +605,13 @@ class SLAFConverter:
 
     def _save_config(self, output_path_obj: Path, shape: tuple):
         """Save SLAF configuration"""
+        n_cells = int(shape[0])
+        n_genes = int(shape[1])
         config = {
             "format_version": "0.1",
-            "array_shape": list(shape),
-            "n_cells": shape[0],
-            "n_genes": shape[1],
+            "array_shape": [n_cells, n_genes],
+            "n_cells": n_cells,
+            "n_genes": n_genes,
             "tables": {
                 "expression": "expression.lance",
                 "cells": "cells.lance",

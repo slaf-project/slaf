@@ -4,7 +4,11 @@ from pathlib import Path
 
 import lance
 import numpy as np
+import pandas as pd
+import pyarrow as pa
+import pytest
 
+from slaf.data.chunked_reader import ChunkedH5ADReader
 from slaf.data.converter import SLAFConverter
 
 
@@ -245,3 +249,245 @@ class TestSLAFConverter:
 
         assert "optimizations" in config
         assert config["optimizations"]["use_integer_keys"]
+
+    # Chunked converter tests
+    def test_chunked_reader_basic(self, sample_h5ad_file):
+        """Test basic chunked reader functionality"""
+        # Test chunked reader
+        with ChunkedH5ADReader(sample_h5ad_file) as reader:
+            assert reader.n_obs == 2
+            assert reader.n_vars == 2
+            assert len(reader.obs_names) == 2
+            assert len(reader.var_names) == 2
+
+            # Test metadata reading
+            obs_df = reader.get_obs_metadata()
+            var_df = reader.get_var_metadata()
+
+            assert obs_df.shape == (2, 1)  # cell_type column
+            assert var_df.shape == (2, 1)  # highly_variable column
+
+            # Test chunking
+            chunks = list(reader.iter_chunks(chunk_size=1))
+            assert len(chunks) == 2
+
+            chunk1, slice1 = chunks[0]
+            assert chunk1.shape == (1, 2)
+
+    def test_converter_chunked_mode(self, chunked_converter):
+        """Test that chunked mode works correctly"""
+        # Test that chunked mode is set correctly
+        assert chunked_converter.chunked is True
+        assert chunked_converter.chunk_size == 1000
+
+        # Test that convert_anndata raises error in chunked mode
+        with pytest.raises(
+            ValueError, match="convert_anndata.*not supported in chunked mode"
+        ):
+            chunked_converter.convert_anndata(None, "output.slaf")
+
+    def test_converter_backward_compatibility(self):
+        """Test that non-chunked mode works as before"""
+        converter = SLAFConverter(chunked=False)
+
+        # Test that chunked mode is disabled
+        assert converter.chunked is False
+        assert converter.chunk_size == 1000  # Default value
+
+    def test_expression_schema(self):
+        """Test that expression schema is correct"""
+        converter = SLAFConverter()
+        schema = converter._get_expression_schema()
+
+        # Check that schema has expected fields
+        field_names = [field.name for field in schema]
+        expected_fields = [
+            "cell_id",
+            "gene_id",
+            "cell_integer_id",
+            "gene_integer_id",
+            "value",
+        ]
+
+        assert field_names == expected_fields
+
+        # Check field types
+        assert schema.field("cell_id").type == pa.string()
+        assert schema.field("gene_id").type == pa.string()
+        assert schema.field("cell_integer_id").type == pa.int32()
+        assert schema.field("gene_integer_id").type == pa.int32()
+        assert schema.field("value").type == pa.float32()
+
+    def test_chunked_conversion_creates_same_structure(
+        self, small_sample_adata, temp_dir
+    ):
+        """Test that chunked conversion creates the same structure as traditional conversion"""
+        # Save sample data as h5ad
+        h5ad_path = Path(temp_dir) / "test.h5ad"
+        small_sample_adata.write(h5ad_path)
+
+        # Convert using traditional method
+        output_path_traditional = Path(temp_dir) / "test_traditional.slaf"
+        converter_traditional = SLAFConverter(chunked=False, sort_metadata=True)
+        converter_traditional.convert(str(h5ad_path), str(output_path_traditional))
+
+        # Convert using chunked method
+        output_path_chunked = Path(temp_dir) / "test_chunked.slaf"
+        converter_chunked = SLAFConverter(
+            chunked=True, chunk_size=100, sort_metadata=True
+        )
+        converter_chunked.convert(str(h5ad_path), str(output_path_chunked))
+
+        # Check that both methods create the same files
+        for method_path in [output_path_traditional, output_path_chunked]:
+            assert (method_path / "expression.lance").exists()
+            assert (method_path / "cells.lance").exists()
+            assert (method_path / "genes.lance").exists()
+            assert (method_path / "config.json").exists()
+
+        # Check that configs are identical (except for created_at timestamp)
+        with open(output_path_traditional / "config.json") as f:
+            config_traditional = json.load(f)
+        with open(output_path_chunked / "config.json") as f:
+            config_chunked = json.load(f)
+
+        # Remove timestamp for comparison
+        del config_traditional["created_at"]
+        del config_chunked["created_at"]
+
+        assert config_traditional == config_chunked
+
+    def test_chunked_vs_traditional_identical_output(
+        self, small_sample_adata, temp_dir
+    ):
+        """Test that chunked and traditional conversion produce identical data and metadata"""
+        # Save sample data as h5ad
+        h5ad_path = Path(temp_dir) / "test.h5ad"
+        small_sample_adata.write(h5ad_path)
+
+        # Convert using traditional method
+        output_path_traditional = Path(temp_dir) / "test_traditional.slaf"
+        converter_traditional = SLAFConverter(chunked=False, sort_metadata=True)
+        converter_traditional.convert(str(h5ad_path), str(output_path_traditional))
+
+        # Convert using chunked method
+        output_path_chunked = Path(temp_dir) / "test_chunked.slaf"
+        converter_chunked = SLAFConverter(
+            chunked=True, chunk_size=100, sort_metadata=True
+        )
+        converter_chunked.convert(str(h5ad_path), str(output_path_chunked))
+
+        # Compare expression data
+        expression_traditional = lance.dataset(
+            output_path_traditional / "expression.lance"
+        )
+        expression_chunked = lance.dataset(output_path_chunked / "expression.lance")
+
+        df_traditional = expression_traditional.to_table().to_pandas()
+        df_chunked = expression_chunked.to_table().to_pandas()
+
+        # Sort both dataframes by the same columns for comparison
+        sort_cols = ["cell_integer_id", "gene_integer_id", "cell_id", "gene_id"]
+        df_traditional_sorted = df_traditional.sort_values(sort_cols).reset_index(
+            drop=True
+        )
+        df_chunked_sorted = df_chunked.sort_values(sort_cols).reset_index(drop=True)
+
+        # Compare expression data exactly
+        pd.testing.assert_frame_equal(df_traditional_sorted, df_chunked_sorted)
+
+        # Compare cell metadata
+        cells_traditional = lance.dataset(output_path_traditional / "cells.lance")
+        cells_chunked = lance.dataset(output_path_chunked / "cells.lance")
+
+        df_cells_traditional = cells_traditional.to_table().to_pandas()
+        df_cells_chunked = cells_chunked.to_table().to_pandas()
+
+        # Debug: print column information
+        print(f"Traditional cell columns: {list(df_cells_traditional.columns)}")
+        print(f"Chunked cell columns: {list(df_cells_chunked.columns)}")
+        print(f"Traditional cell shape: {df_cells_traditional.shape}")
+        print(f"Chunked cell shape: {df_cells_chunked.shape}")
+
+        # Debug: check what the chunked reader actually reads
+        from slaf.data.chunked_reader import ChunkedH5ADReader
+
+        with ChunkedH5ADReader(str(h5ad_path)) as reader:
+            obs_df = reader.get_obs_metadata()
+            print(f"Chunked reader obs columns: {list(obs_df.columns)}")
+            print(f"Chunked reader obs shape: {obs_df.shape}")
+            print(f"Chunked reader obs head:\n{obs_df.head()}")
+
+        # Compare cell metadata by sorting by cell_id column
+        df_cells_traditional_sorted = df_cells_traditional.sort_values(
+            "cell_id"
+        ).reset_index(drop=True)
+        df_cells_chunked_sorted = df_cells_chunked.sort_values("cell_id").reset_index(
+            drop=True
+        )
+
+        # Sort columns for robust comparison
+        df_cells_traditional_sorted = df_cells_traditional_sorted[
+            sorted(df_cells_traditional_sorted.columns)
+        ]
+        df_cells_chunked_sorted = df_cells_chunked_sorted[
+            sorted(df_cells_chunked_sorted.columns)
+        ]
+
+        pd.testing.assert_frame_equal(
+            df_cells_traditional_sorted, df_cells_chunked_sorted
+        )
+
+        # Compare gene metadata
+        genes_traditional = lance.dataset(output_path_traditional / "genes.lance")
+        genes_chunked = lance.dataset(output_path_chunked / "genes.lance")
+
+        df_genes_traditional = genes_traditional.to_table().to_pandas()
+        df_genes_chunked = genes_chunked.to_table().to_pandas()
+
+        # Sort by gene_id for comparison
+        df_genes_traditional_sorted = df_genes_traditional.sort_values(
+            "gene_id"
+        ).reset_index(drop=True)
+        df_genes_chunked_sorted = df_genes_chunked.sort_values("gene_id").reset_index(
+            drop=True
+        )
+
+        # Sort columns for robust comparison
+        df_genes_traditional_sorted = df_genes_traditional_sorted[
+            sorted(df_genes_traditional_sorted.columns)
+        ]
+        df_genes_chunked_sorted = df_genes_chunked_sorted[
+            sorted(df_genes_chunked_sorted.columns)
+        ]
+
+        pd.testing.assert_frame_equal(
+            df_genes_traditional_sorted, df_genes_chunked_sorted
+        )
+
+        # Verify data integrity by reconstructing the original matrix
+        def reconstruct_matrix(df, n_cells, n_genes):
+            """Reconstruct dense matrix from COO data"""
+            matrix = np.zeros((n_cells, n_genes))
+            for _, row in df.iterrows():
+                cell_idx = row["cell_integer_id"]
+                gene_idx = row["gene_integer_id"]
+                value = row["value"]
+                matrix[cell_idx, gene_idx] = value
+            return matrix
+
+        # Reconstruct matrices from both methods
+        matrix_traditional = reconstruct_matrix(
+            df_traditional_sorted, small_sample_adata.n_obs, small_sample_adata.n_vars
+        )
+        matrix_chunked = reconstruct_matrix(
+            df_chunked_sorted, small_sample_adata.n_obs, small_sample_adata.n_vars
+        )
+
+        # Compare reconstructed matrices
+        np.testing.assert_array_equal(matrix_traditional, matrix_chunked)
+
+        # Verify against original AnnData
+        original_matrix = small_sample_adata.X.toarray()
+        np.testing.assert_array_equal(matrix_traditional, original_matrix)
+        np.testing.assert_array_equal(matrix_chunked, original_matrix)

@@ -30,6 +30,24 @@ adata = sc.read_h5ad("data.h5ad")
 converter.convert_anndata(adata, "output.slaf")
 ```
 
+### Large Dataset Conversion
+
+For datasets larger than available memory (100k cells or more, depending on RAM):
+
+```python
+from slaf.data import SLAFConverter
+
+# Use chunked processing for memory efficiency
+converter = SLAFConverter(chunked=True, chunk_size=10000)
+converter.convert("large_data.h5ad", "output.slaf")
+```
+
+**When to use chunked conversion:**
+
+- Datasets with 100k+ cells (depending on available RAM)
+- When you encounter memory errors during conversion
+- For optimal memory usage on large datasets
+
 ## Current Support
 
 **Currently Supported:**
