@@ -94,34 +94,70 @@ class SLAFConverter:
         self.chunk_size = chunk_size
         self.sort_metadata = sort_metadata
 
-    def convert(self, h5ad_path: str, output_path: str):
+    def convert(self, input_path: str, output_path: str, input_format: str = "auto"):
         """
-        Convert h5ad file to SLAF format with optimized storage.
+        Convert single-cell data to SLAF format with optimized storage.
 
-        Loads an h5ad file and converts it to the SLAF format with COO-style
-        expression tables and optimized metadata storage. This is the primary
-        conversion method for AnnData files.
+        SLAFConverter provides efficient conversion from various single-cell data formats
+        to the SLAF format. It optimizes storage by using integer keys, COO-style
+        expression tables, and efficient metadata handling.
+
+        Supported Input Formats:
+            - **h5ad**: AnnData files (.h5ad) - the standard single-cell format
+            - **10x MTX**: 10x Genomics MTX directories containing matrix.mtx,
+              barcodes.tsv, and genes.tsv files
+            - **10x H5**: 10x Genomics H5 files (.h5) - Cell Ranger output format
+
+        The converter automatically detects the input format based on file extension
+        and directory structure. For optimal performance, you can also specify the
+        format explicitly.
 
         Args:
-            h5ad_path: Path to the input h5ad file to convert.
+            input_path: Path to the input file or directory to convert.
+                       - For h5ad: path to .h5ad file
+                       - For MTX: path to directory containing matrix.mtx, barcodes.tsv, genes.tsv
+                       - For H5: path to .h5 file
             output_path: Path where the SLAF dataset will be saved.
                         Should be a directory path, not a file path.
+            input_format: Format of input data. Options:
+                         - "auto" (default): Auto-detect format
+                         - "h5ad": AnnData format
+                         - "10x_mtx": 10x MTX directory format
+                         - "10x_h5": 10x H5 file format
 
         Raises:
-            FileNotFoundError: If the h5ad file doesn't exist.
-            ValueError: If the h5ad file is corrupted or invalid.
+            FileNotFoundError: If the input file doesn't exist.
+            ValueError: If the input file is corrupted, invalid, or format cannot be detected.
             RuntimeError: If the conversion process fails.
 
         Examples:
-            >>> # Convert a single h5ad file
+            >>> # Auto-detect format (recommended)
             >>> converter = SLAFConverter()
-            >>> converter.convert("pbmc3k.h5ad", "pbmc3k.slaf")
-            Converting pbmc3k.h5ad to SLAF format...
+            >>> converter.convert("data.h5ad", "output.slaf")
+            Converting data.h5ad to SLAF format...
             Optimizations: int_keys=True
-            Loaded: 2700 cells × 32738 genes
-            Conversion complete! Saved to pbmc3k.slaf
+            Loaded: 1000 cells × 20000 genes
+            Conversion complete! Saved to output.slaf
 
-            >>> # Convert with chunked processing
+            >>> # Convert 10x MTX directory
+            >>> converter.convert("filtered_feature_bc_matrix/", "output.slaf")
+            Converting 10x MTX directory filtered_feature_bc_matrix/ to SLAF format...
+            Loaded: 2700 cells × 32738 genes
+            Conversion complete! Saved to output.slaf
+
+            >>> # Convert 10x H5 file
+            >>> converter.convert("data.h5", "output.slaf")
+            Converting 10x H5 file data.h5 to SLAF format...
+            Loaded: 2700 cells × 32738 genes
+            Conversion complete! Saved to output.slaf
+
+            >>> # Explicit format specification
+            >>> converter.convert("data.h5", "output.slaf", input_format="10x_h5")
+            Converting 10x H5 file data.h5 to SLAF format...
+            Loaded: 2700 cells × 32738 genes
+            Conversion complete! Saved to output.slaf
+
+            >>> # Convert with chunked processing for large datasets
             >>> converter = SLAFConverter(chunked=True, chunk_size=1000)
             >>> converter.convert("large_data.h5ad", "output.slaf")
             Converting large_data.h5ad to SLAF format...
@@ -129,20 +165,64 @@ class SLAFConverter:
             Processing in chunks of 1000 cells...
             Conversion complete! Saved to output.slaf
 
-            >>> # Convert with custom output path
-            >>> converter.convert("data.h5ad", "/path/to/output/dataset.slaf")
-            Converting data.h5ad to SLAF format...
-            Optimizations: int_keys=True
-            Loaded: 1000 cells × 20000 genes
-            Conversion complete! Saved to /path/to/output/dataset.slaf
-
-            >>> # Error handling for missing file
+            >>> # Error handling for unsupported format
             >>> try:
-            ...     converter.convert("nonexistent.h5ad", "output.slaf")
-            ... except FileNotFoundError as e:
+            ...     converter.convert("unknown_file.txt", "output.slaf")
+            ... except ValueError as e:
             ...     print(f"Error: {e}")
-            Error: [Errno 2] No such file or directory: 'nonexistent.h5ad'
+            Error: Cannot detect format for: unknown_file.txt
         """
+        if input_format == "auto":
+            input_format = self._detect_format(input_path)
+
+        if input_format == "h5ad":
+            self._convert_h5ad(input_path, output_path)
+        elif input_format == "10x_mtx":
+            self._convert_10x_mtx(input_path, output_path)
+        elif input_format == "10x_h5":
+            self._convert_10x_h5(input_path, output_path)
+        else:
+            raise ValueError(f"Unsupported format: {input_format}")
+
+    def convert_anndata(self, adata, output_path: str):
+        """Convert AnnData object to SLAF format with COO-style expression table"""
+        if self.chunked:
+            raise ValueError(
+                "convert_anndata() not supported in chunked mode. "
+                "Use convert() with file path instead."
+            )
+
+        print("Converting AnnData object to SLAF format...")
+        print(f"Optimizations: int_keys={self.use_integer_keys}")
+        print(f"Loaded: {adata.n_obs} cells × {adata.n_vars} genes")
+
+        # Convert the AnnData object
+        self._convert_anndata(adata, output_path)
+
+    def _detect_format(self, input_path: str) -> str:
+        """Auto-detect input format based on file structure"""
+        path = Path(input_path)
+
+        if path.suffix == ".h5ad":
+            return "h5ad"
+        elif path.suffix == ".h5":
+            return "10x_h5"
+        elif path.is_dir():
+            # Check for 10x MTX files (both old and new formats)
+            if (path / "matrix.mtx").exists() or (path / "matrix.mtx.gz").exists():
+                # Check for either genes.tsv or features.tsv (old vs new 10x format)
+                if (
+                    (path / "genes.tsv").exists()
+                    or (path / "genes.tsv.gz").exists()
+                    or (path / "features.tsv").exists()
+                    or (path / "features.tsv.gz").exists()
+                ):
+                    return "10x_mtx"
+
+        raise ValueError(f"Cannot detect format for: {input_path}")
+
+    def _convert_h5ad(self, h5ad_path: str, output_path: str):
+        """Convert h5ad file to SLAF format (existing logic)"""
         print(f"Converting {h5ad_path} to SLAF format...")
         print(
             f"Optimizations: int_keys={self.use_integer_keys}, chunked={self.chunked}, sort_metadata={self.sort_metadata}"
@@ -158,19 +238,42 @@ class SLAFConverter:
             # Convert the loaded AnnData object
             self._convert_anndata(adata, output_path)
 
-    def convert_anndata(self, adata, output_path: str):
-        """Convert AnnData object to SLAF format with COO-style expression table"""
-        if self.chunked:
-            raise ValueError(
-                "convert_anndata() not supported in chunked mode. "
-                "Use convert() with file path instead."
-            )
+    def _convert_10x_mtx(self, mtx_dir: str, output_path: str):
+        """Convert 10x MTX directory to SLAF format"""
+        print(f"Converting 10x MTX directory {mtx_dir} to SLAF format...")
 
-        print("Converting AnnData object to SLAF format...")
-        print(f"Optimizations: int_keys={self.use_integer_keys}")
+        # Use scanpy to read MTX files
+        try:
+            adata = sc.read_10x_mtx(mtx_dir)
+        except Exception as e:
+            print(f"Error reading 10x MTX files: {e}")
+            print(
+                "Please ensure the directory contains matrix.mtx and either genes.tsv or features.tsv files"
+            )
+            raise ValueError(
+                f"Failed to read 10x MTX format from {mtx_dir}: {e}"
+            ) from e
+
         print(f"Loaded: {adata.n_obs} cells × {adata.n_vars} genes")
 
-        # Convert the AnnData object
+        # Convert using existing AnnData conversion logic
+        self._convert_anndata(adata, output_path)
+
+    def _convert_10x_h5(self, h5_path: str, output_path: str):
+        """Convert 10x H5 file to SLAF format"""
+        print(f"Converting 10x H5 file {h5_path} to SLAF format...")
+
+        # Try to read as 10x H5 first, fall back to regular h5ad
+        try:
+            adata = sc.read_10x_h5(h5_path, genome="X")
+        except Exception:
+            # Fall back to reading as regular h5ad
+            print("Reading as regular h5ad file...")
+            adata = sc.read_h5ad(h5_path)
+
+        print(f"Loaded: {adata.n_obs} cells × {adata.n_vars} genes")
+
+        # Convert using existing AnnData conversion logic
         self._convert_anndata(adata, output_path)
 
     def _convert_anndata(self, adata, output_path: str):
