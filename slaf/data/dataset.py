@@ -8,7 +8,15 @@ import pandas as pd
 import requests  # type: ignore
 import scanpy as sc
 
-DatasetType = Literal["pbmc3k", "pbmc_68k", "heart_10k", "synthetic", "tiny_sample"]
+DatasetType = Literal[
+    "pbmc3k",
+    "pbmc3k_10x_mtx",
+    "pbmc3k_10x_h5",
+    "pbmc_68k",
+    "heart_10k",
+    "synthetic",
+    "tiny_sample",
+]
 
 DEFAULT_DATASET_DIR = str(
     (Path(__file__).parent.parent.parent.parent / "slaf-datasets").resolve()
@@ -31,6 +39,16 @@ def download_dataset(
         adata.write(output_file)
         print(f"Saved: {output_file}")
         return str(output_file)
+
+    elif dataset_type == "pbmc3k_10x_mtx":
+        # Download PBMC3K in 10x MTX format
+        print("Downloading PBMC3K 10x MTX dataset...")
+        return _download_pbmc3k_10x_mtx(output_path)
+
+    elif dataset_type == "pbmc3k_10x_h5":
+        # Download PBMC3K in 10x H5 format
+        print("Downloading PBMC3K 10x H5 dataset...")
+        return _download_pbmc3k_10x_h5(output_path)
 
     elif dataset_type == "pbmc_68k":
         # Download PBMC 68K from 10X
@@ -73,6 +91,76 @@ def download_dataset(
     else:
         print(f"Unknown dataset type: {dataset_type}")
         return None
+
+
+def _download_pbmc3k_10x_mtx(output_path: Path) -> str:
+    """Create PBMC3K dataset in 10x MTX format from existing h5ad"""
+    # Use the existing PBMC3K h5ad file as source
+    pbmc3k_h5ad = output_path / "pbmc3k_raw.h5ad"
+
+    if not pbmc3k_h5ad.exists():
+        # Download PBMC3K first
+        print("Downloading PBMC3K dataset first...")
+        download_dataset("pbmc3k", str(output_path))
+
+    # Create directory for MTX files
+    mtx_dir = output_path / "pbmc3k_10x_mtx"
+    mtx_dir.mkdir(exist_ok=True)
+
+    # Load the h5ad file and convert to MTX format
+    print("Converting PBMC3K to MTX format...")
+    adata = sc.read_h5ad(pbmc3k_h5ad)
+
+    # Write MTX files
+    import pandas as pd
+    from scipy.io import mmwrite
+
+    # Write matrix.mtx
+    matrix_path = mtx_dir / "matrix.mtx"
+    # Convert to scipy sparse matrix and transpose for MTX format
+    from scipy.sparse import csr_matrix
+
+    # Convert to numpy array first, then to sparse matrix
+    X_array = _get_array_from_adata(adata.X)
+    X_sparse = csr_matrix(X_array)
+    mmwrite(str(matrix_path), X_sparse.T)  # Transpose for MTX format
+
+    # Write barcodes.tsv (cell names)
+    barcodes_path = mtx_dir / "barcodes.tsv"
+    pd.DataFrame(adata.obs_names).to_csv(
+        barcodes_path, sep="\t", header=False, index=False
+    )
+
+    # Write genes.tsv (gene names)
+    genes_path = mtx_dir / "genes.tsv"
+    pd.DataFrame({"gene_id": adata.var_names, "gene_symbol": adata.var_names}).to_csv(
+        genes_path, sep="\t", header=False, index=False
+    )
+
+    print(f"Saved MTX files to: {mtx_dir}")
+    return str(mtx_dir)
+
+
+def _download_pbmc3k_10x_h5(output_path: Path) -> str:
+    """Create PBMC3K dataset in 10x H5 format from existing h5ad"""
+    # Use the existing PBMC3K h5ad file as source
+    pbmc3k_h5ad = output_path / "pbmc3k_raw.h5ad"
+
+    if not pbmc3k_h5ad.exists():
+        # Download PBMC3K first
+        print("Downloading PBMC3K dataset first...")
+        download_dataset("pbmc3k", str(output_path))
+
+    # Load the h5ad file and convert to H5 format
+    print("Converting PBMC3K to H5 format...")
+    adata = sc.read_h5ad(pbmc3k_h5ad)
+
+    # Save as H5 file using scanpy
+    h5_file = output_path / "pbmc3k_10x_h5.h5"
+    adata.write_h5ad(h5_file, compression="gzip")
+
+    print(f"Saved: {h5_file}")
+    return str(h5_file)
 
 
 def create_dataset(
@@ -273,7 +361,7 @@ def get_or_create_dataset(
     force_prepare: bool = False,
     output_dir: str = DEFAULT_DATASET_DIR,
     **create_kwargs: Any,
-) -> tuple[str, str]:
+) -> tuple[str, str | None]:
     """
     Get or create dataset, returning (raw_path, processed_path)
 
@@ -285,7 +373,9 @@ def get_or_create_dataset(
         **create_kwargs: Additional arguments for create_dataset (for synthetic data)
 
     Returns:
-        Tuple of (raw_h5ad_path, processed_h5ad_path)
+        Tuple of (raw_path, processed_path)
+        For 10x formats: returns (raw_format_path, None) - no processed version
+        For other formats: returns (raw_h5ad_path, processed_h5ad_path)
     """
     output_path = Path(output_dir)
     output_path.mkdir(exist_ok=True)
@@ -307,9 +397,19 @@ def get_or_create_dataset(
         if dataset_type == "synthetic":
             create_dataset(dataset_type, output_dir=output_dir, **create_kwargs)
         else:
-            download_dataset(dataset_type, output_dir=output_dir)
+            # Download the dataset
+            downloaded_path = download_dataset(dataset_type, output_dir=output_dir)
 
-    # Get/create processed dataset
+            if downloaded_path is None:
+                raise ValueError(f"Failed to download dataset: {dataset_type}")
+
+            # For 10x formats, use the original format path directly
+            if dataset_type in ["pbmc3k_10x_mtx", "pbmc3k_10x_h5"]:
+                raw_path = Path(downloaded_path)
+                # Return early - no processed version for 10x formats
+                return str(raw_path), None
+
+    # Get/create processed dataset (only for non-10x formats)
     if not processed_path.exists() or force_prepare:
         prepare_dataset(dataset_type, str(raw_path), output_dir=output_dir)
 
@@ -464,7 +564,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "--datasets",
         nargs="+",
-        choices=["pbmc3k", "pbmc_68k", "heart_10k", "synthetic", "tiny_sample", "all"],
+        choices=[
+            "pbmc3k",
+            "pbmc3k_10x_mtx",
+            "pbmc3k_10x_h5",
+            "pbmc_68k",
+            "heart_10k",
+            "synthetic",
+            "tiny_sample",
+            "all",
+        ],
         default=["pbmc3k"],
         help="Datasets to prepare (default: pbmc3k)",
     )
@@ -495,7 +604,15 @@ if __name__ == "__main__":
 
     # Expand "all" to all real dataset types
     if "all" in args.datasets:
-        args.datasets = ["pbmc3k", "pbmc_68k", "heart_10k", "synthetic", "tiny_sample"]
+        args.datasets = [
+            "pbmc3k",
+            "pbmc3k_10x_mtx",
+            "pbmc3k_10x_h5",
+            "pbmc_68k",
+            "heart_10k",
+            "synthetic",
+            "tiny_sample",
+        ]
 
     print("🧬 SLAF Dataset Preparation")
     print("=" * 40)
@@ -510,7 +627,7 @@ if __name__ == "__main__":
     print("\n" + "=" * 40)
 
     # Prepare each dataset
-    prepared_datasets = []
+    prepared_datasets: list[tuple[str, str | None]] = []
 
     for dataset_type in args.datasets:
         # Cast to proper type for type checking
@@ -582,11 +699,14 @@ if __name__ == "__main__":
         print("✅ Successfully prepared datasets:")
         for name, path in prepared_datasets:
             # Get dataset info
-            try:
-                adata = sc.read_h5ad(path, backed="r")  # Don't load into memory
-                print(f"  • {name}: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
-            except Exception:
-                print(f"  • {name}: {path}")
+            if path is None:
+                print(f"  • {name}: (raw format only)")
+            else:
+                try:
+                    adata = sc.read_h5ad(path, backed="r")  # Don't load into memory
+                    print(f"  • {name}: {adata.n_obs:,} cells × {adata.n_vars:,} genes")
+                except Exception:
+                    print(f"  • {name}: {path}")
 
         print("\n🎯 Ready for SLAF conversion and benchmarking!")
         print("   Next steps:")
