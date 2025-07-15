@@ -37,7 +37,7 @@ class TestSLAFConverter:
         # Check config version
         with open(output_path / "config.json") as f:
             config = json.load(f)
-        assert config["format_version"] == "0.1"
+        assert config["format_version"] == "0.2"
 
     def test_expression_data_consistency(self, small_sample_adata, tmp_path):
         """Test that expression data is consistent in COO format"""
@@ -250,6 +250,54 @@ class TestSLAFConverter:
 
         assert "optimizations" in config
         assert config["optimizations"]["use_integer_keys"]
+
+    def test_metadata_computation_and_storage(self, small_sample_adata, tmp_path):
+        """Test that metadata is computed and stored correctly"""
+        # Save sample data as h5ad
+        h5ad_path = tmp_path / "test.h5ad"
+        small_sample_adata.write(h5ad_path)
+
+        # Convert to SLAF
+        output_path = tmp_path / "test.slaf"
+        converter = SLAFConverter()
+        converter.convert(str(h5ad_path), str(output_path))
+
+        # Check config
+        with open(output_path / "config.json") as f:
+            config = json.load(f)
+
+        # Check format version
+        assert config["format_version"] == "0.2"
+
+        # Check that metadata section exists
+        assert "metadata" in config
+        metadata = config["metadata"]
+
+        # Check required metadata fields
+        assert "expression_count" in metadata
+        assert "sparsity" in metadata
+        assert "density" in metadata
+        assert "total_possible_elements" in metadata
+        assert "expression_stats" in metadata
+
+        # Check that values are reasonable
+        assert metadata["expression_count"] > 0
+        assert 0 <= metadata["sparsity"] <= 1
+        assert 0 <= metadata["density"] <= 1
+        assert (
+            metadata["total_possible_elements"]
+            == small_sample_adata.n_obs * small_sample_adata.n_vars
+        )
+
+        # Check expression statistics
+        stats = metadata["expression_stats"]
+        assert "min_value" in stats
+        assert "max_value" in stats
+        assert "mean_value" in stats
+        assert "std_value" in stats
+        assert stats["min_value"] <= stats["max_value"]
+        assert stats["mean_value"] >= 0
+        assert stats["std_value"] >= 0
 
     # 10x Format Conversion Tests
     def test_10x_mtx_format_detection(self, tmp_path):

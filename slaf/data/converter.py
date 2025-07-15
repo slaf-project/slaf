@@ -721,12 +721,63 @@ class SLAFConverter:
 
         print("Index creation complete!")
 
+    def _compute_expression_statistics(self, expression_dataset) -> dict:
+        """Compute basic statistics from expression dataset using SQL"""
+        # Use DuckDB to compute statistics directly from Lance dataset
+        import duckdb
+
+        # Reference the Lance dataset in local scope for DuckDB
+        expression = expression_dataset  # noqa: F841
+
+        # Compute statistics using SQL
+        stats_query = """
+        SELECT
+            MIN(value) as min_value,
+            MAX(value) as max_value,
+            AVG(value) as mean_value,
+            STDDEV(value) as std_value
+        FROM expression
+        """
+
+        result = duckdb.query(stats_query).fetchdf()
+
+        # Convert to dictionary
+        stats = {
+            "min_value": float(result.iloc[0]["min_value"]),
+            "max_value": float(result.iloc[0]["max_value"]),
+            "mean_value": float(result.iloc[0]["mean_value"]),
+            "std_value": float(result.iloc[0]["std_value"]),
+        }
+
+        return stats
+
     def _save_config(self, output_path_obj: Path, shape: tuple):
-        """Save SLAF configuration"""
+        """Save SLAF configuration with computed metadata"""
         n_cells = int(shape[0])
         n_genes = int(shape[1])
+
+        # Compute additional metadata for faster info() method
+        print("Computing dataset statistics...")
+
+        # Get expression count and compute sparsity using SQL
+        import duckdb
+
+        # Reference Lance datasets in local scope for DuckDB
+        expression = lance.dataset(str(output_path_obj / "expression.lance"))  # noqa: F841
+
+        # Get expression count using SQL
+        count_query = "SELECT COUNT(*) as count FROM expression"
+        expression_count_result = duckdb.query(count_query).fetchdf()
+        expression_count = expression_count_result.iloc[0]["count"]
+
+        total_possible_elements = n_cells * n_genes
+        sparsity = 1 - (expression_count / total_possible_elements)
+
+        # Compute basic statistics from expression data using SQL
+        expression_stats = self._compute_expression_statistics(expression)
+
         config = {
-            "format_version": "0.1",
+            "format_version": "0.2",
             "array_shape": [n_cells, n_genes],
             "n_cells": n_cells,
             "n_genes": n_genes,
@@ -737,6 +788,13 @@ class SLAFConverter:
             },
             "optimizations": {
                 "use_integer_keys": self.use_integer_keys,
+            },
+            "metadata": {
+                "expression_count": int(expression_count),
+                "sparsity": float(sparsity),
+                "density": float(1 - sparsity),
+                "total_possible_elements": int(total_possible_elements),
+                "expression_stats": expression_stats,
             },
             "created_at": pd.Timestamp.now().isoformat(),
         }

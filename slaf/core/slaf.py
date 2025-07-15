@@ -722,9 +722,32 @@ class SLAFArray:
         print(f"    Cells: {len(self.obs):,}")
         print(f"    Genes: {len(self.var):,}")
 
-        # Only query expression count since that's not in memory
-        expression_count = self.query("SELECT COUNT(*) as count FROM expression")
-        print(f"    Expression records: {expression_count.iloc[0]['count']:,}")
+        # Expression metadata - use pre-computed if available, otherwise query
+        format_version = self.config.get("format_version", "0.1")
+        if format_version >= "0.2" and "metadata" in self.config:
+            # Use pre-computed metadata from config
+            metadata = self.config["metadata"]
+            expression_count = metadata["expression_count"]
+            sparsity = metadata["sparsity"]
+            density = metadata["density"]
+
+            print(f"    Expression records: {expression_count:,}")
+            print(f"    Sparsity: {sparsity:.1%}")
+            print(f"    Density: {density:.1%}")
+
+            # Show expression statistics if available
+            if "expression_stats" in metadata:
+                stats = metadata["expression_stats"]
+                print("  Expression statistics:")
+                print(f"    Min value: {stats['min_value']:.3f}")
+                print(f"    Max value: {stats['max_value']:.3f}")
+                print(f"    Mean value: {stats['mean_value']:.3f}")
+                print(f"    Std value: {stats['std_value']:.3f}")
+        else:
+            # Backward compatibility: query expression count for older format versions
+            print("    Expression records: computing...")
+            expression_count = self.query("SELECT COUNT(*) as count FROM expression")
+            print(f"    Expression records: {expression_count.iloc[0]['count']:,}")
 
         # Optimization info
         optimizations = self.config.get("optimizations", {})

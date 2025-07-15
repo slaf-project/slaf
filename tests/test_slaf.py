@@ -2,6 +2,8 @@ import duckdb
 import pandas as pd
 import pytest
 
+from slaf.core.slaf import SLAFArray
+
 
 class TestSLAFArray:
     """Test suite for SLAFArray class"""
@@ -297,3 +299,107 @@ class TestSLAFArray:
 
         # The result should be a reasonable size (could be 0 if no expression in range)
         assert len(result) >= 0
+
+    def test_info_method_backward_compatibility(self, tmp_path):
+        """Test that info method works with both new and old format versions"""
+        import json
+
+        import numpy as np
+
+        # Create a small test dataset
+        import scanpy as sc
+        from scipy import sparse
+
+        from slaf.data import SLAFConverter
+
+        n_cells, n_genes = 10, 5
+        X = sparse.csr_matrix(np.random.randint(0, 10, (n_cells, n_genes)))
+
+        obs = pd.DataFrame(
+            {
+                "cell_type": np.random.choice(["A", "B"], n_cells),
+                "total_counts": X.sum(axis=1).A1,
+            },
+            index=pd.Index([f"cell_{i}" for i in range(n_cells)]),
+        )
+
+        var = pd.DataFrame(
+            {
+                "gene_type": np.random.choice(["protein_coding", "lncRNA"], n_genes),
+                "highly_variable": np.random.choice([True, False], n_genes),
+            },
+            index=pd.Index([f"gene_{i}" for i in range(n_genes)]),
+        )
+
+        adata = sc.AnnData(X=X, obs=obs, var=var)
+
+        # Test new format (0.2) - should use pre-computed metadata
+        h5ad_path = tmp_path / "test.h5ad"
+        adata.write(h5ad_path)
+
+        output_path_new = tmp_path / "test_new.slaf"
+        converter = SLAFConverter()
+        converter.convert(str(h5ad_path), str(output_path_new))
+
+        slaf_array_new = SLAFArray(str(output_path_new))
+
+        # Capture info output for new format
+        import io
+        import sys
+
+        captured_output = io.StringIO()
+        sys.stdout = captured_output
+        slaf_array_new.info()
+        sys.stdout = sys.__stdout__
+        new_format_output = captured_output.getvalue()
+
+        # Verify new format output contains metadata
+        assert "Expression records:" in new_format_output
+        assert "Sparsity:" in new_format_output
+        assert "Density:" in new_format_output
+        assert "Expression statistics:" in new_format_output
+
+        # Test old format (0.1) - should fall back to querying
+        # Create old format by modifying config
+        with open(output_path_new / "config.json") as f:
+            config_old = json.load(f)
+
+        # Downgrade to old format
+        config_old["format_version"] = "0.1"
+        if "metadata" in config_old:
+            del config_old["metadata"]
+
+        output_path_old = tmp_path / "test_old.slaf"
+        output_path_old.mkdir(exist_ok=True)
+
+        # Copy Lance files
+        import shutil
+
+        for file in ["expression.lance", "cells.lance", "genes.lance"]:
+            src = output_path_new / file
+            dst = output_path_old / file
+            if src.is_dir():
+                shutil.copytree(src, dst)
+            else:
+                shutil.copy2(src, dst)
+
+        # Write old config
+        with open(output_path_old / "config.json", "w") as f:
+            json.dump(config_old, f, indent=2)
+
+        slaf_array_old = SLAFArray(str(output_path_old))
+
+        # Capture info output for old format
+        captured_output = io.StringIO()
+        sys.stdout = captured_output
+        slaf_array_old.info()
+        sys.stdout = sys.__stdout__
+        old_format_output = captured_output.getvalue()
+
+        # Verify old format output shows computing message
+        assert "Expression records: computing..." in old_format_output
+        assert "Expression records:" in old_format_output
+        # Should not have the new metadata fields
+        assert "Sparsity:" not in old_format_output
+        assert "Density:" not in old_format_output
+        assert "Expression statistics:" not in old_format_output
