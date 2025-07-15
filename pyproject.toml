@@ -1,5 +1,5 @@
 [project]
-name = "slaf"
+name = "slafdb"
 version = "0.1.1"
 description = "Sparse Lazy Array Format - MVP for single-cell data"
 authors = [{ name = "Pavan Ramkumar", email = "pavan.ramkumar@gmail.com" }]
