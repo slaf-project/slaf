@@ -6,7 +6,7 @@ on:
       - "v*" # Trigger on version tags
 
 permissions:
-  contents: read
+  contents: write
   id-token: write # For PyPI authentication
 
 jobs:
