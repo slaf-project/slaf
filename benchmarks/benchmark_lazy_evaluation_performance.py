@@ -119,6 +119,73 @@ def demo_lazy_evaluation_scenarios(h5ad_path: str, slaf_path: str):
             """
             ),
         },
+        # NEW: Lazy query composition scenarios
+        {
+            "type": "lazy_composition",
+            "description": "Basic lazy query composition",
+            "composition_steps": [
+                "SELECT * FROM cells",
+                "filter: total_counts > 1000",
+                "select: cell_id, batch, total_counts",
+                "group_by: batch",
+                "select: batch, COUNT(*) as count, AVG(total_counts) as avg_counts",
+                "order_by: avg_counts DESC",
+            ],
+        },
+        {
+            "type": "lazy_composition",
+            "description": "Complex lazy query composition",
+            "composition_steps": [
+                "SELECT * FROM expression",
+                "filter: value > 0",
+                "select: cell_id, gene_id, value",
+                "group_by: cell_id",
+                "select: cell_id, COUNT(*) as genes_expressed, AVG(value) as avg_expression",
+                "order_by: avg_expression DESC",
+                "limit: 100",
+            ],
+        },
+        {
+            "type": "lazy_composition",
+            "description": "Multi-step lazy composition",
+            "composition_steps": [
+                "SELECT * FROM cells",
+                "filter: total_counts > 500",
+                "select: cell_id, batch, total_counts, n_genes_by_counts",
+                "filter: n_genes_by_counts > 200",
+                "group_by: batch",
+                "select: batch, COUNT(*) as cell_count, AVG(total_counts) as avg_counts, AVG(n_genes_by_counts) as avg_genes",
+                "order_by: avg_counts DESC",
+                "limit: 50",
+            ],
+        },
+        # NEW: Query building scenarios
+        {
+            "type": "query_building",
+            "description": "Dynamic query building",
+            "building_steps": [
+                "base: SELECT * FROM cells",
+                "add_filter: total_counts > 1000",
+                "add_filter: n_genes_by_counts > 200",
+                "add_select: cell_id, batch, total_counts",
+                "add_group_by: batch",
+                "add_select: batch, COUNT(*) as count, AVG(total_counts) as avg_counts",
+                "add_order_by: avg_counts DESC",
+            ],
+        },
+        {
+            "type": "query_building",
+            "description": "Conditional query building",
+            "building_steps": [
+                "base: SELECT * FROM expression",
+                "add_filter: value > 0",
+                "add_select: cell_id, gene_id, value",
+                "add_group_by: cell_id",
+                "add_select: cell_id, COUNT(*) as genes_expressed, SUM(value) as total_expression",
+                "add_order_by: total_expression DESC",
+                "add_limit: 100",
+            ],
+        },
         # Scanpy preprocessing scenarios
         {
             "type": "scanpy_pipeline",
@@ -176,6 +243,28 @@ def demo_lazy_evaluation_scenarios(h5ad_path: str, slaf_path: str):
                 ),
             ],
         },
+        # NEW: Memory efficiency with lazy composition
+        {
+            "type": "memory_efficiency_lazy",
+            "description": "Repeated lazy composition queries",
+            "composition_queries": [
+                [
+                    "SELECT * FROM cells",
+                    "filter: total_counts > 1000",
+                    "select: cell_id, batch",
+                ],
+                [
+                    "SELECT * FROM genes",
+                    "filter: highly_variable = true",
+                    "select: gene_id",
+                ],
+                [
+                    "SELECT * FROM expression",
+                    "filter: value > 0",
+                    "select: cell_id, gene_id, value",
+                ],
+            ],
+        },
         # Large dataset scenarios
         {
             "type": "large_dataset",
@@ -192,6 +281,20 @@ def demo_lazy_evaluation_scenarios(h5ad_path: str, slaf_path: str):
                 JOIN genes g ON e.gene_integer_id = g.gene_integer_id
                 LIMIT 50000
             """,
+        },
+        # NEW: Large dataset with lazy composition
+        {
+            "type": "large_dataset_lazy",
+            "description": "Large lazy composition query",
+            "composition_steps": [
+                "SELECT * FROM expression",
+                "filter: value > 0",
+                "select: cell_id, gene_id, value",
+                "group_by: cell_id",
+                "select: cell_id, COUNT(*) as genes_expressed, AVG(value) as avg_expression",
+                "order_by: avg_expression DESC",
+                "limit: 10000",
+            ],
         },
     ]
 
@@ -271,6 +374,91 @@ def _measure_new_approach(slaf_path: str, scenario: dict):
         result = slaf.lazy_query(scenario["query"]).compute()
     elif scenario["type"] == "large_dataset":
         result = slaf.lazy_query(scenario["query"]).compute()
+    elif scenario["type"] == "lazy_composition":
+        # Build lazy query step by step
+        composition_steps = scenario["composition_steps"]
+        lazy_query = None
+
+        for step in composition_steps:
+            if step.startswith("SELECT"):
+                lazy_query = slaf.lazy_query(step)
+            elif step.startswith("filter:") and lazy_query is not None:
+                condition = step.split(":", 1)[1].strip()
+                lazy_query = lazy_query.filter(condition)
+            elif step.startswith("select:") and lazy_query is not None:
+                columns = step.split(":", 1)[1].strip()
+                lazy_query = lazy_query.select(columns)
+            elif step.startswith("group_by:") and lazy_query is not None:
+                columns = step.split(":", 1)[1].strip()
+                lazy_query = lazy_query.group_by(columns)
+            elif step.startswith("order_by:") and lazy_query is not None:
+                columns = step.split(":", 1)[1].strip()
+                lazy_query = lazy_query.order_by(columns)
+            elif step.startswith("limit:") and lazy_query is not None:
+                limit = int(step.split(":", 1)[1].strip())
+                lazy_query = lazy_query.limit(limit)
+
+        if lazy_query is not None:
+            result = lazy_query.compute()
+        else:
+            raise ValueError("Failed to build lazy query")
+    elif scenario["type"] == "query_building":
+        # Build query dynamically
+        building_steps = scenario["building_steps"]
+        lazy_query = None
+
+        for step in building_steps:
+            if step.startswith("base:"):
+                sql = step.split(":", 1)[1].strip()
+                lazy_query = slaf.lazy_query(sql)
+            elif step.startswith("add_filter:") and lazy_query is not None:
+                condition = step.split(":", 1)[1].strip()
+                lazy_query = lazy_query.filter(condition)
+            elif step.startswith("add_select:") and lazy_query is not None:
+                columns = step.split(":", 1)[1].strip()
+                lazy_query = lazy_query.select(columns)
+            elif step.startswith("add_group_by:") and lazy_query is not None:
+                columns = step.split(":", 1)[1].strip()
+                lazy_query = lazy_query.group_by(columns)
+            elif step.startswith("add_order_by:") and lazy_query is not None:
+                columns = step.split(":", 1)[1].strip()
+                lazy_query = lazy_query.order_by(columns)
+            elif step.startswith("add_limit:") and lazy_query is not None:
+                limit = int(step.split(":", 1)[1].strip())
+                lazy_query = lazy_query.limit(limit)
+
+        if lazy_query is not None:
+            result = lazy_query.compute()
+        else:
+            raise ValueError("Failed to build lazy query")
+    elif scenario["type"] == "large_dataset_lazy":
+        # Build large lazy composition query
+        composition_steps = scenario["composition_steps"]
+        lazy_query = None
+
+        for step in composition_steps:
+            if step.startswith("SELECT"):
+                lazy_query = slaf.lazy_query(step)
+            elif step.startswith("filter:") and lazy_query is not None:
+                condition = step.split(":", 1)[1].strip()
+                lazy_query = lazy_query.filter(condition)
+            elif step.startswith("select:") and lazy_query is not None:
+                columns = step.split(":", 1)[1].strip()
+                lazy_query = lazy_query.select(columns)
+            elif step.startswith("group_by:") and lazy_query is not None:
+                columns = step.split(":", 1)[1].strip()
+                lazy_query = lazy_query.group_by(columns)
+            elif step.startswith("order_by:") and lazy_query is not None:
+                columns = step.split(":", 1)[1].strip()
+                lazy_query = lazy_query.order_by(columns)
+            elif step.startswith("limit:") and lazy_query is not None:
+                limit = int(step.split(":", 1)[1].strip())
+                lazy_query = lazy_query.limit(limit)
+
+        if lazy_query is not None:
+            result = lazy_query.compute()
+        else:
+            raise ValueError("Failed to build lazy query")
     else:
         raise ValueError(f"Unknown scenario type: {scenario['type']}")
 
@@ -406,6 +594,81 @@ def _measure_memory_efficiency(slaf_path: str, scenario: dict):
     }
 
 
+def _measure_memory_efficiency_lazy(slaf_path: str, scenario: dict):
+    """Measure memory efficiency during repeated lazy composition operations"""
+
+    gc.collect()
+
+    # Load SLAF
+    start_time = time.time()
+    slaf = SLAFArray(slaf_path)
+    load_time = time.time() - start_time
+
+    # Measure memory after loading
+    initial_memory = get_memory_usage()
+    load_memory = initial_memory
+
+    # Execute repeated lazy composition queries
+    start_time = time.time()
+
+    composition_queries = scenario["composition_queries"]
+    memory_readings = [initial_memory]
+
+    for composition_steps in composition_queries:
+        # Build lazy query step by step
+        lazy_query = None
+
+        for step in composition_steps:
+            if step.startswith("SELECT"):
+                lazy_query = slaf.lazy_query(step)
+            elif step.startswith("filter:") and lazy_query is not None:
+                condition = step.split(":", 1)[1].strip()
+                lazy_query = lazy_query.filter(condition)
+            elif step.startswith("select:") and lazy_query is not None:
+                columns = step.split(":", 1)[1].strip()
+                lazy_query = lazy_query.select(columns)
+            elif step.startswith("group_by:") and lazy_query is not None:
+                columns = step.split(":", 1)[1].strip()
+                lazy_query = lazy_query.group_by(columns)
+            elif step.startswith("order_by:") and lazy_query is not None:
+                columns = step.split(":", 1)[1].strip()
+                lazy_query = lazy_query.order_by(columns)
+            elif step.startswith("limit:") and lazy_query is not None:
+                limit = int(step.split(":", 1)[1].strip())
+                lazy_query = lazy_query.limit(limit)
+
+        if lazy_query is not None:
+            result = lazy_query.compute()
+            current_memory = get_memory_usage()
+            memory_readings.append(current_memory)
+            del result
+        else:
+            raise ValueError("Failed to build lazy query")
+
+    query_time = time.time() - start_time
+
+    # Measure final memory
+    final_memory = get_memory_usage()
+    query_memory = final_memory
+
+    # Calculate memory increase
+    total_increase = final_memory - initial_memory
+
+    # Clean up
+    del slaf
+    gc.collect()
+
+    return {
+        "load_time": load_time,
+        "query_time": query_time,
+        "load_memory": load_memory,
+        "query_memory": query_memory,
+        "result_size": len(composition_queries),
+        "memory_increase": total_increase,
+        "memory_readings": memory_readings,
+    }
+
+
 def benchmark_lazy_evaluation_scenario(
     h5ad_path: str,
     slaf_path: str,
@@ -460,6 +723,27 @@ def benchmark_lazy_evaluation_scenario(
             "results_match": old_result["result_size"] == new_result["result_size"],
         }
 
+    elif scenario["type"] in [
+        "lazy_composition",
+        "query_building",
+        "large_dataset_lazy",
+    ]:
+        # Measure new lazy composition approach only
+        result = _measure_new_approach(slaf_path, scenario)
+
+        return {
+            "scenario_type": "lazy_composition_only",
+            "scenario_description": scenario["description"],
+            "slaf_total_time": 1000 * (result["load_time"] + result["query_time"]),
+            "slaf_load_time": 1000 * result["load_time"],
+            "slaf_query_time": 1000 * result["query_time"],
+            "slaf_total_memory_mb": result["query_memory"],
+            "composition_steps": len(
+                scenario.get("composition_steps", scenario.get("building_steps", []))
+            ),
+            "result_size": result["result_size"],
+        }
+
     elif scenario["type"] == "scanpy_pipeline":
         # Measure scanpy pipeline performance
         result = _measure_scanpy_pipeline(slaf_path, scenario)
@@ -481,6 +765,19 @@ def benchmark_lazy_evaluation_scenario(
 
         return {
             "scenario_type": "memory_efficiency",
+            "scenario_description": scenario["description"],
+            "slaf_total_time": 1000 * result["query_time"],
+            "slaf_total_memory_mb": result["query_memory"],
+            "memory_increase_mb": result["memory_increase"],
+            "queries_executed": result["result_size"],
+        }
+
+    elif scenario["type"] == "memory_efficiency_lazy":
+        # Measure memory efficiency with lazy composition
+        result = _measure_memory_efficiency_lazy(slaf_path, scenario)
+
+        return {
+            "scenario_type": "memory_efficiency_lazy",
             "scenario_description": scenario["description"],
             "slaf_total_time": 1000 * result["query_time"],
             "slaf_total_memory_mb": result["query_memory"],
@@ -554,7 +851,18 @@ def benchmark_lazy_evaluation_performance(
                         f"  ✓ Completed: {result['slaf_total_time']:.1f}ms, "
                         f"{result.get('slaf_total_memory_mb', 0):.1f}MB used"
                     )
+                elif result.get("scenario_type") == "lazy_composition_only":
+                    print(
+                        f"  ✓ Completed: {result['slaf_total_time']:.1f}ms, "
+                        f"{result.get('slaf_total_memory_mb', 0):.1f}MB used, "
+                        f"{result.get('composition_steps', 0)} steps"
+                    )
                 elif result.get("scenario_type") == "memory_efficiency":
+                    print(
+                        f"  ✓ Completed: {result['slaf_total_time']:.1f}ms, "
+                        f"+{result.get('memory_increase_mb', 0):.1f}MB increase"
+                    )
+                elif result.get("scenario_type") == "memory_efficiency_lazy":
                     print(
                         f"  ✓ Completed: {result['slaf_total_time']:.1f}ms, "
                         f"+{result.get('memory_increase_mb', 0):.1f}MB increase"
@@ -571,3 +879,23 @@ def benchmark_lazy_evaluation_performance(
         print(f"\n✅ Completed {len(results)} scenarios")
 
     return results
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Benchmark lazy evaluation performance"
+    )
+    parser.add_argument("--h5ad", required=True, help="Path to h5ad file")
+    parser.add_argument("--slaf", required=True, help="Path to SLAF file")
+    parser.add_argument("--verbose", action="store_true", help="Verbose output")
+
+    args = parser.parse_args()
+
+    # Run the benchmark
+    results = benchmark_lazy_evaluation_performance(
+        args.h5ad, args.slaf, verbose=args.verbose
+    )
+
+    print(f"\n✅ Benchmark completed with {len(results)} scenarios")
