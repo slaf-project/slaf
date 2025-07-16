@@ -30,6 +30,7 @@ from benchmark_dataloaders import (
 )
 from benchmark_expression_queries import benchmark_expression_queries
 from benchmark_gene_filtering import benchmark_gene_filtering
+from benchmark_lazy_evaluation_performance import benchmark_lazy_evaluation_performance
 from benchmark_scanpy_preprocessing import benchmark_scanpy_preprocessing
 from benchmark_tokenizers import benchmark_tokenizers
 from benchmark_utils import print_benchmark_table
@@ -91,6 +92,7 @@ def run_benchmark_suite(
         "gene_filtering": benchmark_gene_filtering,
         "expression_queries": benchmark_expression_queries,
         "anndata_ops": benchmark_anndata_ops,
+        "lazy_evaluation_performance": benchmark_lazy_evaluation_performance,
         "scanpy_preprocessing": benchmark_scanpy_preprocessing,
         "tokenizers": benchmark_tokenizers,
         "dataloaders": benchmark_dataloaders,
@@ -171,9 +173,13 @@ def run_benchmark_suite(
                     print_dataloader_results_table(results)
 
                     # Calculate summary for this type
-                    _ = np.mean(
-                        [r["total_speedup"] for r in results if r["total_speedup"] > 0]
-                    )
+                    speedups = [
+                        r["total_speedup"]
+                        for r in results
+                        if r.get("total_speedup", 0) > 0
+                    ]
+                    if speedups:
+                        _ = np.mean(speedups)
                 else:
                     print(f"⚠️  {benchmark_type}: No results generated")
             else:
@@ -191,9 +197,14 @@ def run_benchmark_suite(
                     print_benchmark_table(results, Path(h5ad_path).stem, benchmark_type)
 
                     # Calculate summary for this type
-                    _ = np.mean(
-                        [r["total_speedup"] for r in results if r["total_speedup"] > 0]
-                    )
+                    speedups = [
+                        r.get("total_speedup", 0)
+                        for r in results
+                        if r.get("total_speedup") is not None
+                        and r.get("total_speedup", 0) > 0
+                    ]
+                    if speedups:
+                        _ = np.mean(speedups)
                 else:
                     print(f"⚠️  {benchmark_type}: No results generated")
 
@@ -427,6 +438,92 @@ def extract_tokenizer_summary(results: list[dict]) -> dict[str, Any]:
     }
 
 
+def extract_lazy_evaluation_summary(results: list[dict]) -> dict[str, Any]:
+    """Extract key metrics for lazy evaluation performance benchmarks"""
+    if not results:
+        return {}
+
+    # Separate results by type
+    comparison_results = [
+        r for r in results if r.get("scenario_type") == "lazy_evaluation_comparison"
+    ]
+    pipeline_results = [
+        r for r in results if r.get("scenario_type") == "scanpy_pipeline"
+    ]
+    memory_results = [
+        r for r in results if r.get("scenario_type") == "memory_efficiency"
+    ]
+
+    # Calculate averages for comparison results (only these have speedups)
+    total_speedups = [
+        r["total_speedup"] for r in comparison_results if r.get("total_speedup", 0) > 0
+    ]
+    memory_efficiencies = []
+
+    for r in comparison_results:
+        h5ad_mem = r.get("h5ad_total_memory_mb", 0)
+        slaf_mem = r.get("slaf_total_memory_mb", 0)
+
+        if slaf_mem > 0.1 and h5ad_mem > 0.1:
+            mem_eff = h5ad_mem / slaf_mem
+            memory_efficiencies.append(mem_eff)
+        elif h5ad_mem > 0.1 and slaf_mem <= 0.1:
+            mem_eff = h5ad_mem / 0.01
+            memory_efficiencies.append(mem_eff)
+        elif h5ad_mem <= 0.1 and slaf_mem <= 0.1:
+            memory_efficiencies.append(1.0)
+
+    # Include representative scenarios for comparison results
+    representative_scenarios = []
+    for result in comparison_results:
+        h5ad_mem = result.get("h5ad_total_memory_mb", 0)
+        slaf_mem = result.get("slaf_total_memory_mb", 0)
+        representative_scenarios.append(
+            {
+                "description": result["scenario_description"],
+                "h5ad_total_ms": round(result["h5ad_total_time"], 1),
+                "slaf_total_ms": round(result["slaf_total_time"], 1),
+                "total_speedup": round(result["total_speedup"], 1),
+                "memory_efficiency": (
+                    round(h5ad_mem / slaf_mem, 1) if slaf_mem > 0.1 else "N/A"
+                ),
+            }
+        )
+
+    # Add pipeline performance metrics
+    pipeline_metrics = []
+    for result in pipeline_results:
+        pipeline_metrics.append(
+            {
+                "description": result["scenario_description"],
+                "total_time_ms": round(result["slaf_total_time"], 1),
+                "pipeline_steps": result.get("pipeline_steps", 0),
+            }
+        )
+
+    # Add memory efficiency metrics
+    memory_metrics = []
+    for result in memory_results:
+        memory_metrics.append(
+            {
+                "description": result["scenario_description"],
+                "total_time_ms": round(result["slaf_total_time"], 1),
+                "memory_increase_mb": round(result.get("memory_increase_mb", 0), 1),
+                "queries_executed": result.get("queries_executed", 0),
+            }
+        )
+
+    return {
+        "average_speedup": round(np.mean(total_speedups), 1) if total_speedups else 0,
+        "average_memory_efficiency": (
+            round(np.mean(memory_efficiencies), 1) if memory_efficiencies else 0
+        ),
+        "representative_scenarios": representative_scenarios,
+        "pipeline_metrics": pipeline_metrics,
+        "memory_metrics": memory_metrics,
+    }
+
+
 def generate_benchmark_summary(input_file: str, output_file: str):
     """Generate benchmark summary for documentation"""
 
@@ -464,6 +561,13 @@ def generate_benchmark_summary(input_file: str, output_file: str):
         if "tokenizers" in dataset_results:
             summary[dataset_name]["tokenizers"] = extract_tokenizer_summary(
                 dataset_results["tokenizers"]
+            )
+
+        if "lazy_evaluation_performance" in dataset_results:
+            summary[dataset_name]["lazy_evaluation_performance"] = (
+                extract_lazy_evaluation_summary(
+                    dataset_results["lazy_evaluation_performance"]
+                )
             )
 
     # Save summary
@@ -645,11 +749,83 @@ def update_performance_docs(summary_file: str, docs_file: str):
     if "tokenizers" in dataset_summary:
         content = update_tokenizer_section(content, dataset_summary["tokenizers"])
 
+    if "lazy_evaluation_performance" in dataset_summary:
+        content = update_lazy_evaluation_section(
+            content, dataset_summary["lazy_evaluation_performance"]
+        )
+
     # Write updated content
     with open(docs_file, "w") as f:
         f.write(content)
 
     print(f"✅ Updated {docs_file} with actual benchmark numbers")
+
+
+def update_lazy_evaluation_section(content: str, summary: dict[str, Any]) -> str:
+    """Update the lazy evaluation performance results section"""
+
+    # Extract representative scenarios
+    scenarios = summary.get("representative_scenarios", [])
+    if not scenarios:
+        return content
+
+    # Create the table header and separator
+    header = "| Scenario                | Traditional Total (ms) | SLAF Total (ms) | Total Speedup | Memory Efficiency | Description          |"
+    separator = "| ----------------------- | ---------------------- | --------------- | ------------- | ----------------- | -------------------- |"
+
+    # Create the table rows
+    table_rows = []
+    for i, scenario in enumerate(scenarios):  # Use all scenarios
+        row = f"| S{i + 1}       |   {scenario['h5ad_total_ms']:.1f} |    {scenario['slaf_total_ms']:.1f} |     {scenario['total_speedup']:.1f}x |     {scenario['memory_efficiency']:.1f}x | {scenario['description']} |"
+        table_rows.append(row)
+
+    # Replace the table in the content - target the Lazy Evaluation section specifically
+    table_pattern = r"(## \*\*Lazy Evaluation Performance\*\*.*?\n\n### Performance Results\n\n)(.*?)(\n\n\*\*Key Insight\*\*)"
+
+    def replace_table(match):
+        new_table = header + "\n" + separator + "\n" + "\n".join(table_rows)
+        footer = match.group(3)
+        return match.group(1) + new_table + "\n" + footer
+
+    updated_content = re.sub(table_pattern, replace_table, content, flags=re.DOTALL)
+
+    # Add pipeline metrics
+    pipeline_metrics = summary.get("pipeline_metrics", [])
+    if pipeline_metrics:
+        header = "| Description | Total Time (ms) | Pipeline Steps |"
+        separator = "| ----------- | -------------- | -------------- |"
+        table_rows = []
+        for metric in pipeline_metrics:
+            row = f"| {metric['description']} | {metric['total_time_ms']:.1f} | {metric['pipeline_steps']} |"
+            table_rows.append(row)
+        new_table = header + "\n" + separator + "\n" + "\n".join(table_rows)
+        updated_content = re.sub(
+            r"(## \*\*Lazy Evaluation Performance\*\*.*?\n\n### Performance Results\n\n)(.*?)(\n\n\*\*Key Insight\*\*)",
+            lambda m: m.group(1) + new_table + "\n" + m.group(3),
+            updated_content,
+            flags=re.DOTALL,
+        )
+
+    # Add memory metrics
+    memory_metrics = summary.get("memory_metrics", [])
+    if memory_metrics:
+        header = "| Description | Total Time (ms) | Memory Increase (MB) | Queries Executed |"
+        separator = (
+            "| ----------- | -------------- | ------------------- | --------------- |"
+        )
+        table_rows = []
+        for metric in memory_metrics:
+            row = f"| {metric['description']} | {metric['total_time_ms']:.1f} | {metric['memory_increase_mb']:.1f} | {metric['queries_executed']} |"
+            table_rows.append(row)
+        new_table = header + "\n" + separator + "\n" + "\n".join(table_rows)
+        updated_content = re.sub(
+            r"(## \*\*Lazy Evaluation Performance\*\*.*?\n\n### Performance Results\n\n)(.*?)(\n\n\*\*Key Insight\*\*)",
+            lambda m: m.group(1) + new_table + "\n" + m.group(3),
+            updated_content,
+            flags=re.DOTALL,
+        )
+
+    return updated_content
 
 
 def main():
@@ -698,6 +874,7 @@ Examples:
             "gene_filtering",
             "expression_queries",
             "anndata_ops",
+            "lazy_evaluation_performance",
             "scanpy_preprocessing",
             "tokenizers",
             "dataloaders",
@@ -775,6 +952,7 @@ Examples:
             "gene_filtering",
             "expression_queries",
             "anndata_ops",
+            "lazy_evaluation_performance",
             "scanpy_preprocessing",
             "tokenizers",
             "dataloaders",
