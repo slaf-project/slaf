@@ -130,6 +130,9 @@ class SLAFArray:
         self.cells = lance.dataset(str(self.slaf_path / self.config["tables"]["cells"]))
         self.genes = lance.dataset(str(self.slaf_path / self.config["tables"]["genes"]))
 
+        # Create DuckDB connection for querying
+        self.duckdb_conn = duckdb.connect()
+
     def _load_metadata(self):
         """Load cell and gene metadata into memory, restoring dtypes if available"""
         # Load cell metadata
@@ -176,6 +179,14 @@ class SLAFArray:
 
         # Infer categorical columns if not in config
         self._infer_categorical_columns()
+
+    def __del__(self):
+        """Cleanup method to close DuckDB connection"""
+        if hasattr(self, "duckdb_conn"):
+            try:
+                self.duckdb_conn.close()
+            except Exception:
+                pass  # Ignore errors during cleanup
 
     def _infer_categorical_columns(self):
         """Infer categorical columns based on data characteristics"""
@@ -256,9 +267,9 @@ class SLAFArray:
         cells = self.cells  # noqa: F841
         genes = self.genes  # noqa: F841
 
-        # Use global duckdb to query Lance datasets directly
-        duckdb.query("SET enable_progress_bar = true;")
-        return duckdb.query(sql).fetchdf()
+        # Use connection-based DuckDB query instead of global query
+        self.duckdb_conn.execute("SET enable_progress_bar = true;")
+        return self.duckdb_conn.execute(sql).fetchdf()
 
     def filter_cells(self, **filters: Any) -> pd.DataFrame:
         """
