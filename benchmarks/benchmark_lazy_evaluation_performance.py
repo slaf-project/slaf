@@ -545,9 +545,20 @@ def benchmark_lazy_evaluation_performance(
                     "total_speedup" in result
                     and result.get("total_speedup") is not None
                 ):
-                    print(f"  ✓ Completed: {result['total_speedup']:.1f}x speedup")
-                elif "slaf_total_time" in result:
-                    print(f"  ✓ Completed: {result['slaf_total_time']:.1f}ms")
+                    print(
+                        f"  ✓ Completed: {result['total_speedup']:.2f}x speedup, "
+                        f"{result.get('memory_efficiency', 0):.2f}x memory efficiency"
+                    )
+                elif result.get("scenario_type") == "scanpy_pipeline":
+                    print(
+                        f"  ✓ Completed: {result['slaf_total_time']:.1f}ms, "
+                        f"{result.get('slaf_total_memory_mb', 0):.1f}MB used"
+                    )
+                elif result.get("scenario_type") == "memory_efficiency":
+                    print(
+                        f"  ✓ Completed: {result['slaf_total_time']:.1f}ms, "
+                        f"+{result.get('memory_increase_mb', 0):.1f}MB increase"
+                    )
                 else:
                     print("  ✓ Completed.")
 
