@@ -58,7 +58,7 @@ class LazyQuery:
         Returns:
             New LazyQuery with the filter applied
         """
-        new_query = LazyQuery(self.conn, self.base_sql)
+        new_query = LazyQuery(self.conn, self.base_sql, self.lance_datasets)
         new_query.operations = self.operations + [("WHERE", condition)]
         return new_query
 
@@ -75,7 +75,7 @@ class LazyQuery:
         if isinstance(columns, list):
             columns = ", ".join(columns)
 
-        new_query = LazyQuery(self.conn, self.base_sql)
+        new_query = LazyQuery(self.conn, self.base_sql, self.lance_datasets)
         new_query.operations = self.operations + [("SELECT", columns)]
         return new_query
 
@@ -92,7 +92,7 @@ class LazyQuery:
         if isinstance(columns, list):
             columns = ", ".join(columns)
 
-        new_query = LazyQuery(self.conn, self.base_sql)
+        new_query = LazyQuery(self.conn, self.base_sql, self.lance_datasets)
         new_query.operations = self.operations + [("GROUP BY", columns)]
         return new_query
 
@@ -109,7 +109,7 @@ class LazyQuery:
         if isinstance(columns, list):
             columns = ", ".join(columns)
 
-        new_query = LazyQuery(self.conn, self.base_sql)
+        new_query = LazyQuery(self.conn, self.base_sql, self.lance_datasets)
         new_query.operations = self.operations + [("ORDER BY", columns)]
         return new_query
 
@@ -123,7 +123,7 @@ class LazyQuery:
         Returns:
             New LazyQuery with the limit applied
         """
-        new_query = LazyQuery(self.conn, self.base_sql)
+        new_query = LazyQuery(self.conn, self.base_sql, self.lance_datasets)
         new_query.operations = self.operations + [("LIMIT", str(n))]
         return new_query
 
@@ -173,9 +173,27 @@ class LazyQuery:
         final_sql = self._build_sql()
 
         # Reference Lance datasets in local scope so DuckDB can find them
+        # Use the same approach as query() method
         if self.lance_datasets:
+            # Create local variables that DuckDB can find
+            locals_dict = {}
             for name, dataset in self.lance_datasets.items():
-                locals()[name] = dataset  # noqa: F841
+                locals_dict[name] = dataset
+
+            # Execute in a context where these variables are available
+            def execute_with_datasets():
+                # Reference the datasets in local scope
+                for name, dataset in locals_dict.items():
+                    if name == "expression":
+                        expression = dataset  # noqa: F841
+                    elif name == "cells":
+                        cells = dataset  # noqa: F841
+                    elif name == "genes":
+                        genes = dataset  # noqa: F841
+
+                return self.conn.execute(final_sql).fetchdf()
+
+            return execute_with_datasets()
 
         return self.conn.execute(final_sql).fetchdf()
 
