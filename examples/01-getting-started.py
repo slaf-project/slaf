@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.14.6"
+__generated_with = "0.14.0"
 app = marimo.App(width="medium")
 
 
@@ -82,7 +82,6 @@ def _():
                 print("   Key columns:")
                 print("     - cell_id: Unique cell identifier")
                 print("     - cell_integer_id: Integer ID for efficient queries")
-                print("     - cell_type: Cell type annotation")
                 print("     - batch: Batch information")
                 print("     - total_counts: Total UMI counts per cell")
                 print("     - n_genes_by_counts: Number of genes expressed")
@@ -159,9 +158,9 @@ def _(slaf):
             count = slaf.query(f"SELECT COUNT(*) as count FROM {table}")
             print(f"   {table}: {count.iloc[0]['count']:,} records")
 
-        # Cell type distribution
+        # Batch distribution
         print("\n2. Batch distribution:")
-        cell_types = slaf.query(
+        batch_distribution = slaf.query(
             """
             SELECT batch, COUNT(*) as count
             FROM cells
@@ -169,7 +168,7 @@ def _(slaf):
             ORDER BY count DESC
         """
         )
-        print(cell_types.to_string(index=False))
+        print(batch_distribution.to_string(index=False))
 
         # Expression statistics
         print("\n3. Expression value statistics:")
@@ -236,6 +235,135 @@ def _(slaf):
         print(hvg_stats.to_string(index=False))
 
     run_advanced_sql_queries()
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(
+        """
+    ## 2.5. Lazy Query Composition - Building Queries Step by Step
+
+    SLAF provides `lazy_query()` for composable SQL operations. Unlike `query()` which executes immediately, `lazy_query()` lets you build complex queries step by step:
+
+    **Key Benefits:**
+
+    - 🔄 **Composable**: Chain operations without materialization
+    - 💾 **Memory Efficient**: Only execute when you call `.compute()`
+    - ⚡ **SQL Performance**: Leverage database-level optimizations
+    - 🎯 **Flexible**: Build queries dynamically based on conditions
+    """
+    )
+    return
+
+
+@app.cell
+def _(slaf):
+    def demonstrate_lazy_query_composition():
+        print("🔧 Lazy Query Composition")
+        print("=" * 35)
+
+        print("1. Building a query step by step:")
+
+        # Start with a base query
+        base_query = slaf.lazy_query("SELECT * FROM cells")
+        print(f"   Base query type: {type(base_query)}")
+
+        # Add filtering
+        filtered_query = base_query.filter("total_counts > 1000")
+        print(f"   After filtering: {type(filtered_query)}")
+
+        # Add selection
+        selected_query = filtered_query.select("cell_id, batch, total_counts")
+        print(f"   After selection: {type(selected_query)}")
+
+        # Add grouping and aggregation
+        grouped_query = selected_query.group_by("batch").select(
+            "batch, COUNT(*) as count, AVG(total_counts) as avg_counts"
+        )
+        print(f"   After grouping: {type(grouped_query)}")
+
+        # Add ordering
+        final_query = grouped_query.order_by("avg_counts DESC")
+        print(f"   Final query: {type(final_query)}")
+
+        print("\n2. Executing the composed query:")
+        result = final_query.compute()
+        print(result.to_string(index=False))
+
+        return result
+
+    demonstrate_lazy_query_composition()
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(
+        """
+    ### Understanding the Difference
+
+    Let's compare `query()` vs `lazy_query()` to understand when to use each:
+    """
+    )
+    return
+
+
+@app.cell
+def _(slaf):
+    def compare_query_vs_lazy_query():
+        print("⚖️ Query vs Lazy Query Comparison")
+        print("=" * 40)
+
+        print("1. Immediate execution with query():")
+        # This executes immediately and returns DataFrame
+        start_time = time.time()
+        immediate_result = slaf.query(
+            """
+            SELECT batch, COUNT(*) as count, AVG(total_counts) as avg_counts
+            FROM cells
+            WHERE total_counts > 1000
+            GROUP BY batch
+            ORDER BY avg_counts DESC
+        """
+        )
+        immediate_time = time.time() - start_time
+        print(f"   Execution time: {immediate_time:.4f}s")
+        print(f"   Result type: {type(immediate_result)}")
+
+        print("\n2. Lazy composition with lazy_query():")
+        # This builds the query step by step
+        start_time = time.time()
+        lazy_query = slaf.lazy_query("SELECT * FROM cells")
+        lazy_query = lazy_query.filter("total_counts > 1000")
+        lazy_query = lazy_query.select("batch, total_counts")
+        lazy_query = lazy_query.group_by("batch").select(
+            "batch, COUNT(*) as count, AVG(total_counts) as avg_counts"
+        )
+        lazy_query = lazy_query.order_by("avg_counts DESC")
+        build_time = time.time() - start_time
+
+        # Execute the composed query
+        start_time = time.time()
+        lazy_result = lazy_query.compute()
+        compute_time = time.time() - start_time
+
+        print(f"   Build time: {build_time:.4f}s")
+        print(f"   Compute time: {compute_time:.4f}s")
+        print(f"   Total time: {build_time + compute_time:.4f}s")
+        print(f"   Result type: {type(lazy_result)}")
+
+        print("\n3. Key differences:")
+        print("   - query(): Executes immediately, returns DataFrame")
+        print("   - lazy_query(): Returns LazyQuery object for composition")
+        print("   - lazy_query(): Can chain operations without materialization")
+        print("   - lazy_query(): Only executes when .compute() is called")
+
+        return immediate_result, lazy_result
+
+    import time
+
+    immediate_result, lazy_result = compare_query_vs_lazy_query()
     return
 
 
@@ -518,12 +646,13 @@ def _(mo):
 
     1. **SQL Schema**: SLAF stores data in 3 tables (cells, genes, expression) that you can query directly
     2. **SQL Power**: Direct SQL access for complex queries and aggregations
-    3. **Convenience Methods**: Easy filtering with `filter_cells()` and `filter_genes()`
-    4. **Lazy AnnData**: Scanpy-compatible interface with lazy evaluation
-    5. **Lazy Preprocessing**: scanpy functions that work lazily
-    6. **Performance**: SQL-level performance for data operations
-    7. **Explicit Computation**: Use `.compute()` to convert lazy objects to native Python objects
-    8. **Tokenization**: Ready for ML training with efficient tokenization
+    3. **Lazy Queries**: Use `lazy_query()` for composable SQL operations that build step by step
+    4. **Convenience Methods**: Easy filtering with `filter_cells()` and `filter_genes()`
+    5. **Lazy AnnData**: Scanpy-compatible interface with lazy evaluation
+    6. **Lazy Preprocessing**: scanpy functions that work lazily
+    7. **Performance**: SQL-level performance for data operations
+    8. **Explicit Computation**: Use `.compute()` to convert lazy objects to native Python objects
+    9. **Tokenization**: Ready for ML training with efficient tokenization
 
     **Next Steps:**
 
