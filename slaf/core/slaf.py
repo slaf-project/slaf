@@ -6,6 +6,7 @@ import duckdb
 import lance
 import pandas as pd
 
+from .lazy_query import LazyQuery
 from .query_optimizer import QueryOptimizer
 
 
@@ -270,6 +271,75 @@ class SLAFArray:
         # Use connection-based DuckDB query instead of global query
         self.duckdb_conn.execute("SET enable_progress_bar = true;")
         return self.duckdb_conn.execute(sql).fetchdf()
+
+    def lazy_query(self, sql: str) -> LazyQuery:
+        """
+        Execute SQL query on the SLAF dataset and return a LazyQuery object.
+
+        Executes SQL queries directly on the underlying Lance tables using DuckDB.
+        The query can reference three tables: 'cells', 'genes', and 'expression'.
+        This enables complex aggregations, joins, and filtering operations.
+        The results are returned as a LazyQuery object, which can be materialized
+        later using the `materialized` method or executed immediately with `fetchdf()`.
+
+        Args:
+            sql: SQL query string to execute. Can reference tables: cells, genes, expression.
+                 Supports standard SQL operations including WHERE, GROUP BY, ORDER BY, etc.
+
+        Returns:
+            LazyQuery object containing the query results.
+
+        Raises:
+            ValueError: If the SQL query is malformed or references non-existent tables.
+            RuntimeError: If the query execution fails.
+
+        Examples:
+            >>> # Basic query to count cells
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> result = slaf_array.lazy_query("SELECT COUNT(*) as total_cells FROM cells")
+            >>> print(f"Total cells: {result.fetchdf()['total_cells'].iloc[0]}")
+            Total cells: 1000
+
+            >>> # Complex aggregation query
+            >>> result = slaf_array.lazy_query("
+            ...     SELECT cell_type,
+            ...            COUNT(*) as cell_count,
+            ...            AVG(total_counts) as avg_counts
+            ...     FROM cells
+            ...     WHERE total_counts > 500
+            ...     GROUP BY cell_type
+            ...     ORDER BY avg_counts DESC
+            ... ")
+            >>> print(result.fetchdf())
+               cell_type  cell_count  avg_counts
+            0  T cells         250      1250.5
+            1  B cells         200      1100.2
+            2  Monocytes       150       950.8
+
+            >>> # Join query across tables
+            >>> result = slaf_array.lazy_query("
+            ...     SELECT c.cell_type, g.gene_type, AVG(e.value) as avg_expression
+            ...     FROM cells c
+            ...     JOIN expression e ON c.cell_integer_id = e.cell_integer_id
+            ...     JOIN genes g ON e.gene_integer_id = g.gene_integer_id
+            ...     WHERE c.cell_type = 'T cells'
+            ...     GROUP BY c.cell_type, g.gene_type
+            ... ")
+            >>> print(f"Found {len(result.fetchdf())} expression patterns")
+            Found 5 expression patterns
+        """
+        # Reference Lance datasets in local scope so DuckDB can find them
+        expression = self.expression  # noqa: F841
+        cells = self.cells  # noqa: F841
+        genes = self.genes  # noqa: F841
+
+        # Use connection-based DuckDB query instead of global query
+        self.duckdb_conn.execute("SET enable_progress_bar = true;")
+        return LazyQuery(
+            self.duckdb_conn,
+            sql,
+            {"expression": self.expression, "cells": self.cells, "genes": self.genes},
+        )
 
     def filter_cells(self, **filters: Any) -> pd.DataFrame:
         """

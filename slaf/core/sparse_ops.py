@@ -569,7 +569,7 @@ class LazySparseMixin:
             GROUP BY gene_integer_id
             ORDER BY gene_integer_id
             """
-            result_df = self.slaf_array.query(sql)
+            result_df = self.slaf_array.lazy_query(sql).compute()
 
             # Vectorized result construction
             full_result = np.zeros(self.shape[1])
@@ -599,7 +599,7 @@ class LazySparseMixin:
             GROUP BY cell_integer_id
             ORDER BY cell_integer_id
             """
-            result_df = self.slaf_array.query(sql)
+            result_df = self.slaf_array.lazy_query(sql).compute()
 
             # Vectorized result construction
             full_result = np.zeros(self.shape[0])
@@ -622,7 +622,7 @@ class LazySparseMixin:
         else:  # Global aggregation
             # Optimized global query
             sql = "SELECT SUM(value) as total_sum FROM expression"
-            result = self.slaf_array.query(sql)
+            result = self.slaf_array.lazy_query(sql).compute()
 
             if len(result) > 0:
                 total_sum = result.iloc[0]["total_sum"]
@@ -645,7 +645,7 @@ class LazySparseMixin:
             GROUP BY gene_integer_id
             ORDER BY gene_integer_id
             """
-            result_df = self.slaf_array.query(sql)
+            result_df = self.slaf_array.lazy_query(sql).compute()
 
             # Vectorized result construction
             full_result = np.zeros(self.shape[1])
@@ -682,7 +682,7 @@ class LazySparseMixin:
             GROUP BY cell_integer_id
             ORDER BY cell_integer_id
             """
-            result_df = self.slaf_array.query(sql)
+            result_df = self.slaf_array.lazy_query(sql).compute()
 
             # Vectorized result construction
             full_result = np.zeros(self.shape[0])
@@ -716,7 +716,7 @@ class LazySparseMixin:
                 SUM(value * value) as sum_squares
             FROM expression
             """
-            result = self.slaf_array.query(sql)
+            result = self.slaf_array.lazy_query(sql).compute()
 
             if len(result) > 0:
                 total_sum = result.iloc[0]["total_sum"]
@@ -745,7 +745,7 @@ class LazySparseMixin:
             GROUP BY gene_integer_id
             ORDER BY gene_integer_id
             """
-            result_df = self.slaf_array.query(sql)
+            result_df = self.slaf_array.lazy_query(sql).compute()
 
             # Vectorized result construction
             full_result = np.zeros(self.shape[1])
@@ -771,7 +771,7 @@ class LazySparseMixin:
             GROUP BY cell_integer_id
             ORDER BY cell_integer_id
             """
-            result_df = self.slaf_array.query(sql)
+            result_df = self.slaf_array.lazy_query(sql).compute()
 
             # Vectorized result construction
             full_result = np.zeros(self.shape[0])
@@ -790,7 +790,7 @@ class LazySparseMixin:
 
         else:  # Global aggregation
             sql = f"SELECT {operation.upper()}(value) as result FROM expression"
-            result = self.slaf_array.query(sql)
+            result = self.slaf_array.lazy_query(sql).compute()
             return (
                 np.array([float(result.iloc[0]["result"])])
                 if len(result) > 0
@@ -828,7 +828,7 @@ class LazySparseMixin:
             GROUP BY gene_integer_id
             ORDER BY gene_integer_id
             """
-            result_df = self.slaf_array.query(sql)
+            result_df = self.slaf_array.lazy_query(sql).compute()
 
             # Process results for each operation
             gene_results: dict[str, np.ndarray] = {}
@@ -913,7 +913,7 @@ class LazySparseMixin:
             GROUP BY cell_integer_id
             ORDER BY cell_integer_id
             """
-            result_df = self.slaf_array.query(sql)
+            result_df = self.slaf_array.lazy_query(sql).compute()
 
             # Process results for each operation
             cell_results: dict[str, np.ndarray] = {}
@@ -991,7 +991,7 @@ class LazySparseMixin:
                     agg_clauses.append(f"{op.upper()}(value) as {op.lower()}_result")
 
             sql = f"SELECT {', '.join(agg_clauses)} FROM expression"
-            result = self.slaf_array.query(sql)
+            result = self.slaf_array.lazy_query(sql).compute()
 
             global_results: dict[str, np.ndarray] = {}
             if len(result) > 0:

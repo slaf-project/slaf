@@ -382,7 +382,7 @@ class LazyExpressionMatrix(LazySparseMixin):
 
         try:
             # Execute the transformed query
-            return self.slaf_array.query(query)
+            return self.slaf_array.lazy_query(query).compute()
         except Exception as e:
             # If SQL transformation fails, fall back to numpy
             print(f"SQL transformation failed, falling back to numpy: {e}")
@@ -632,7 +632,7 @@ class LazyExpressionMatrix(LazySparseMixin):
 
         # Fall back to base query + numpy transformations
         base_query = self._build_submatrix_sql(self._cell_selector, self._gene_selector)
-        base_result = self.slaf_array.query(base_query)
+        base_result = self.slaf_array.lazy_query(base_query).compute()
 
         # Reconstruct base matrix
         base_matrix = self._reconstruct_sparse_matrix(

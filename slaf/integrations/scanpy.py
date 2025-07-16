@@ -72,7 +72,7 @@ class LazyPreprocessing:
         ORDER BY cell_id
         """
 
-        cell_qc = adata.slaf.query(cell_qc_sql)
+        cell_qc = adata.slaf.lazy_query(cell_qc_sql).compute()
 
         # Add log1p transformed counts if requested
         if log1p:
@@ -90,7 +90,7 @@ class LazyPreprocessing:
         ORDER BY gene_id
         """
 
-        gene_qc = adata.slaf.query(gene_qc_sql)
+        gene_qc = adata.slaf.lazy_query(gene_qc_sql).compute()
 
         # For scanpy compatibility, we need to ensure all genes are present
         # Use in-memory var if available, otherwise fall back to SQL
@@ -102,7 +102,7 @@ class LazyPreprocessing:
             FROM genes
             ORDER BY gene_integer_id
             """
-            expected_genes = adata.slaf.query(expected_genes_sql)
+            expected_genes = adata.slaf.lazy_query(expected_genes_sql).compute()
 
         # Create a complete gene_qc DataFrame with all expected genes
         gene_qc_complete = pd.DataFrame({"gene_id": expected_genes["gene_id"]})
@@ -244,7 +244,7 @@ class LazyPreprocessing:
         ORDER BY cell_id
         """
 
-        filtered_cells = adata.slaf.query(filter_sql)
+        filtered_cells = adata.slaf.lazy_query(filter_sql).compute()
 
         if len(filtered_cells) == 0:
             raise ValueError("All cells were filtered out")
@@ -357,7 +357,7 @@ class LazyPreprocessing:
         ORDER BY gene_id
         """
 
-        filtered_genes = adata.slaf.query(filter_sql)
+        filtered_genes = adata.slaf.lazy_query(filter_sql).compute()
 
         if len(filtered_genes) == 0:
             raise ValueError("All genes were filtered out")
@@ -451,7 +451,7 @@ class LazyPreprocessing:
         ORDER BY cell_integer_id
         """
 
-        cell_totals = adata.slaf.query(cell_totals_sql)
+        cell_totals = adata.slaf.lazy_query(cell_totals_sql).compute()
 
         # Handle exclude_highly_expressed if requested
         if exclude_highly_expressed:
@@ -623,7 +623,7 @@ class LazyPreprocessing:
         ORDER BY gene_id
         """
 
-        gene_stats = adata.slaf.query(stats_sql)
+        gene_stats = adata.slaf.lazy_query(stats_sql).compute()
 
         # Get the expected gene_ids from genes table to ensure all genes are present
         # Use in-memory var if available, otherwise fall back to SQL
@@ -635,7 +635,7 @@ class LazyPreprocessing:
             FROM genes
             ORDER BY gene_integer_id
             """
-            expected_genes = adata.slaf.query(expected_genes_sql)
+            expected_genes = adata.slaf.lazy_query(expected_genes_sql).compute()
 
         # Create a complete gene_stats DataFrame with all expected genes
         gene_stats_complete = pd.DataFrame({"gene_id": expected_genes["gene_id"]})
