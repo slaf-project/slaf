@@ -412,12 +412,21 @@ class LazyExpressionMatrix(LazySparseMixin):
         # Use the QueryOptimizer to build the SQL string
         from slaf.core.query_optimizer import QueryOptimizer
 
-        return QueryOptimizer.build_submatrix_query(
-            cell_selector=cell_selector,
-            gene_selector=gene_selector,
-            cell_count=self.slaf_array.shape[0],  # Use original dataset dimensions
-            gene_count=self.slaf_array.shape[1],  # Use original dataset dimensions
+        lazy_query = QueryOptimizer.build_submatrix_query(
+            cell_selector,
+            gene_selector,
+            self.slaf_array.shape[0],  # Use original dataset dimensions
+            self.slaf_array.shape[1],  # Use original dataset dimensions
+            self.slaf_array.duckdb_conn,
+            {
+                "expression": self.slaf_array.expression,
+                "cells": self.slaf_array.cells,
+                "genes": self.slaf_array.genes,
+            },
         )
+
+        # Return the SQL string for backward compatibility
+        return lazy_query._build_sql()
 
     def _apply_sql_normalize_total(self, query: str, transform_data: dict) -> str:
         """Apply normalize_total transformation in SQL"""

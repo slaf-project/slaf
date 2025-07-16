@@ -1,5 +1,6 @@
 """Tests for SLAF query optimization."""
 
+import duckdb
 import numpy as np
 
 from slaf.core.query_optimizer import PerformanceMetrics, QueryOptimizer
@@ -7,6 +8,12 @@ from slaf.core.query_optimizer import PerformanceMetrics, QueryOptimizer
 
 class TestQueryOptimizer:
     """Test QueryOptimizer functionality."""
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        # Create a mock DuckDB connection for testing
+        self.mock_conn = duckdb.connect(":memory:")
+        self.mock_datasets = {"expression": None, "cells": None, "genes": None}
 
     def test_is_consecutive_empty(self):
         """Test is_consecutive with empty list."""
@@ -68,42 +75,55 @@ class TestQueryOptimizer:
 
     def test_build_optimized_query_empty(self):
         """Test build_optimized_query with empty list."""
-        query = QueryOptimizer.build_optimized_query([], "cell")
-        assert "WHERE FALSE" in query
+        query = QueryOptimizer.build_optimized_query(
+            [], "cell", self.mock_conn, self.mock_datasets
+        )
+        assert "WHERE FALSE" in query._build_sql()
 
     def test_build_optimized_query_consecutive(self):
         """Test build_optimized_query with consecutive IDs."""
-        query = QueryOptimizer.build_optimized_query([1, 2, 3, 4, 5], "cell")
-        assert "BETWEEN 1 AND 5" in query
-        assert "cell_integer_id" in query
+        query = QueryOptimizer.build_optimized_query(
+            [1, 2, 3, 4, 5], "cell", self.mock_conn, self.mock_datasets
+        )
+        assert "BETWEEN 1 AND 5" in query._build_sql()
+        assert "cell_integer_id" in query._build_sql()
 
     def test_build_optimized_query_non_consecutive(self):
         """Test build_optimized_query with non-consecutive IDs."""
-        query = QueryOptimizer.build_optimized_query([1, 3, 5, 7], "cell")
-        assert "IN (1,3,5,7)" in query
-        assert "cell_integer_id" in query
+        query = QueryOptimizer.build_optimized_query(
+            [1, 3, 5, 7], "cell", self.mock_conn, self.mock_datasets
+        )
+        assert "IN (1,3,5,7)" in query._build_sql()
+        assert "cell_integer_id" in query._build_sql()
 
     def test_build_optimized_query_gene_type(self):
         """Test build_optimized_query with gene type."""
-        query = QueryOptimizer.build_optimized_query([1, 2, 3], "gene")
-        assert "gene_integer_id" in query
+        query = QueryOptimizer.build_optimized_query(
+            [1, 2, 3], "gene", self.mock_conn, self.mock_datasets
+        )
+        assert "gene_integer_id" in query._build_sql()
 
     def test_build_optimized_query_with_batching(self):
         """Test build_optimized_query with adaptive batching."""
         ids = list(range(1, 201))  # 200 consecutive IDs
         query = QueryOptimizer.build_optimized_query(
-            ids, "cell", use_adaptive_batching=True, max_batch_size=50
+            ids,
+            "cell",
+            self.mock_conn,
+            self.mock_datasets,
+            use_adaptive_batching=True,
+            max_batch_size=50,
         )
-        assert "UNION ALL" in query
-        assert "BETWEEN" in query
+        assert "UNION ALL" in query._build_sql()
+        assert "BETWEEN" in query._build_sql()
 
     def test_build_optimized_query_without_batching(self):
         """Test build_optimized_query without adaptive batching."""
         ids = [1, 3, 5, 7, 9]
         query = QueryOptimizer.build_optimized_query(
-            ids, "cell", use_adaptive_batching=False
+            ids, "cell", self.mock_conn, self.mock_datasets, use_adaptive_batching=False
         )
-        assert "IN (1,3,5,7,9)" in query
+        assert "IN (1,3,5,7,9)" in query._build_sql()
 
     def test_normalize_slice_indices_basic(self):
         """Test _normalize_slice_indices with basic slice."""
@@ -187,41 +207,44 @@ class TestQueryOptimizer:
 
     def test_build_submatrix_query_no_selectors(self):
         """Test build_submatrix_query with no selectors."""
-        query = QueryOptimizer.build_submatrix_query()
-        assert "SELECT" in query
-        assert "FROM expression" in query
+        query = QueryOptimizer.build_submatrix_query(
+            duckdb_conn=self.mock_conn, lance_datasets=self.mock_datasets
+        )
+        assert "SELECT" in query._build_sql()
+        assert "FROM expression" in query._build_sql()
 
     def test_build_submatrix_query_with_selectors(self):
         """Test build_submatrix_query with selectors."""
         query = QueryOptimizer.build_submatrix_query(
-            cell_selector=[1, 2, 3], gene_selector=[4, 5, 6], cell_count=3, gene_count=3
+            [1, 2, 3], [4, 5, 6], 3, 3, self.mock_conn, self.mock_datasets
         )
-        assert "SELECT" in query
-        assert "FROM expression" in query
-        assert "WHERE" in query
+        assert "SELECT" in query._build_sql()
+        assert "FROM expression" in query._build_sql()
 
     def test_build_cte_query(self):
         """Test build_cte_query."""
-        query = QueryOptimizer.build_cte_query([1, 2, 3], "cell")
-        assert "WITH" in query
-        assert "SELECT" in query
-        assert "cell_integer_id" in query
+        query = QueryOptimizer.build_cte_query(
+            [1, 2, 3], "cell", self.mock_conn, self.mock_datasets
+        )
+        assert "WITH" in query._build_sql()
+        assert "filtered_expression" in query._build_sql()
 
     def test_estimate_query_strategy_consecutive(self):
-        """Test estimate_query_strategy for consecutive IDs."""
+        """Test estimate_query_strategy with consecutive IDs."""
         strategy = QueryOptimizer.estimate_query_strategy([1, 2, 3, 4, 5])
-        assert "consecutive" in strategy.lower()
+        assert strategy == "consecutive"
 
     def test_estimate_query_strategy_scattered(self):
-        """Test estimate_query_strategy for scattered IDs."""
-        strategy = QueryOptimizer.estimate_query_strategy([1, 10, 100, 1000])
-        assert "scattered" in strategy.lower()
+        """Test estimate_query_strategy with scattered IDs."""
+        strategy = QueryOptimizer.estimate_query_strategy([1, 3, 5, 7])
+        assert strategy == "scattered"
 
     def test_estimate_query_strategy_batching(self):
-        """Test estimate_query_strategy for batching."""
-        strategy = QueryOptimizer.estimate_query_strategy(list(range(1, 201)))
-        # For 200 consecutive IDs, it should return "consecutive" not "batching"
-        assert "consecutive" in strategy.lower()
+        """Test estimate_query_strategy with batching threshold."""
+        # Create a large scattered set
+        ids = list(range(1, 201)) + [300, 301, 302]  # 200 consecutive + 3 scattered
+        strategy = QueryOptimizer.estimate_query_strategy(ids, batching_threshold=100)
+        assert strategy == "batched"
 
 
 class TestPerformanceMetrics:
@@ -230,49 +253,59 @@ class TestPerformanceMetrics:
     def test_init(self):
         """Test PerformanceMetrics initialization."""
         metrics = PerformanceMetrics()
-        assert hasattr(metrics, "query_times")
+        assert metrics.query_times == {}
+        assert metrics.query_counts == {}
 
     def test_record_query(self):
-        """Test record_query."""
+        """Test record_query method."""
         metrics = PerformanceMetrics()
-        metrics.record_query("consecutive", 100, 0.5)
-        assert len(metrics.query_times) == 1
+        metrics.record_query("consecutive", 10, 0.1)
+        assert "consecutive_10" in metrics.query_times
+        assert len(metrics.query_times["consecutive_10"]) == 1
+        assert metrics.query_counts["consecutive_10"] == 1
 
     def test_record_multiple_queries(self):
-        """Test recording multiple queries."""
+        """Test record_query with multiple queries."""
         metrics = PerformanceMetrics()
-        metrics.record_query("consecutive", 100, 0.5)
-        metrics.record_query("scattered", 50, 0.3)
-        metrics.record_query("consecutive", 200, 1.0)
-        assert len(metrics.query_times) == 3
+        metrics.record_query("consecutive", 10, 0.1)
+        metrics.record_query("consecutive", 10, 0.2)
+        metrics.record_query("scattered", 10, 0.3)
+
+        assert len(metrics.query_times["consecutive_10"]) == 2
+        assert len(metrics.query_times["scattered_10"]) == 1
+        assert metrics.query_counts["consecutive_10"] == 2
+        assert metrics.query_counts["scattered_10"] == 1
 
     def test_get_average_time_existing(self):
-        """Test get_average_time for existing strategy and count."""
+        """Test get_average_time with existing data."""
         metrics = PerformanceMetrics()
-        metrics.record_query("consecutive", 100, 0.5)
-        metrics.record_query("consecutive", 100, 0.7)
-        avg_time = metrics.get_average_time("consecutive", 100)
-        assert avg_time == 0.6
+        metrics.record_query("consecutive", 10, 0.1)
+        metrics.record_query("consecutive", 10, 0.3)
+
+        avg_time = metrics.get_average_time("consecutive", 10)
+        assert avg_time == 0.2
 
     def test_get_average_time_nonexistent(self):
-        """Test get_average_time for nonexistent strategy/count."""
+        """Test get_average_time with nonexistent data."""
         metrics = PerformanceMetrics()
-        avg_time = metrics.get_average_time("nonexistent", 100)
+        avg_time = metrics.get_average_time("nonexistent", 10)
         assert avg_time is None
 
     def test_get_performance_summary(self):
-        """Test get_performance_summary."""
+        """Test get_performance_summary method."""
         metrics = PerformanceMetrics()
-        metrics.record_query("consecutive", 100, 0.5)
-        metrics.record_query("scattered", 50, 0.3)
+        metrics.record_query("consecutive", 10, 0.1)
+        metrics.record_query("consecutive", 10, 0.3)
+        metrics.record_query("scattered", 20, 0.5)
+
         summary = metrics.get_performance_summary()
-        assert isinstance(summary, dict)
         assert "consecutive" in summary
         assert "scattered" in summary
+        assert summary["consecutive"][10]["avg_time"] == 0.2
+        assert summary["scattered"][20]["avg_time"] == 0.5
 
     def test_get_performance_summary_empty(self):
-        """Test get_performance_summary with no recorded queries."""
+        """Test get_performance_summary with no data."""
         metrics = PerformanceMetrics()
         summary = metrics.get_performance_summary()
-        assert isinstance(summary, dict)
-        assert len(summary) == 0
+        assert summary == {}

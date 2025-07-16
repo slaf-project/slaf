@@ -651,9 +651,14 @@ class SLAFArray:
         integer_ids = self._normalize_entity_ids(cell_ids, "cell")
 
         # Use optimized query strategy
-        sql = QueryOptimizer.build_optimized_query(integer_ids, "cell")
+        lazy_query = QueryOptimizer.build_optimized_query(
+            integer_ids,
+            "cell",
+            self.duckdb_conn,
+            {"expression": self.expression, "cells": self.cells, "genes": self.genes},
+        )
 
-        return self.query(sql)
+        return lazy_query.compute()
 
     def get_gene_expression(self, gene_ids: str | list[str]) -> pd.DataFrame:
         """
@@ -698,9 +703,14 @@ class SLAFArray:
         integer_ids = self._normalize_entity_ids(gene_ids, "gene")
 
         # Use optimized query strategy
-        sql = QueryOptimizer.build_optimized_query(integer_ids, "gene")
+        lazy_query = QueryOptimizer.build_optimized_query(
+            integer_ids,
+            "gene",
+            self.duckdb_conn,
+            {"expression": self.expression, "cells": self.cells, "genes": self.genes},
+        )
 
-        return self.query(sql)
+        return lazy_query.compute()
 
     def get_submatrix(
         self, cell_selector: Any | None = None, gene_selector: Any | None = None
@@ -767,14 +777,16 @@ class SLAFArray:
             Error: Cell selector out of bounds
         """
         # Use optimized query builder from QueryOptimizer
-        sql = QueryOptimizer.build_submatrix_query(
-            cell_selector=cell_selector,
-            gene_selector=gene_selector,
-            cell_count=self.shape[0],
-            gene_count=self.shape[1],
+        lazy_query = QueryOptimizer.build_submatrix_query(
+            cell_selector,
+            gene_selector,
+            self.shape[0],
+            self.shape[1],
+            self.duckdb_conn,
+            {"expression": self.expression, "cells": self.cells, "genes": self.genes},
         )
 
-        return self.query(sql)
+        return lazy_query.compute()
 
     def info(self):
         """Print information about the SLAF dataset"""

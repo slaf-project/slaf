@@ -10,7 +10,10 @@ This module contains optimized query strategies including:
 
 from typing import Any
 
+import duckdb
 import numpy as np
+
+from .lazy_query import LazyQuery
 
 
 class QueryOptimizer:
@@ -71,66 +74,75 @@ class QueryOptimizer:
     def build_optimized_query(
         entity_ids: list[int],
         entity_type: str,
+        duckdb_conn: duckdb.DuckDBPyConnection | None = None,
+        lance_datasets: dict | None = None,
         use_adaptive_batching: bool = True,
         max_batch_size: int = 100,
-    ) -> str:
+    ) -> LazyQuery:
         """
         Build an optimized SQL query for entity filtering
 
         Args:
             entity_ids: List of entity IDs to filter by
             entity_type: Either 'cell' or 'gene'
+            duckdb_conn: DuckDB connection object (required for LazyQuery)
+            lance_datasets: Dictionary of Lance datasets (required for LazyQuery)
             use_adaptive_batching: Whether to use adaptive batching
             max_batch_size: Maximum batch size for adaptive batching
 
         Returns:
-            Optimized SQL query string
+            LazyQuery object with optimized SQL
         """
+        if duckdb_conn is None:
+            raise ValueError("duckdb_conn is required for LazyQuery")
+
         if not entity_ids:
-            return "SELECT * FROM expression WHERE FALSE"
+            sql = "SELECT * FROM expression WHERE FALSE"
+        else:
+            # Convert to integer IDs if needed (assuming they're already integers)
+            integer_ids = entity_ids
 
-        # Convert to integer IDs if needed (assuming they're already integers)
-        integer_ids = entity_ids
+            if use_adaptive_batching and len(integer_ids) > max_batch_size:
+                # Use adaptive batching for large scattered sets
+                batches = QueryOptimizer.adaptive_batch_ids(integer_ids, max_batch_size)
 
-        if use_adaptive_batching and len(integer_ids) > max_batch_size:
-            # Use adaptive batching for large scattered sets
-            batches = QueryOptimizer.adaptive_batch_ids(integer_ids, max_batch_size)
+                union_queries = []
+                for batch in batches:
+                    if QueryOptimizer.is_consecutive(batch):
+                        min_id, max_id = min(batch), max(batch)
+                        union_queries.append(
+                            f"""
+                        SELECT * FROM expression
+                        WHERE {entity_type}_integer_id BETWEEN {min_id} AND {max_id}
+                        """
+                        )
+                    else:
+                        ids_str = ",".join(map(str, batch))
+                        union_queries.append(
+                            f"""
+                        SELECT * FROM expression
+                        WHERE {entity_type}_integer_id IN ({ids_str})
+                        """
+                        )
 
-            union_queries = []
-            for batch in batches:
-                if QueryOptimizer.is_consecutive(batch):
-                    min_id, max_id = min(batch), max(batch)
-                    union_queries.append(
-                        f"""
+                sql = " UNION ALL ".join(union_queries)
+
+            else:
+                # Use simple optimization for smaller sets
+                if QueryOptimizer.is_consecutive(integer_ids):
+                    min_id, max_id = min(integer_ids), max(integer_ids)
+                    sql = f"""
                     SELECT * FROM expression
                     WHERE {entity_type}_integer_id BETWEEN {min_id} AND {max_id}
                     """
-                    )
                 else:
-                    ids_str = ",".join(map(str, batch))
-                    union_queries.append(
-                        f"""
+                    ids_str = ",".join(map(str, integer_ids))
+                    sql = f"""
                     SELECT * FROM expression
                     WHERE {entity_type}_integer_id IN ({ids_str})
                     """
-                    )
 
-            return " UNION ALL ".join(union_queries)
-
-        else:
-            # Use simple optimization for smaller sets
-            if QueryOptimizer.is_consecutive(integer_ids):
-                min_id, max_id = min(integer_ids), max(integer_ids)
-                return f"""
-                SELECT * FROM expression
-                WHERE {entity_type}_integer_id BETWEEN {min_id} AND {max_id}
-                """
-            else:
-                ids_str = ",".join(map(str, integer_ids))
-                return f"""
-                SELECT * FROM expression
-                WHERE {entity_type}_integer_id IN ({ids_str})
-                """
+        return LazyQuery(duckdb_conn, sql, lance_datasets)
 
     @staticmethod
     def _normalize_slice_indices(
@@ -215,29 +227,28 @@ class QueryOptimizer:
         Returns:
             SQL WHERE condition string
         """
-        if isinstance(selector, np.ndarray) and selector.dtype == bool:
-            indices = np.where(selector)[0]
-            if len(indices) == 0:
-                return "FALSE"
-            bool_indices_list = indices.tolist()
+        # Convert to list if numpy array
+        if isinstance(selector, np.ndarray):
+            if selector.dtype == bool:
+                # Handle boolean mask - convert to indices
+                indices = np.where(selector)[0].tolist()
+            else:
+                indices = selector.tolist()
         else:
-            # List of indices - handle negative indices
-            list_indices: list[int] = []
-            for idx in selector:
-                if idx < 0:
-                    idx = max_size + idx
-                if 0 <= idx < max_size:
-                    list_indices.append(idx)
-            if len(list_indices) == 0:
-                return "FALSE"
+            indices = selector
 
-        # Build condition for the indices
-        final_indices = (
-            bool_indices_list if "bool_indices_list" in locals() else list_indices
-        )
-        if QueryOptimizer.is_consecutive(final_indices):
-            min_id, max_id = min(final_indices), max(final_indices)
-            return f"{entity_type}_integer_id BETWEEN {min_id} AND {max_id}"
+        # Handle negative indices
+        final_indices = []
+        for idx in indices:
+            if idx < 0:
+                idx = max_size + idx
+            if 0 <= idx < max_size:
+                final_indices.append(idx)
+
+        if not final_indices:
+            return "FALSE"
+        elif len(final_indices) == 1:
+            return f"{entity_type}_integer_id = {final_indices[0]}"
         else:
             ids_str = ",".join(map(str, final_indices))
             return f"{entity_type}_integer_id IN ({ids_str})"
@@ -271,7 +282,9 @@ class QueryOptimizer:
         gene_selector: Any | None = None,
         cell_count: int | None = None,
         gene_count: int | None = None,
-    ) -> str:
+        duckdb_conn: duckdb.DuckDBPyConnection | None = None,
+        lance_datasets: dict | None = None,
+    ) -> LazyQuery:
         """
         Build an optimized SQL query for submatrix selection
 
@@ -280,10 +293,15 @@ class QueryOptimizer:
             gene_selector: Gene selector (slice, list, boolean mask, int, or None)
             cell_count: Total number of cells (for bounds checking)
             gene_count: Total number of genes (for bounds checking)
+            duckdb_conn: DuckDB connection object (required for LazyQuery)
+            lance_datasets: Dictionary of Lance datasets (required for LazyQuery)
 
         Returns:
-            Optimized SQL query string
+            LazyQuery object with optimized SQL
         """
+        if duckdb_conn is None:
+            raise ValueError("duckdb_conn is required for LazyQuery")
+
         # Handle cell selector
         if cell_selector is None:
             cell_condition = "TRUE"
@@ -338,29 +356,43 @@ class QueryOptimizer:
 
         # Build final query
         where_clause = f"{cell_condition} AND {gene_condition}"
-        return f"SELECT * FROM expression WHERE {where_clause}"
+        sql = f"SELECT * FROM expression WHERE {where_clause}"
+
+        return LazyQuery(duckdb_conn, sql, lance_datasets)
 
     @staticmethod
-    def build_cte_query(entity_ids: list[int], entity_type: str) -> str:
+    def build_cte_query(
+        entity_ids: list[int],
+        entity_type: str,
+        duckdb_conn: duckdb.DuckDBPyConnection | None = None,
+        lance_datasets: dict | None = None,
+    ) -> LazyQuery:
         """
         Build a CTE-optimized query for large scattered ID sets
 
         Args:
             entity_ids: List of entity IDs to filter by
             entity_type: Either 'cell' or 'gene'
+            duckdb_conn: DuckDB connection object (required for LazyQuery)
+            lance_datasets: Dictionary of Lance datasets (required for LazyQuery)
 
         Returns:
-            CTE-optimized SQL query string
+            LazyQuery object with CTE-optimized SQL
         """
+        if duckdb_conn is None:
+            raise ValueError("duckdb_conn is required for LazyQuery")
+
         ids_str = ",".join(map(str, entity_ids))
 
-        return f"""
+        sql = f"""
         WITH filtered_expression AS (
             SELECT * FROM expression
             WHERE {entity_type}_integer_id IN ({ids_str})
         )
         SELECT * FROM filtered_expression
         """
+
+        return LazyQuery(duckdb_conn, sql, lance_datasets)
 
     @staticmethod
     def estimate_query_strategy(
