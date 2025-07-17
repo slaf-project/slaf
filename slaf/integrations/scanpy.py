@@ -132,22 +132,12 @@ class LazyPreprocessing:
             )
 
         if inplace:
-            # Update the metadata tables in SLAF
-            # This would require implementing metadata updates in SLAF
-            # For now, just update the cached obs/var
+            # Store lazy queries for later computation instead of computing immediately
+            adata._qc_queries["cell_qc"] = cell_qc
+            adata._qc_queries["gene_qc"] = gene_qc_complete
+            adata._qc_queries["log1p"] = log1p
 
-            # Update obs
-            adata._obs = None  # Clear cache
-            for _ in cell_qc.iterrows():
-                # Would need to implement metadata updates
-                pass
-
-            # Update var
-            adata._var = None  # Clear cache
-            for _ in gene_qc_complete.iterrows():
-                # Would need to implement metadata updates
-                pass
-
+            print("QC metrics stored as lazy queries - compute when needed")
             return None
         else:
             return cell_qc, gene_qc_complete

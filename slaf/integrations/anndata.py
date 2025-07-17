@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import scipy.sparse
 
+from slaf.core.lazy_query import LazyQuery
 from slaf.core.slaf import SLAFArray
 from slaf.core.sparse_ops import LazySparseMixin
 
@@ -352,8 +353,8 @@ class LazyExpressionMatrix(LazySparseMixin):
 
     def _apply_sql_transformations(
         self, cell_selector, gene_selector, transformations
-    ) -> pd.DataFrame | None:
-        """Apply transformations at SQL level when possible"""
+    ) -> "LazyQuery | None":
+        """Apply transformations at SQL level when possible, returning a LazyQuery if possible."""
         # Check if we can apply all transformations in SQL
         sql_applicable = []
         numpy_needed = []
@@ -380,13 +381,8 @@ class LazyExpressionMatrix(LazySparseMixin):
             cell_selector, gene_selector, sql_transformations
         )
 
-        try:
-            # Execute the transformed query
-            return self.slaf_array.lazy_query(query).compute()
-        except Exception as e:
-            # If SQL transformation fails, fall back to numpy
-            print(f"SQL transformation failed, falling back to numpy: {e}")
-            return None
+        # Return a LazyQuery instead of computing immediately
+        return self.slaf_array.lazy_query(query)
 
     def _build_transformed_query(
         self, cell_selector, gene_selector, transformations
@@ -597,19 +593,116 @@ class LazyExpressionMatrix(LazySparseMixin):
 
     def mean(self, axis: int | None = None) -> float | np.ndarray:
         """Compute mean along axis via SQL aggregation"""
-        return self._sql_aggregation("avg", axis)
+        lazy_query = self._sql_aggregation("avg", axis)
+        result_df = lazy_query.compute()
+
+        if axis == 0:  # Gene-wise aggregation
+            # Convert to numpy array with proper shape
+            result = np.zeros(self.shape[1])
+            if len(result_df) > 0:
+                gene_indices = result_df["gene_integer_id"].to_numpy()
+                values = (
+                    result_df["total_sum"].to_numpy() / self.shape[0]
+                )  # Divide by number of cells
+                valid_mask = (gene_indices >= 0) & (gene_indices < self.shape[1])
+                if np.any(valid_mask):
+                    result[gene_indices[valid_mask]] = values[valid_mask]
+            return result.reshape(1, -1)  # Return as 2D array (1, n_genes)
+        elif axis == 1:  # Cell-wise aggregation
+            # Convert to numpy array with proper shape
+            result = np.zeros(self.shape[0])
+            if len(result_df) > 0:
+                cell_indices = result_df["cell_integer_id"].to_numpy()
+                values = (
+                    result_df["total_sum"].to_numpy() / self.shape[1]
+                )  # Divide by number of genes
+                valid_mask = (cell_indices >= 0) & (cell_indices < self.shape[0])
+                if np.any(valid_mask):
+                    result[cell_indices[valid_mask]] = values[valid_mask]
+            return result.reshape(-1, 1)  # Return as 2D array (n_cells, 1)
+        else:  # Global aggregation
+            return result_df["total_sum"].iloc[0] / (self.shape[0] * self.shape[1])
 
     def sum(self, axis: int | None = None) -> float | np.ndarray:
         """Compute sum along axis via SQL aggregation"""
-        return self._sql_aggregation("sum", axis)
+        lazy_query = self._sql_aggregation("sum", axis)
+        result_df = lazy_query.compute()
+
+        if axis == 0:  # Gene-wise aggregation
+            # Convert to numpy array with proper shape
+            result = np.zeros(self.shape[1])
+            if len(result_df) > 0:
+                gene_indices = result_df["gene_integer_id"].to_numpy()
+                values = result_df["result"].to_numpy()
+                valid_mask = (gene_indices >= 0) & (gene_indices < self.shape[1])
+                if np.any(valid_mask):
+                    result[gene_indices[valid_mask]] = values[valid_mask]
+            return result.reshape(1, -1)  # Return as 2D array (1, n_genes)
+        elif axis == 1:  # Cell-wise aggregation
+            # Convert to numpy array with proper shape
+            result = np.zeros(self.shape[0])
+            if len(result_df) > 0:
+                cell_indices = result_df["cell_integer_id"].to_numpy()
+                values = result_df["result"].to_numpy()
+                valid_mask = (cell_indices >= 0) & (cell_indices < self.shape[0])
+                if np.any(valid_mask):
+                    result[cell_indices[valid_mask]] = values[valid_mask]
+            return result.reshape(-1, 1)  # Return as 2D array (n_cells, 1)
+        else:  # Global aggregation
+            return result_df["result"].iloc[0]
 
     def var(self, axis: int | None = None) -> float | np.ndarray:
         """Compute variance along axis via SQL aggregation"""
-        return self._sql_aggregation("variance", axis)
+        lazy_query = self._sql_aggregation("variance", axis)
+        result_df = lazy_query.compute()
+
+        if axis == 0:  # Gene-wise aggregation
+            # Convert to numpy array with proper shape
+            result = np.zeros(self.shape[1])
+            if len(result_df) > 0:
+                gene_indices = result_df["gene_integer_id"].to_numpy()
+                sums = result_df["total_sum"].to_numpy()
+                sum_squares = result_df["sum_squares"].to_numpy()
+                valid_mask = (gene_indices >= 0) & (gene_indices < self.shape[1])
+                if np.any(valid_mask):
+                    valid_indices = gene_indices[valid_mask]
+                    valid_sums = sums[valid_mask]
+                    valid_sum_squares = sum_squares[valid_mask]
+                    means = valid_sums / self.shape[0]
+                    variances = (valid_sum_squares / self.shape[0]) - (means * means)
+                    result[valid_indices] = variances
+            return result.reshape(1, -1)  # Return as 2D array (1, n_genes)
+        elif axis == 1:  # Cell-wise aggregation
+            # Convert to numpy array with proper shape
+            result = np.zeros(self.shape[0])
+            if len(result_df) > 0:
+                cell_indices = result_df["cell_integer_id"].to_numpy()
+                sums = result_df["total_sum"].to_numpy()
+                sum_squares = result_df["sum_squares"].to_numpy()
+                valid_mask = (cell_indices >= 0) & (cell_indices < self.shape[0])
+                if np.any(valid_mask):
+                    valid_indices = cell_indices[valid_mask]
+                    valid_sums = sums[valid_mask]
+                    valid_sum_squares = sum_squares[valid_mask]
+                    means = valid_sums / self.shape[1]
+                    variances = (valid_sum_squares / self.shape[1]) - (means * means)
+                    result[valid_indices] = variances
+            return result.reshape(-1, 1)  # Return as 2D array (n_cells, 1)
+        else:  # Global aggregation
+            total_sum = result_df["total_sum"].iloc[0]
+            sum_squares = result_df["sum_squares"].iloc[0]
+            n = self.shape[0] * self.shape[1]
+            mean = total_sum / n
+            variance = (sum_squares / n) - (mean * mean)
+            return variance
 
     def std(self, axis: int | None = None) -> float | np.ndarray:
         """Compute standard deviation along axis"""
-        return self._sql_aggregation("stddev", axis)
+        variance = self.var(axis)
+        if isinstance(variance, np.ndarray):
+            return np.sqrt(variance)
+        else:
+            return np.sqrt(variance)
 
     def toarray(self) -> np.ndarray:
         """Convert to dense numpy array"""
@@ -635,8 +728,9 @@ class LazyExpressionMatrix(LazySparseMixin):
                 self._cell_selector, self._gene_selector, transformations
             )
             if sql_result is not None:
+                # sql_result is now a LazyQuery, so call .compute() to get DataFrame
                 return self._reconstruct_sparse_matrix(
-                    sql_result, self._cell_selector, self._gene_selector
+                    sql_result.compute(), self._cell_selector, self._gene_selector
                 )
 
         # Fall back to base query + numpy transformations
@@ -758,6 +852,9 @@ class LazyAnnData(LazySparseMixin):
 
         # Transformations for lazy evaluation
         self._transformations: dict[str, Any] = {}
+
+        # QC queries for lazy evaluation
+        self._qc_queries: dict[str, Any] = {}
 
     @property
     def X(self) -> LazyExpressionMatrix:
@@ -1115,19 +1212,19 @@ class LazyAnnData(LazySparseMixin):
 
     def to_memory(self) -> scipy.sparse.spmatrix:
         """Load entire matrix into memory"""
-        return self.get_expression_data()
+        return self.get_expression_data().compute()
 
     def write(self, filename: str):
         """Write to h5ad format (would need implementation)"""
         raise NotImplementedError("Writing LazyAnnData not yet implemented")
 
-    def get_expression_data(self) -> scipy.sparse.csr_matrix:
-        """Get expression data with any applied filters"""
+    def get_expression_data(self) -> "LazyExpressionMatrix":
+        """Get expression data with any applied filters - returns lazy object instead of computing immediately"""
         if isinstance(self._X, LazyExpressionMatrix):
             # If the LazyExpressionMatrix already has selectors stored, just get the data
             # without passing additional selectors to avoid double-composition
             if self._X._cell_selector is not None or self._X._gene_selector is not None:
-                return self._X[:, :].compute()
+                return self._X[:, :]
             elif self._cell_selector is not None or self._gene_selector is not None:
                 cell_sel = (
                     self._cell_selector
@@ -1139,9 +1236,9 @@ class LazyAnnData(LazySparseMixin):
                     if self._gene_selector is not None
                     else slice(None)
                 )
-                return self._X[cell_sel, gene_sel].compute()
+                return self._X[cell_sel, gene_sel]
             else:
-                return self._X[:, :].compute()
+                return self._X[:, :]
         else:
             raise NotImplementedError(
                 "Dask backend not yet implemented for get_expression_data"

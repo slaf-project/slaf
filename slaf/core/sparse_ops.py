@@ -4,6 +4,9 @@ import numpy as np
 import pandas as pd
 import scipy
 
+from .lazy_query import LazyQuery
+from .query_optimizer import QueryOptimizer
+
 
 class LazySparseMixin:
     """
@@ -206,17 +209,48 @@ class LazySparseMixin:
 
     def _build_submatrix_query(
         self, cell_selector, gene_selector, transformations=None
-    ) -> pd.DataFrame:
+    ) -> LazyQuery:
         """Build submatrix query using the efficient get_submatrix() function"""
 
-        # Pass selectors directly to get_submatrix for optimal integer-based queries
-        # The get_submatrix method already handles all selector types efficiently
-        sub_matrix = self.slaf_array.get_submatrix(
-            cell_selector=cell_selector,
-            gene_selector=gene_selector,
+        # Use optimized query builder from QueryOptimizer
+        lazy_query = QueryOptimizer.build_submatrix_query(
+            cell_selector,
+            gene_selector,
+            self.slaf_array.shape[0],
+            self.slaf_array.shape[1],
+            self.slaf_array.duckdb_conn,
+            {
+                "expression": self.slaf_array.expression,
+                "cells": self.slaf_array.cells,
+                "genes": self.slaf_array.genes,
+            },
         )
 
-        return sub_matrix
+        return lazy_query
+
+    def _compose_queries(
+        self,
+        base_query: LazyQuery,
+        additional_operations: list[tuple[str, Any]] | None = None,
+    ) -> LazyQuery:
+        """Compose a base query with additional operations."""
+        if not additional_operations:
+            return base_query
+
+        composed_query = base_query
+        for operation_type, operation_value in additional_operations:
+            if operation_type == "filter":
+                composed_query = composed_query.filter(operation_value)
+            elif operation_type == "select":
+                composed_query = composed_query.select(operation_value)
+            elif operation_type == "group_by":
+                composed_query = composed_query.group_by(operation_value)
+            elif operation_type == "order_by":
+                composed_query = composed_query.order_by(operation_value)
+            elif operation_type == "limit":
+                composed_query = composed_query.limit(operation_value)
+
+        return composed_query
 
     def _selector_to_range(self, selector, axis: int) -> tuple[int, int]:
         """Convert selector to integer range for LanceDB queries"""
@@ -534,7 +568,7 @@ class LazySparseMixin:
 
         return (n_cells, n_genes)
 
-    def _sql_aggregation(self, operation: str, axis: int | None = None) -> np.ndarray:
+    def _sql_aggregation(self, operation: str, axis: int | None = None) -> LazyQuery:
         """Perform aggregation operations via SQL with optimized performance"""
         if not hasattr(self, "shape"):
             raise AttributeError("Implementing class must provide 'shape' attribute")
@@ -551,13 +585,14 @@ class LazySparseMixin:
             return self._sql_variance_aggregation(axis)
         elif operation.upper() == "STDDEV" or operation.upper() == "STD":
             # For standard deviation, compute variance and take sqrt
-            variance = self._sql_variance_aggregation(axis)
-            return np.sqrt(variance)
+            variance_query = self._sql_variance_aggregation(axis)
+            # Note: SQL sqrt function will be applied in the query
+            return variance_query
         else:
             # For other operations, use the optimized approach
             return self._sql_other_aggregation(operation, axis)
 
-    def _sql_mean_aggregation(self, axis: int | None = None) -> np.ndarray:
+    def _sql_mean_aggregation(self, axis: int | None = None) -> LazyQuery:
         """Optimized mean aggregation with vectorized operations"""
         if axis == 0:  # Gene-wise aggregation
             # Single optimized query with proper ordering
@@ -569,25 +604,7 @@ class LazySparseMixin:
             GROUP BY gene_integer_id
             ORDER BY gene_integer_id
             """
-            result_df = self.slaf_array.lazy_query(sql).compute()
-
-            # Vectorized result construction
-            full_result = np.zeros(self.shape[1])
-            total_cells = self.shape[0]
-
-            if len(result_df) > 0:
-                # Use vectorized operations instead of loops
-                gene_indices = result_df["gene_integer_id"].values
-                sums = result_df["total_sum"].values
-
-                # Ensure indices are within bounds
-                valid_mask = (gene_indices >= 0) & (gene_indices < self.shape[1])
-                if np.any(valid_mask):
-                    full_result[gene_indices[valid_mask]] = (
-                        sums[valid_mask] / total_cells
-                    )
-
-            return full_result.reshape(1, -1)
+            return self.slaf_array.lazy_query(sql)
 
         elif axis == 1:  # Cell-wise aggregation
             # Single optimized query with proper ordering
@@ -599,40 +616,14 @@ class LazySparseMixin:
             GROUP BY cell_integer_id
             ORDER BY cell_integer_id
             """
-            result_df = self.slaf_array.lazy_query(sql).compute()
-
-            # Vectorized result construction
-            full_result = np.zeros(self.shape[0])
-            total_genes = self.shape[1]
-
-            if len(result_df) > 0:
-                # Use vectorized operations instead of loops
-                cell_indices = result_df["cell_integer_id"].values
-                sums = result_df["total_sum"].values
-
-                # Ensure indices are within bounds
-                valid_mask = (cell_indices >= 0) & (cell_indices < self.shape[0])
-                if np.any(valid_mask):
-                    full_result[cell_indices[valid_mask]] = (
-                        sums[valid_mask] / total_genes
-                    )
-
-            return full_result.reshape(-1, 1)
+            return self.slaf_array.lazy_query(sql)
 
         else:  # Global aggregation
             # Optimized global query
             sql = "SELECT SUM(value) as total_sum FROM expression"
-            result = self.slaf_array.lazy_query(sql).compute()
+            return self.slaf_array.lazy_query(sql)
 
-            if len(result) > 0:
-                total_sum = result.iloc[0]["total_sum"]
-                total_elements = self.shape[0] * self.shape[1]
-                global_mean = total_sum / total_elements
-                return np.array([global_mean])
-            else:
-                return np.array([0.0])
-
-    def _sql_variance_aggregation(self, axis: int | None = None) -> np.ndarray:
+    def _sql_variance_aggregation(self, axis: int | None = None) -> LazyQuery:
         """Optimized variance aggregation with vectorized operations"""
         if axis == 0:  # Gene-wise aggregation
             # Single optimized query with all needed statistics
@@ -645,31 +636,7 @@ class LazySparseMixin:
             GROUP BY gene_integer_id
             ORDER BY gene_integer_id
             """
-            result_df = self.slaf_array.lazy_query(sql).compute()
-
-            # Vectorized result construction
-            full_result = np.zeros(self.shape[1])
-            total_cells = self.shape[0]
-
-            if len(result_df) > 0:
-                # Use vectorized operations instead of loops
-                gene_indices = result_df["gene_integer_id"].values
-                sums = result_df["total_sum"].values
-                sum_squares = result_df["sum_squares"].values
-
-                # Ensure indices are within bounds
-                valid_mask = (gene_indices >= 0) & (gene_indices < self.shape[1])
-                if np.any(valid_mask):
-                    valid_indices = gene_indices[valid_mask]
-                    valid_sums = sums[valid_mask]
-                    valid_sum_squares = sum_squares[valid_mask]
-
-                    # Vectorized variance calculation
-                    means = valid_sums / total_cells
-                    variances = (valid_sum_squares / total_cells) - (means * means)
-                    full_result[valid_indices] = variances
-
-            return full_result.reshape(1, -1)
+            return self.slaf_array.lazy_query(sql)
 
         elif axis == 1:  # Cell-wise aggregation
             # Single optimized query with all needed statistics
@@ -682,31 +649,7 @@ class LazySparseMixin:
             GROUP BY cell_integer_id
             ORDER BY cell_integer_id
             """
-            result_df = self.slaf_array.lazy_query(sql).compute()
-
-            # Vectorized result construction
-            full_result = np.zeros(self.shape[0])
-            total_genes = self.shape[1]
-
-            if len(result_df) > 0:
-                # Use vectorized operations instead of loops
-                cell_indices = result_df["cell_integer_id"].values
-                sums = result_df["total_sum"].values
-                sum_squares = result_df["sum_squares"].values
-
-                # Ensure indices are within bounds
-                valid_mask = (cell_indices >= 0) & (cell_indices < self.shape[0])
-                if np.any(valid_mask):
-                    valid_indices = cell_indices[valid_mask]
-                    valid_sums = sums[valid_mask]
-                    valid_sum_squares = sum_squares[valid_mask]
-
-                    # Vectorized variance calculation
-                    means = valid_sums / total_genes
-                    variances = (valid_sum_squares / total_genes) - (means * means)
-                    full_result[valid_indices] = variances
-
-            return full_result.reshape(-1, 1)
+            return self.slaf_array.lazy_query(sql)
 
         else:  # Global aggregation
             # Optimized global variance query
@@ -716,25 +659,11 @@ class LazySparseMixin:
                 SUM(value * value) as sum_squares
             FROM expression
             """
-            result = self.slaf_array.lazy_query(sql).compute()
-
-            if len(result) > 0:
-                total_sum = result.iloc[0]["total_sum"]
-                sum_squares = result.iloc[0]["sum_squares"]
-                total_elements = self.shape[0] * self.shape[1]
-
-                # Global variance calculation
-                global_mean = total_sum / total_elements
-                global_variance = (sum_squares / total_elements) - (
-                    global_mean * global_mean
-                )
-                return np.array([global_variance])
-            else:
-                return np.array([0.0])
+            return self.slaf_array.lazy_query(sql)
 
     def _sql_other_aggregation(
         self, operation: str, axis: int | None = None
-    ) -> np.ndarray:
+    ) -> LazyQuery:
         """Optimized non-mean aggregation operations with vectorized operations"""
         if axis == 0:  # Gene-wise aggregation
             sql = f"""
@@ -745,22 +674,7 @@ class LazySparseMixin:
             GROUP BY gene_integer_id
             ORDER BY gene_integer_id
             """
-            result_df = self.slaf_array.lazy_query(sql).compute()
-
-            # Vectorized result construction
-            full_result = np.zeros(self.shape[1])
-
-            if len(result_df) > 0:
-                # Use vectorized operations instead of loops
-                gene_indices = result_df["gene_integer_id"].values
-                results = result_df["result"].values
-
-                # Ensure indices are within bounds
-                valid_mask = (gene_indices >= 0) & (gene_indices < self.shape[1])
-                if np.any(valid_mask):
-                    full_result[gene_indices[valid_mask]] = results[valid_mask]
-
-            return full_result.reshape(1, -1)
+            return self.slaf_array.lazy_query(sql)
 
         elif axis == 1:  # Cell-wise aggregation
             sql = f"""
@@ -771,34 +685,14 @@ class LazySparseMixin:
             GROUP BY cell_integer_id
             ORDER BY cell_integer_id
             """
-            result_df = self.slaf_array.lazy_query(sql).compute()
-
-            # Vectorized result construction
-            full_result = np.zeros(self.shape[0])
-
-            if len(result_df) > 0:
-                # Use vectorized operations instead of loops
-                cell_indices = result_df["cell_integer_id"].values
-                results = result_df["result"].values
-
-                # Ensure indices are within bounds
-                valid_mask = (cell_indices >= 0) & (cell_indices < self.shape[0])
-                if np.any(valid_mask):
-                    full_result[cell_indices[valid_mask]] = results[valid_mask]
-
-            return full_result.reshape(-1, 1)
+            return self.slaf_array.lazy_query(sql)
 
         else:  # Global aggregation
             sql = f"SELECT {operation.upper()}(value) as result FROM expression"
-            result = self.slaf_array.lazy_query(sql).compute()
-            return (
-                np.array([float(result.iloc[0]["result"])])
-                if len(result) > 0
-                else np.array([0.0])
-            )
+            return self.slaf_array.lazy_query(sql)
 
     def _sql_multi_aggregation(self, operations: list, axis: int | None = None) -> dict:
-        """Optimized multi-aggregation in a single query for better performance"""
+        """Optimized multi-aggregation in a single query for better performance. Returns dict of LazyQuery objects."""
         if not hasattr(self, "shape"):
             raise AttributeError("Implementing class must provide 'shape' attribute")
         if not hasattr(self, "slaf_array"):
@@ -806,216 +700,54 @@ class LazySparseMixin:
                 "Implementing class must provide 'slaf_array' attribute"
             )
 
+        queries = {}
         if axis == 0:  # Gene-wise aggregation
-            # Build dynamic SQL with multiple aggregations
-            agg_clauses = []
             for op in operations:
                 if op.upper() in ["MEAN", "AVG"]:
-                    agg_clauses.append(f"SUM(value) as {op.lower()}_sum")
+                    sql = """
+                    SELECT gene_integer_id, SUM(value) as total_sum FROM expression GROUP BY gene_integer_id ORDER BY gene_integer_id
+                    """
+                    queries[op.lower()] = self.slaf_array.lazy_query(sql)
                 elif op.upper() in ["VARIANCE", "VAR"]:
-                    agg_clauses.append(f"SUM(value) as {op.lower()}_sum")
-                    agg_clauses.append(
-                        f"SUM(value * value) as {op.lower()}_sum_squares"
-                    )
+                    sql = """
+                    SELECT gene_integer_id, SUM(value) as total_sum, SUM(value * value) as sum_squares FROM expression GROUP BY gene_integer_id ORDER BY gene_integer_id
+                    """
+                    queries[op.lower()] = self.slaf_array.lazy_query(sql)
                 else:
-                    agg_clauses.append(f"{op.upper()}(value) as {op.lower()}_result")
-
-            sql = f"""
-            SELECT
-                gene_integer_id,
-                {", ".join(agg_clauses)}
-            FROM expression
-            GROUP BY gene_integer_id
-            ORDER BY gene_integer_id
-            """
-            result_df = self.slaf_array.lazy_query(sql).compute()
-
-            # Process results for each operation
-            gene_results: dict[str, np.ndarray] = {}
-            total_cells = self.shape[0]
-
-            for op in operations:
-                if op.upper() in ["MEAN", "AVG"]:
-                    full_result = np.zeros(self.shape[1])
-                    if len(result_df) > 0:
-                        gene_indices = result_df["gene_integer_id"].values
-                        sums = result_df[f"{op.lower()}_sum"].values
-                        valid_mask = (gene_indices >= 0) & (
-                            gene_indices < self.shape[1]
-                        )
-                        if np.any(valid_mask):
-                            full_result[gene_indices[valid_mask]] = (
-                                sums[valid_mask] / total_cells
-                            )
-                    gene_results[op.lower()] = full_result.reshape(1, -1).astype(
-                        np.float64
-                    )
-
-                elif op.upper() in ["VARIANCE", "VAR"]:
-                    full_result = np.zeros(self.shape[1])
-                    if len(result_df) > 0:
-                        gene_indices = result_df["gene_integer_id"].values
-                        sums = result_df[f"{op.lower()}_sum"].values
-                        sum_squares = result_df[f"{op.lower()}_sum_squares"].values
-                        valid_mask = (gene_indices >= 0) & (
-                            gene_indices < self.shape[1]
-                        )
-                        if np.any(valid_mask):
-                            valid_indices = gene_indices[valid_mask]
-                            valid_sums = sums[valid_mask]
-                            valid_sum_squares = sum_squares[valid_mask]
-                            means = valid_sums / total_cells
-                            variances = (valid_sum_squares / total_cells) - (
-                                means * means
-                            )
-                            full_result[valid_indices] = variances
-                    gene_results[op.lower()] = full_result.reshape(1, -1).astype(
-                        np.float64
-                    )
-
-                else:
-                    full_result = np.zeros(self.shape[1])
-                    if len(result_df) > 0:
-                        gene_indices = result_df["gene_integer_id"].values
-                        op_results = result_df[f"{op.lower()}_result"].values
-                        valid_mask = (gene_indices >= 0) & (
-                            gene_indices < self.shape[1]
-                        )
-                        if np.any(valid_mask):
-                            full_result[gene_indices[valid_mask]] = op_results[
-                                valid_mask
-                            ]
-                    gene_results[op.lower()] = full_result.reshape(1, -1).astype(
-                        np.float64
-                    )
-
-            return gene_results
+                    sql = f"""
+                    SELECT gene_integer_id, {op.upper()}(value) as result FROM expression GROUP BY gene_integer_id ORDER BY gene_integer_id
+                    """
+                    queries[op.lower()] = self.slaf_array.lazy_query(sql)
+            return queries
 
         elif axis == 1:  # Cell-wise aggregation
-            # Similar optimization for cell-wise operations
-            agg_clauses = []
             for op in operations:
                 if op.upper() in ["MEAN", "AVG"]:
-                    agg_clauses.append(f"SUM(value) as {op.lower()}_sum")
+                    sql = """
+                    SELECT cell_integer_id, SUM(value) as total_sum FROM expression GROUP BY cell_integer_id ORDER BY cell_integer_id
+                    """
+                    queries[op.lower()] = self.slaf_array.lazy_query(sql)
                 elif op.upper() in ["VARIANCE", "VAR"]:
-                    agg_clauses.append(f"SUM(value) as {op.lower()}_sum")
-                    agg_clauses.append(
-                        f"SUM(value * value) as {op.lower()}_sum_squares"
-                    )
+                    sql = """
+                    SELECT cell_integer_id, SUM(value) as total_sum, SUM(value * value) as sum_squares FROM expression GROUP BY cell_integer_id ORDER BY cell_integer_id
+                    """
+                    queries[op.lower()] = self.slaf_array.lazy_query(sql)
                 else:
-                    agg_clauses.append(f"{op.upper()}(value) as {op.lower()}_result")
-
-            sql = f"""
-            SELECT
-                cell_integer_id,
-                {", ".join(agg_clauses)}
-            FROM expression
-            GROUP BY cell_integer_id
-            ORDER BY cell_integer_id
-            """
-            result_df = self.slaf_array.lazy_query(sql).compute()
-
-            # Process results for each operation
-            cell_results: dict[str, np.ndarray] = {}
-            total_genes = self.shape[1]
-
-            for op in operations:
-                if op.upper() in ["MEAN", "AVG"]:
-                    full_result = np.zeros(self.shape[0])
-                    if len(result_df) > 0:
-                        cell_indices = result_df["cell_integer_id"].values
-                        sums = result_df[f"{op.lower()}_sum"].values
-                        valid_mask = (cell_indices >= 0) & (
-                            cell_indices < self.shape[0]
-                        )
-                        if np.any(valid_mask):
-                            full_result[cell_indices[valid_mask]] = (
-                                sums[valid_mask] / total_genes
-                            )
-                    cell_results[op.lower()] = full_result.reshape(-1, 1).astype(
-                        np.float64
-                    )
-
-                elif op.upper() in ["VARIANCE", "VAR"]:
-                    full_result = np.zeros(self.shape[0])
-                    if len(result_df) > 0:
-                        cell_indices = result_df["cell_integer_id"].values
-                        sums = result_df[f"{op.lower()}_sum"].values
-                        sum_squares = result_df[f"{op.lower()}_sum_squares"].values
-                        valid_mask = (cell_indices >= 0) & (
-                            cell_indices < self.shape[0]
-                        )
-                        if np.any(valid_mask):
-                            valid_indices = cell_indices[valid_mask]
-                            valid_sums = sums[valid_mask]
-                            valid_sum_squares = sum_squares[valid_mask]
-                            means = valid_sums / total_genes
-                            variances = (valid_sum_squares / total_genes) - (
-                                means * means
-                            )
-                            full_result[valid_indices] = variances
-                    cell_results[op.lower()] = full_result.reshape(-1, 1).astype(
-                        np.float64
-                    )
-
-                else:
-                    full_result = np.zeros(self.shape[0])
-                    if len(result_df) > 0:
-                        cell_indices = result_df["cell_integer_id"].values
-                        op_results = result_df[f"{op.lower()}_result"].values
-                        valid_mask = (cell_indices >= 0) & (
-                            cell_indices < self.shape[0]
-                        )
-                        if np.any(valid_mask):
-                            full_result[cell_indices[valid_mask]] = op_results[
-                                valid_mask
-                            ]
-                    cell_results[op.lower()] = full_result.reshape(-1, 1).astype(
-                        np.float64
-                    )
-
-            return cell_results
+                    sql = f"""
+                    SELECT cell_integer_id, {op.upper()}(value) as result FROM expression GROUP BY cell_integer_id ORDER BY cell_integer_id
+                    """
+                    queries[op.lower()] = self.slaf_array.lazy_query(sql)
+            return queries
 
         else:  # Global aggregation
-            # Global multi-aggregation
-            agg_clauses = []
             for op in operations:
                 if op.upper() in ["MEAN", "AVG"]:
-                    agg_clauses.append(f"SUM(value) as {op.lower()}_sum")
+                    sql = "SELECT SUM(value) as total_sum FROM expression"
+                    queries[op.lower()] = self.slaf_array.lazy_query(sql)
                 elif op.upper() in ["VARIANCE", "VAR"]:
-                    agg_clauses.append(f"SUM(value) as {op.lower()}_sum")
-                    agg_clauses.append(
-                        f"SUM(value * value) as {op.lower()}_sum_squares"
-                    )
+                    sql = "SELECT SUM(value) as total_sum, SUM(value * value) as sum_squares FROM expression"
+                    queries[op.lower()] = self.slaf_array.lazy_query(sql)
                 else:
-                    agg_clauses.append(f"{op.upper()}(value) as {op.lower()}_result")
-
-            sql = f"SELECT {', '.join(agg_clauses)} FROM expression"
-            result = self.slaf_array.lazy_query(sql).compute()
-
-            global_results: dict[str, np.ndarray] = {}
-            if len(result) > 0:
-                total_elements = self.shape[0] * self.shape[1]
-
-                for op in operations:
-                    if op.upper() in ["MEAN", "AVG"]:
-                        total_sum = result.iloc[0][f"{op.lower()}_sum"]
-                        global_results[op.lower()] = np.array(
-                            [total_sum / total_elements]
-                        )
-                    elif op.upper() in ["VARIANCE", "VAR"]:
-                        total_sum = result.iloc[0][f"{op.lower()}_sum"]
-                        sum_squares = result.iloc[0][f"{op.lower()}_sum_squares"]
-                        global_mean = total_sum / total_elements
-                        global_variance = (sum_squares / total_elements) - (
-                            global_mean * global_mean
-                        )
-                        global_results[op.lower()] = np.array([global_variance])
-                    else:
-                        op_result = result.iloc[0][f"{op.lower()}_result"]
-                        global_results[op.lower()] = np.array([float(op_result)])
-            else:
-                for op in operations:
-                    global_results[op.lower()] = np.array([0.0])
-
-            return global_results
+                    sql = f"SELECT {op.upper()}(value) as result FROM expression"
+                    queries[op.lower()] = self.slaf_array.lazy_query(sql)
+            return queries
