@@ -276,6 +276,55 @@ def _(adata_fresh, slaf_scanpy):
 
 
 @app.cell
+def _(adata_fresh, slaf_scanpy):
+    # Demonstrate new preprocessing functions
+    print("🆕 New Preprocessing Functions")
+    print("=" * 35)
+
+    print("1. Scale transformation (z-score normalization):")
+    adata_scaled = slaf_scanpy.pp.scale(
+        adata_fresh, zero_center=True, max_value=10, inplace=False
+    )
+    print(f"   Scale applied: {type(adata_scaled)}")
+    print(
+        f"   Transformations: {list(adata_scaled._transformations.keys()) if hasattr(adata_scaled, '_transformations') else 'None'}"
+    )
+
+    print("\n2. Sample transformation (random sampling):")
+    adata_sampled = slaf_scanpy.pp.sample(
+        adata_fresh, n_obs=100, n_vars=50, random_state=42, inplace=False
+    )
+    print(f"   Sample applied: {type(adata_sampled)}")
+    print(
+        f"   Transformations: {list(adata_sampled._transformations.keys()) if hasattr(adata_sampled, '_transformations') else 'None'}"
+    )
+
+    print("\n3. Downsample counts transformation:")
+    adata_downsampled = slaf_scanpy.pp.downsample_counts(
+        adata_fresh, counts_per_cell=1000, random_state=42, inplace=False
+    )
+    print(f"   Downsample applied: {type(adata_downsampled)}")
+    print(
+        f"   Transformations: {list(adata_downsampled._transformations.keys()) if hasattr(adata_downsampled, '_transformations') else 'None'}"
+    )
+
+    print("\n4. Combined new transformations:")
+    adata_combined = slaf_scanpy.pp.scale(adata_fresh, zero_center=True, inplace=False)
+    adata_combined = slaf_scanpy.pp.sample(
+        adata_combined, n_obs=50, n_vars=25, inplace=False
+    )
+    adata_combined = slaf_scanpy.pp.downsample_counts(
+        adata_combined, counts_per_cell=500, inplace=False
+    )
+    print(f"   Combined transformations: {type(adata_combined)}")
+    print(
+        f"   All transformations: {list(adata_combined._transformations.keys()) if hasattr(adata_combined, '_transformations') else 'None'}"
+    )
+
+    return adata_scaled, adata_sampled, adata_downsampled, adata_combined
+
+
+@app.cell
 def _(adata_processed, slice_multi, slice_transformed, time):
     def demonstrate_transformation_application():
         # Demonstrate transformation application

@@ -551,11 +551,11 @@ class LazyPreprocessing:
         inplace: bool = True,
     ) -> pd.DataFrame | None:
         """
-        Identify highly variable genes using lazy evaluation.
+        Find highly variable genes using lazy evaluation.
 
-        This function identifies genes with high cell-to-cell variation in expression
-        using SQL aggregation for memory efficiency. It calculates mean expression
-        and dispersion for each gene and applies filtering criteria.
+        This function identifies highly variable genes using SQL aggregation for
+        memory efficiency. It calculates mean expression, variance, and dispersion
+        for each gene and applies filtering criteria.
 
         Args:
             adata: LazyAnnData instance containing the single-cell data.
@@ -563,41 +563,38 @@ class LazyPreprocessing:
             max_mean: Maximum mean expression for genes to be considered.
             min_disp: Minimum dispersion for genes to be considered.
             max_disp: Maximum dispersion for genes to be considered.
-            n_top_genes: Number of top genes to select by dispersion.
-                        If specified, overrides min_disp and max_disp criteria.
-            inplace: Whether to modify the adata object in place. Currently not
-                    fully implemented - returns None when True.
+            n_top_genes: Number of top genes to select. If specified, overrides
+                        min_mean, max_mean, min_disp, max_disp criteria.
+            inplace: Whether to modify the adata object in place. If False, returns
+                    a copy with the transformation applied.
 
         Returns:
-            pd.DataFrame | None: If inplace=False, returns DataFrame with gene statistics
-                                and highly_variable column. If inplace=True, returns None.
+            pd.DataFrame | None: If inplace=False, returns DataFrame with highly variable
+                                gene information. If inplace=True, returns None.
 
         Raises:
             RuntimeError: If the SLAF array is not properly initialized.
 
         Examples:
-            >>> # Find highly variable genes
+            >>> # Find highly variable genes with default criteria
             >>> slaf_array = SLAFArray("path/to/data.slaf")
             >>> adata = LazyAnnData(slaf_array)
-            >>> hvg_stats = LazyPreprocessing.highly_variable_genes(
+            >>> hvg_df = LazyPreprocessing.highly_variable_genes(
             ...     adata, inplace=False
             ... )
-            >>> print(f"Highly variable genes: {hvg_stats['highly_variable'].sum()}")
-            Highly variable genes: 1500
+            >>> print(f"Found {hvg_df['highly_variable'].sum()} highly variable genes")
 
-            >>> # With custom criteria
-            >>> hvg_stats = LazyPreprocessing.highly_variable_genes(
+            >>> # Find top 2000 genes
+            >>> hvg_df = LazyPreprocessing.highly_variable_genes(
+            ...     adata, n_top_genes=2000, inplace=False
+            ... )
+            >>> print(f"Top 2000 genes selected")
+
+            >>> # Custom criteria
+            >>> hvg_df = LazyPreprocessing.highly_variable_genes(
             ...     adata, min_mean=0.1, max_mean=5, min_disp=1.0, inplace=False
             ... )
-            >>> print(f"Genes meeting criteria: {hvg_stats['highly_variable'].sum()}")
-            Genes meeting criteria: 800
-
-            >>> # Select top N genes
-            >>> hvg_stats = LazyPreprocessing.highly_variable_genes(
-            ...     adata, n_top_genes=1000, inplace=False
-            ... )
-            >>> print(f"Top genes selected: {hvg_stats['highly_variable'].sum()}")
-            Top genes selected: 1000
+            >>> print(f"Custom criteria found {hvg_df['highly_variable'].sum()} genes")
         """
 
         # Calculate gene statistics via SQL using simple aggregation (no JOINs)
@@ -648,29 +645,331 @@ class LazyPreprocessing:
         # Set gene_id as index
         gene_stats_complete = gene_stats_complete.set_index("gene_id")
 
-        # Apply HVG criteria
-        hvg_mask = (
-            (gene_stats_complete["mean_expr"] >= min_mean)
-            & (gene_stats_complete["mean_expr"] <= max_mean)
-            & (gene_stats_complete["dispersion"] >= min_disp)
-            & (gene_stats_complete["dispersion"] <= max_disp)
-        )
-
-        gene_stats_complete["highly_variable"] = hvg_mask
-
+        # Apply filtering criteria
         if n_top_genes is not None:
-            # Select top N genes by dispersion
-            top_genes = gene_stats_complete.nlargest(n_top_genes, "dispersion")
-            gene_stats_complete["highly_variable"] = gene_stats_complete.index.isin(
-                top_genes.index
+            # Select top genes by dispersion
+            gene_stats_complete = gene_stats_complete.sort_values(
+                "dispersion", ascending=False
             )
+            gene_stats_complete["highly_variable"] = False
+            gene_stats_complete.iloc[
+                :n_top_genes, gene_stats_complete.columns.get_loc("highly_variable")
+            ] = True
+        else:
+            # Apply mean and dispersion filters
+            mean_mask = (gene_stats_complete["mean_expr"] >= min_mean) & (
+                gene_stats_complete["mean_expr"] <= max_mean
+            )
+            disp_mask = (gene_stats_complete["dispersion"] >= min_disp) & (
+                gene_stats_complete["dispersion"] <= max_disp
+            )
+            gene_stats_complete["highly_variable"] = mean_mask & disp_mask
 
         if inplace:
-            # Update var metadata (would need implementation)
-            print(f"Identified {hvg_mask.sum()} highly variable genes")
+            # Store the highly variable genes information
+            if not hasattr(adata, "_hvg_info"):
+                adata._hvg_info = {}  # type: ignore
+            adata._hvg_info["highly_variable_genes"] = gene_stats_complete  # type: ignore
+            print(
+                f"Found {gene_stats_complete['highly_variable'].sum()} highly variable genes"
+            )
             return None
         else:
             return gene_stats_complete
+
+    @staticmethod
+    def scale(
+        adata: LazyAnnData,
+        zero_center: bool = True,
+        max_value: float | None = None,
+        inplace: bool = True,
+    ) -> LazyAnnData | None:
+        """
+        Scale data to unit variance and zero mean using lazy evaluation.
+
+        This function applies z-score normalization to the expression data.
+        The scaling is applied lazily and stored as a transformation that will
+        be computed when the data is accessed.
+
+        Args:
+            adata: LazyAnnData instance containing the single-cell data.
+            zero_center: Whether to center the data to zero mean.
+            max_value: Maximum value to clip the data to after scaling.
+            inplace: Whether to modify the adata object in place. If False, returns
+                    a copy with the transformation applied.
+
+        Returns:
+            LazyAnnData | None: If inplace=False, returns LazyAnnData with transformation.
+                               If inplace=True, returns None.
+
+        Raises:
+            ValueError: If max_value is negative.
+            RuntimeError: If the SLAF array is not properly initialized.
+
+        Examples:
+            >>> # Basic scaling
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> adata = LazyAnnData(slaf_array)
+            >>> LazyPreprocessing.scale(adata)
+            Applied scale transformation
+
+            >>> # Scale with max value clipping
+            >>> adata_copy = adata.copy()
+            >>> LazyPreprocessing.scale(adata_copy, max_value=10, inplace=False)
+            >>> print("Scale transformation applied to copy")
+
+            >>> # Scale without zero centering
+            >>> adata_copy = adata.copy()
+            >>> LazyPreprocessing.scale(adata_copy, zero_center=False, inplace=False)
+            >>> print("Scale without zero centering applied")
+        """
+        # Validate parameters
+        if max_value is not None and max_value < 0:
+            raise ValueError("max_value must be non-negative")
+
+        # Calculate gene-wise statistics for scaling
+        n_cells = adata.n_obs
+        stats_sql = f"""
+        SELECT
+            gene_id,
+            SUM(value) / {n_cells} as mean_expr,
+            CASE
+                WHEN SUM(value * value) + ({n_cells} - COUNT(value)) * 0 > POW(SUM(value) / {n_cells}, 2) * {n_cells}
+                THEN SQRT((SUM(value * value) + ({n_cells} - COUNT(value)) * 0) / {n_cells} - POW(SUM(value) / {n_cells}, 2))
+                ELSE 1.0
+            END as std_expr
+        FROM expression
+        GROUP BY gene_id
+        ORDER BY gene_id
+        """
+
+        gene_stats = adata.slaf.lazy_query(stats_sql).compute()
+
+        # Create scaling parameters dictionary
+        scaling_params = {}
+        for _, row in gene_stats.iterrows():
+            gene_id = row["gene_id"]
+            mean_val = row["mean_expr"]
+            std_val = row["std_expr"] if row["std_expr"] > 0 else 1.0
+
+            scaling_params[gene_id] = {"mean": mean_val, "std": std_val}
+
+        if inplace:
+            # Store scaling parameters for lazy application
+            if not hasattr(adata, "_transformations"):
+                adata._transformations = {}
+
+            adata._transformations["scale"] = {
+                "type": "scale",
+                "zero_center": zero_center,
+                "max_value": max_value,
+                "scaling_params": scaling_params,
+            }
+
+            print("Applied scale transformation")
+            return None
+        else:
+            # Create a copy with the transformation (copy-on-write)
+            new_adata = adata.copy()
+            if not hasattr(new_adata, "_transformations"):
+                new_adata._transformations = {}
+
+            new_adata._transformations["scale"] = {
+                "type": "scale",
+                "zero_center": zero_center,
+                "max_value": max_value,
+                "scaling_params": scaling_params,
+            }
+
+            return new_adata
+
+    @staticmethod
+    def sample(
+        adata: LazyAnnData,
+        n_obs: int | None = None,
+        n_vars: int | None = None,
+        random_state: int | None = None,
+        inplace: bool = True,
+    ) -> LazyAnnData | None:
+        """
+        Sample cells and/or genes randomly using lazy evaluation.
+
+        This function samples a subset of cells and/or genes using SQL-level
+        sampling for memory efficiency. It uses DuckDB's sampling capabilities
+        to avoid loading all data into memory.
+
+        Args:
+            adata: LazyAnnData instance containing the single-cell data.
+            n_obs: Number of cells to sample. If None, all cells are kept.
+            n_vars: Number of genes to sample. If None, all genes are kept.
+            random_state: Random seed for reproducible sampling.
+            inplace: Whether to modify the adata object in place. If False, returns
+                    a copy with the sampling applied.
+
+        Returns:
+            LazyAnnData | None: If inplace=False, returns LazyAnnData with sampling.
+                               If inplace=True, returns None.
+
+        Raises:
+            ValueError: If n_obs or n_vars exceeds the available number of cells/genes.
+            RuntimeError: If the SLAF array is not properly initialized.
+
+        Examples:
+            >>> # Sample 1000 cells
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> adata = LazyAnnData(slaf_array)
+            >>> LazyPreprocessing.sample(adata, n_obs=1000)
+            Applied sampling: 1000 cells
+
+            >>> # Sample both cells and genes
+            >>> adata_copy = adata.copy()
+            >>> LazyPreprocessing.sample(adata_copy, n_obs=500, n_vars=1000, inplace=False)
+            >>> print("Sampling applied to copy")
+
+            >>> # Reproducible sampling
+            >>> LazyPreprocessing.sample(adata, n_obs=1000, random_state=42)
+            >>> print("Reproducible sampling applied")
+        """
+        # Validate sampling parameters
+        if n_obs is not None and n_obs > adata.n_obs:
+            raise ValueError(
+                f"n_obs ({n_obs}) cannot exceed number of cells ({adata.n_obs})"
+            )
+        if n_vars is not None and n_vars > adata.n_vars:
+            raise ValueError(
+                f"n_vars ({n_vars}) cannot exceed number of genes ({adata.n_vars})"
+            )
+
+        # Store sampling parameters
+        sampling_params = {
+            "n_obs": n_obs,
+            "n_vars": n_vars,
+            "random_state": random_state,
+        }
+
+        if inplace:
+            # Store sampling parameters for lazy application
+            if not hasattr(adata, "_transformations"):
+                adata._transformations = {}
+
+            adata._transformations["sample"] = {
+                "type": "sample",
+                "params": sampling_params,
+            }
+
+            # Print sampling info
+            sample_info = []
+            if n_obs is not None:
+                sample_info.append(f"{n_obs} cells")
+            if n_vars is not None:
+                sample_info.append(f"{n_vars} genes")
+            print(f"Applied sampling: {' and '.join(sample_info)}")
+            return None
+        else:
+            # Create a copy with the sampling (copy-on-write)
+            new_adata = adata.copy()
+            if not hasattr(new_adata, "_transformations"):
+                new_adata._transformations = {}
+
+            new_adata._transformations["sample"] = {
+                "type": "sample",
+                "params": sampling_params,
+            }
+
+            return new_adata
+
+    @staticmethod
+    def downsample_counts(
+        adata: LazyAnnData,
+        counts_per_cell: int | None = None,
+        total_counts: int | None = None,
+        random_state: int | None = None,
+        inplace: bool = True,
+    ) -> LazyAnnData | None:
+        """
+        Downsample counts to a specified number per cell using lazy evaluation.
+
+        This function downsamples the expression counts to a specified number
+        per cell using SQL-level operations for memory efficiency.
+
+        Args:
+            adata: LazyAnnData instance containing the single-cell data.
+            counts_per_cell: Target number of counts per cell. If None, uses total_counts.
+            total_counts: Total counts to downsample to. If None, uses counts_per_cell.
+            random_state: Random seed for reproducible downsampling.
+            inplace: Whether to modify the adata object in place. If False, returns
+                    a copy with the downsampling applied.
+
+        Returns:
+            LazyAnnData | None: If inplace=False, returns LazyAnnData with downsampling.
+                               If inplace=True, returns None.
+
+        Raises:
+            ValueError: If neither counts_per_cell nor total_counts is specified.
+            ValueError: If counts_per_cell is negative.
+            RuntimeError: If the SLAF array is not properly initialized.
+
+        Examples:
+            >>> # Downsample to 1000 counts per cell
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> adata = LazyAnnData(slaf_array)
+            >>> LazyPreprocessing.downsample_counts(adata, counts_per_cell=1000)
+            Applied downsampling: 1000 counts per cell
+
+            >>> # Downsample to total counts
+            >>> adata_copy = adata.copy()
+            >>> LazyPreprocessing.downsample_counts(adata_copy, total_counts=50000, inplace=False)
+            >>> print("Downsampling applied to copy")
+
+            >>> # Reproducible downsampling
+            >>> LazyPreprocessing.downsample_counts(adata, counts_per_cell=1000, random_state=42)
+            >>> print("Reproducible downsampling applied")
+        """
+        # Validate parameters
+        if counts_per_cell is None and total_counts is None:
+            raise ValueError("Either counts_per_cell or total_counts must be specified")
+
+        if counts_per_cell is not None and counts_per_cell < 0:
+            raise ValueError("counts_per_cell must be non-negative")
+
+        # Calculate target counts per cell
+        if counts_per_cell is not None:
+            target_counts_per_cell = counts_per_cell
+        else:
+            # total_counts is guaranteed to be not None here due to validation above
+            target_counts_per_cell = total_counts // adata.n_obs  # type: ignore
+
+        # Store downsampling parameters
+        downsampling_params = {
+            "counts_per_cell": target_counts_per_cell,
+            "total_counts": total_counts,
+            "random_state": random_state,
+        }
+
+        if inplace:
+            # Store downsampling parameters for lazy application
+            if not hasattr(adata, "_transformations"):
+                adata._transformations = {}
+
+            adata._transformations["downsample_counts"] = {
+                "type": "downsample_counts",
+                "params": downsampling_params,
+            }
+
+            print(f"Applied downsampling: {target_counts_per_cell} counts per cell")
+            return None
+        else:
+            # Create a copy with the downsampling (copy-on-write)
+            new_adata = adata.copy()
+            if not hasattr(new_adata, "_transformations"):
+                new_adata._transformations = {}
+
+            new_adata._transformations["downsample_counts"] = {
+                "type": "downsample_counts",
+                "params": downsampling_params,
+            }
+
+            return new_adata
 
 
 # Create preprocessing instance for easier access
