@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.14.6"
+__generated_with = "0.14.0"
 app = marimo.App(width="medium")
 
 
@@ -277,8 +277,8 @@ def _(adata_fresh, slaf_scanpy):
 
 @app.cell
 def _(adata_fresh, slaf_scanpy):
-    # Demonstrate new preprocessing functions
-    print("🆕 New Preprocessing Functions")
+    # Demonstrate additional preprocessing functions
+    print("🆕 Additional Preprocessing Functions")
     print("=" * 35)
 
     print("1. Scale transformation (z-score normalization):")
@@ -308,7 +308,7 @@ def _(adata_fresh, slaf_scanpy):
         f"   Transformations: {list(adata_downsampled._transformations.keys()) if hasattr(adata_downsampled, '_transformations') else 'None'}"
     )
 
-    print("\n4. Combined new transformations:")
+    print("\n4. Combined transformations:")
     adata_combined = slaf_scanpy.pp.scale(adata_fresh, zero_center=True, inplace=False)
     adata_combined = slaf_scanpy.pp.sample(
         adata_combined, n_obs=50, n_vars=25, inplace=False
@@ -321,7 +321,7 @@ def _(adata_fresh, slaf_scanpy):
         f"   All transformations: {list(adata_combined._transformations.keys()) if hasattr(adata_combined, '_transformations') else 'None'}"
     )
 
-    return adata_scaled, adata_sampled, adata_downsampled, adata_combined
+    return
 
 
 @app.cell
