@@ -1,7 +1,11 @@
 """Tests for scanpy preprocessing with LazyQuery composition (Phase 0.3)."""
 
+import time
+
+import scipy.sparse
+
 from slaf.integrations.anndata import LazyAnnData
-from slaf.integrations.scanpy import pp
+from slaf.integrations.scanpy import LazyPreprocessing, pp
 
 
 class TestScanpyLazyComposition:
@@ -238,3 +242,45 @@ class TestScanpyLazyComposition:
             raise AssertionError("Expected error for out of bounds slice")
         except Exception:
             print("✅ Error handling works for out of bounds slices")
+
+    def test_normalize_total_log1p_slicing_composition(self, tiny_slaf):
+        """Test normalize_total -> log1p -> slicing composition works lazily end-to-end"""
+        # Load test data
+        adata = LazyAnnData(tiny_slaf)
+
+        # Apply normalize_total transformation
+        LazyPreprocessing.normalize_total(adata, target_sum=10000, inplace=True)
+
+        # Apply log1p transformation
+        LazyPreprocessing.log1p(adata, inplace=True)
+
+        # Apply slicing (this should be lazy)
+        subset = adata[:10, :50]  # First 10 cells, first 50 genes
+
+        # Verify that no computation has happened yet
+        assert hasattr(adata, "_transformations")
+        assert "normalize_total" in adata._transformations
+        assert "log1p" in adata._transformations
+
+        # Now compute the result - this should apply all transformations in one go
+        start_time = time.time()
+        result_matrix = subset.X.compute()
+        compute_time = time.time() - start_time
+
+        # Verify the result
+        assert result_matrix.shape == (10, 50)
+        assert isinstance(result_matrix, scipy.sparse.csr_matrix)
+
+        # Verify that the transformations were applied correctly
+        # The matrix should have been normalized and log1p transformed
+        assert result_matrix.data.min() >= 0  # log1p ensures non-negative
+
+        print(
+            f"✅ normalize_total -> log1p -> slicing composition completed in {compute_time:.4f}s"
+        )
+        print(f"   Final matrix shape: {result_matrix.shape}")
+        print(
+            f"   Matrix density: {result_matrix.nnz / (result_matrix.shape[0] * result_matrix.shape[1]):.3f}"
+        )
+
+        return result_matrix

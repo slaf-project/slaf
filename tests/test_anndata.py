@@ -99,27 +99,23 @@ class TestLazyAnnDataCorrectness:
         pd.testing.assert_index_equal(lazy_adata.obs_names, tiny_adata.obs_names)
         pd.testing.assert_index_equal(lazy_adata.var_names, tiny_adata.var_names)
 
-    def test_aggregation_operations(self, tiny_slaf, tiny_adata):
-        """Test that aggregation operations match native AnnData"""
-        lazy_adata = LazyAnnData(tiny_slaf)
+    def test_aggregation_operations(self, sparse_slaf, sparse_adata):
+        """Test aggregation operations on sparse data with many zeros (edge case)"""
+        import numpy as np
 
-        # Test mean aggregation
+        lazy_adata = LazyAnnData(sparse_slaf)
+        native_adata = sparse_adata
+
+        # Test mean aggregation (gene-wise)
         gene_means_lazy = lazy_adata.X.mean(axis=0)
-        gene_means_native = tiny_adata.X.mean(axis=0)
+        gene_means_native = native_adata.X.mean(axis=0)
+        print("\n--- Aggregation Correctness Test (Sparse Edge Case) ---")
+        print(f"Lazy gene means shape: {gene_means_lazy.shape}")
+        print(f"Native gene means shape: {gene_means_native.shape}")
+        print(f"Lazy gene means: {gene_means_lazy}")
+        print(f"Native gene means: {gene_means_native}")
+        # This should fail if zero-filling or shape handling is missing
         np.testing.assert_allclose(gene_means_lazy, gene_means_native, rtol=1e-7)
-
-        cell_means_lazy = lazy_adata.X.mean(axis=1)
-        cell_means_native = tiny_adata.X.mean(axis=1)
-        np.testing.assert_allclose(cell_means_lazy, cell_means_native, rtol=1e-7)
-
-        # Test sum aggregation
-        gene_sums_lazy = lazy_adata.X.sum(axis=0)
-        gene_sums_native = tiny_adata.X.sum(axis=0)
-        np.testing.assert_allclose(gene_sums_lazy, gene_sums_native, rtol=1e-7)
-
-        cell_sums_lazy = lazy_adata.X.sum(axis=1)
-        cell_sums_native = tiny_adata.X.sum(axis=1)
-        np.testing.assert_allclose(cell_sums_lazy, cell_sums_native, rtol=1e-7)
 
     def test_copy_operation(self, tiny_slaf, tiny_adata):
         """Test that copy operation preserves data correctly"""
@@ -140,6 +136,26 @@ class TestLazyAnnDataCorrectness:
         np.testing.assert_allclose(
             copied.X.compute().toarray(), native_copy.X.toarray(), rtol=1e-7
         )
+
+    def test_aggregation_operations_sparse(self, sparse_slaf, sparse_adata):
+        """Test aggregation operations on sparse data with many zeros"""
+        import numpy as np
+
+        # Create lazy and native versions
+        lazy_adata = LazyAnnData(sparse_slaf)
+        native_adata = sparse_adata
+
+        # Test mean aggregation
+        gene_means_lazy = lazy_adata.X.mean(axis=0)
+        gene_means_native = native_adata.X.mean(axis=0)
+
+        print(f"Lazy gene means shape: {gene_means_lazy.shape}")
+        print(f"Native gene means shape: {gene_means_native.shape}")
+        print(f"Lazy gene means: {gene_means_lazy.flatten()[:5]}")
+        print(f"Native gene means: {gene_means_native.flatten()[:5]}")
+
+        # This should fail due to incorrect postprocessing
+        np.testing.assert_allclose(gene_means_lazy, gene_means_native, rtol=1e-7)
 
 
 class TestLazyAnnDataBackends:

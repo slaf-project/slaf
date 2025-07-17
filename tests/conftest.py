@@ -223,6 +223,67 @@ def tiny_adata():
 
 
 @pytest.fixture
+def sparse_adata():
+    """Create a sparse AnnData object with many zeros for testing aggregation edge cases"""
+    # Set random seed for reproducible tests
+    np.random.seed(42)
+
+    # Create a sparse matrix with completely empty rows/columns
+    n_cells, n_genes = 10, 8
+    sparse_matrix = csr_matrix((n_cells, n_genes), dtype=float)
+
+    # Add values only to specific positions to create empty rows/columns
+    # Row 0: completely empty
+    # Row 1: has values
+    # Row 2: completely empty
+    # Row 3: has values
+    # etc.
+
+    # Column 0: completely empty
+    # Column 1: has values
+    # Column 2: completely empty
+    # Column 3: has values
+    # etc.
+
+    # Add values only to odd-indexed rows and columns
+    for i in range(1, n_cells, 2):  # Odd rows
+        for j in range(1, n_genes, 2):  # Odd columns
+            sparse_matrix[i, j] = np.random.uniform(1.0, 10.0)
+
+    # Create obs and var
+    obs = pd.DataFrame(
+        {
+            "cell_type": ["A", "B"] * (n_cells // 2),
+            "batch": ["batch1"] * n_cells,
+        },
+        index=pd.Index([f"cell_{i}" for i in range(n_cells)]),
+    )
+
+    var = pd.DataFrame(
+        {
+            "gene_type": ["protein_coding"] * n_genes,
+            "highly_variable": [True] * n_genes,
+        },
+        index=pd.Index([f"gene_{i}" for i in range(n_genes)]),
+    )
+
+    return sc.AnnData(X=sparse_matrix, obs=obs, var=var)
+
+
+@pytest.fixture
+def sparse_slaf(temp_dir, sparse_adata):
+    """Create a sparse SLAF dataset for testing aggregation edge cases"""
+    # Convert to SLAF format
+    from slaf.data import SLAFConverter
+
+    converter = SLAFConverter()
+    slaf_path = Path(temp_dir) / "sparse_test_dataset.slaf"
+    converter.convert_anndata(sparse_adata, str(slaf_path))
+
+    return SLAFArray(str(slaf_path))
+
+
+@pytest.fixture
 def tiny_slaf(temp_dir):
     """Create a tiny sample SLAF dataset for testing"""
     # Set random seed for reproducible tests
