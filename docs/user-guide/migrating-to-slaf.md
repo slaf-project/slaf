@@ -88,6 +88,18 @@ slaf convert huge_data.h5ad output.slaf --chunked --chunk-size 25000
 # Optimize storage by only storing integer IDs (default: True)
 slaf convert large_data.h5ad output.slaf --optimize-storage
 slaf convert large_data.h5ad output.slaf --no-optimize-storage  # Include string IDs
+
+# Use optimized data types for better compression (default: True)
+slaf convert large_data.h5ad output.slaf --optimized-dtypes
+slaf convert large_data.h5ad output.slaf --no-optimized-dtypes  # Use standard dtypes
+
+# Enable v2 manifest paths for better query performance (default: True)
+slaf convert large_data.h5ad output.slaf --v2-manifest
+slaf convert large_data.h5ad output.slaf --no-v2-manifest  # Use v1 manifest
+
+# Compact dataset after writing for optimal storage (default: True)
+slaf convert large_data.h5ad output.slaf --compact
+slaf convert large_data.h5ad output.slaf --no-compact  # Skip compaction
 ```
 
 ```python
@@ -117,6 +129,30 @@ converter.convert("large_data.h5ad", "output.slaf")
 # Include string IDs for compatibility (larger storage)
 converter = SLAFConverter(optimize_storage=False)
 converter.convert("large_data.h5ad", "output.slaf")
+
+# Use optimized data types for better compression (default: True)
+converter = SLAFConverter(use_optimized_dtypes=True)
+converter.convert("large_data.h5ad", "output.slaf")
+
+# Use standard data types for compatibility
+converter = SLAFConverter(use_optimized_dtypes=False)
+converter.convert("large_data.h5ad", "output.slaf")
+
+# Enable v2 manifest paths for better query performance (default: True)
+converter = SLAFConverter(enable_v2_manifest=True)
+converter.convert("large_data.h5ad", "output.slaf")
+
+# Compact dataset after writing for optimal storage (default: True)
+converter = SLAFConverter(compact_after_write=True)
+converter.convert("large_data.h5ad", "output.slaf")
+
+# Maximum compression settings for very large datasets
+converter = SLAFConverter(
+    use_optimized_dtypes=True,
+    enable_v2_manifest=True,
+    compact_after_write=True
+)
+converter.convert("huge_data.h5ad", "output.slaf")
 ```
 
 **When to use chunked conversion:**
@@ -141,6 +177,29 @@ SLAF provides **storage optimization** that dramatically reduces file size by on
 - **Compatibility**: Use `--no-optimize-storage` only if you need direct string ID access in queries
 - **Large datasets**: Storage optimization is especially beneficial for datasets >1GB
 - **Query patterns**: Integer-only storage is optimal for range queries and filtering
+
+**Advanced Storage Optimizations:**
+
+SLAF includes several advanced optimizations for maximum storage efficiency:
+
+**Optimized Data Types (`--optimized-dtypes`):**
+
+- **uint16/uint32**: Uses uint16 for gene IDs and uint32 for cell IDs for better compression
+- **Storage reduction**: Can reduce file size by an additional 20-30% compared to standard int32/float32
+- **Limitations**: Requires gene count ≤ 65,535 and cell count ≤ 4,294,967,295
+- **Auto-validation**: Automatically falls back to standard types if data exceeds limits
+
+**V2 Manifest Paths (`--v2-manifest`):**
+
+- **Better performance**: Enables faster query performance on large datasets
+- **Recommended**: Use for datasets with 100k+ cells
+- **Compatibility**: Works with all Lance-compatible query engines
+
+**Post-Write Compaction (`--compact`):**
+
+- **Storage optimization**: Compacts dataset after writing to optimize storage layout
+- **File size reduction**: Can reduce file size by 10-20% through better data organization
+- **Trade-off**: Increases conversion time but improves storage efficiency and query performance
 
 **Performance optimization tips:**
 

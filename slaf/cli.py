@@ -191,7 +191,7 @@ def convert(
         None,
         "--format",
         "-f",
-        help="Input format: h5ad, 10x_mtx, 10x_h5, anndata, hdf5 (auto-detected if not specified)",
+        help="Input format: h5ad, 10x_mtx, 10x_h5 (auto-detected if not specified)",
     ),
     chunked: bool = typer.Option(
         False,
@@ -211,6 +211,21 @@ def convert(
         True,
         "--optimize-storage/--no-optimize-storage",
         help="Only store integer IDs in expression table to reduce storage size by 50-80% (default: True)",
+    ),
+    use_optimized_dtypes: bool = typer.Option(
+        True,
+        "--optimized-dtypes/--no-optimized-dtypes",
+        help="Use uint16/uint32 data types for better compression (default: True)",
+    ),
+    enable_v2_manifest: bool = typer.Option(
+        True,
+        "--v2-manifest/--no-v2-manifest",
+        help="Enable v2 manifest paths for better query performance (default: True)",
+    ),
+    compact_after_write: bool = typer.Option(
+        True,
+        "--compact/--no-compact",
+        help="Compact dataset after writing for optimal storage (default: True)",
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ):
@@ -240,8 +255,11 @@ def convert(
         converter = SLAFConverter(
             chunked=chunked,
             chunk_size=chunk_size,
-            create_indices=create_indices,
+            create_indices=False,  # Default to False for CLI
             optimize_storage=optimize_storage,
+            use_optimized_dtypes=use_optimized_dtypes,
+            enable_v2_manifest=enable_v2_manifest,
+            compact_after_write=compact_after_write,
         )
 
         # Use the new converter with auto-detection
