@@ -150,7 +150,9 @@ def worker_h5ad(worker_id, h5ad_path, scenario, result_queue):
         "shape": token_array.shape,
         "dtype": str(token_array.dtype),
         "sample_values": (
-            token_array.flatten()[:5].tolist() if token_array.size > 0 else []
+            token_array.flatten()[:5].tolist()
+            if get_array_size(token_array) > 0
+            else []
         ),
     }
 
@@ -210,7 +212,9 @@ def worker_slaf(worker_id, slaf_path, scenario, result_queue):
         "shape": token_array.shape,
         "dtype": str(token_array.dtype),
         "sample_values": (
-            token_array.flatten()[:5].tolist() if token_array.size > 0 else []
+            token_array.flatten()[:5].tolist()
+            if get_array_size(token_array) > 0
+            else []
         ),
     }
 
@@ -1079,6 +1083,15 @@ def _benchmark_slaf_timing_breakdown(slaf_path: str, scenario: dict) -> dict:
         "total_time_ms": (end_token - start_data) * 1000,
         "batch_tokens_shape": np.array(batch_tokens).shape,
     }
+
+
+def get_array_size(arr):
+    if hasattr(arr, "size") and not callable(arr.size):
+        return arr.size
+    elif hasattr(arr, "numel"):
+        return arr.numel()
+    else:
+        return len(arr)
 
 
 if __name__ == "__main__":
