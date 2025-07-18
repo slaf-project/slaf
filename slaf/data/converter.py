@@ -1,5 +1,4 @@
 import json
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -61,9 +60,10 @@ class SLAFConverter:
         self,
         use_integer_keys: bool = True,
         chunked: bool = False,
-        chunk_size: int = 1000,
+        chunk_size: int = 25000,  # Reduced from 50000 to prevent memory issues
         sort_metadata: bool = False,
         create_indices: bool = False,  # Disable indices by default for small datasets
+        optimize_storage: bool = True,  # Only store integer IDs in expression table
     ):
         """
         Initialize converter with optimization options.
@@ -77,6 +77,8 @@ class SLAFConverter:
             create_indices: Whether to create indices for query performance.
                           Default: False for small datasets to reduce storage overhead.
                           Set to True for large datasets where query performance is important.
+            optimize_storage: Only store integer IDs in expression table to reduce storage size.
+                           String IDs are available in metadata tables for mapping.
 
         Examples:
             >>> # Default optimization (recommended)
@@ -99,6 +101,7 @@ class SLAFConverter:
         self.chunk_size = chunk_size
         self.sort_metadata = sort_metadata
         self.create_indices = create_indices
+        self.optimize_storage = optimize_storage
 
     def convert(self, input_path: str, output_path: str, input_format: str = "auto"):
         """
@@ -349,35 +352,17 @@ class SLAFConverter:
         print(f"Processing in chunks of {self.chunk_size} cells...")
 
         with create_chunked_reader(h5ad_path) as reader:
-            print(f"Loaded: {reader.n_obs} cells × {reader.n_vars} genes")
+            print(f"Loaded: {reader.n_obs:,} cells × {reader.n_vars:,} genes")
 
             # Create output directory
             output_path_obj = Path(output_path)
             output_path_obj.mkdir(exist_ok=True)
 
-            # Read and sort metadata
-            obs_df, var_df = self._sort_metadata_globally(reader)
+            # Write metadata tables efficiently (without loading everything into memory)
+            self._write_metadata_efficiently(reader, output_path_obj)
 
-            # Write sorted metadata tables
-            self._write_sorted_metadata(obs_df, var_df, output_path_obj)
-
-            # Stream expression data with sorted-by-construction
-            expression_iterator = (
-                self._expression_chunk_iterator_sorted_by_construction(reader)
-            )
-
-            # Get optimal compression settings
-            compression_settings = self._get_compression_settings("expression")
-
-            lance.write_dataset(
-                expression_iterator,
-                str(output_path_obj / "expression.lance"),
-                schema=self._get_expression_schema(),
-                mode="overwrite",
-                max_rows_per_file=compression_settings["max_rows_per_file"],
-                max_rows_per_group=compression_settings["max_rows_per_group"],
-                max_bytes_per_file=compression_settings["max_bytes_per_file"],
-            )
+            # Process expression data
+            self._process_expression(reader, output_path_obj)
 
             # Create indices (if enabled)
             if self.create_indices:
@@ -387,167 +372,220 @@ class SLAFConverter:
             self._save_config(output_path_obj, (reader.n_obs, reader.n_vars))
             print(f"Conversion complete! Saved to {output_path}")
 
-    def _sort_metadata_globally(self, reader):
-        """Sort metadata by common query patterns for optimal performance"""
+    def _write_metadata_efficiently(self, reader, output_path_obj: Path):
+        """Write metadata tables efficiently while preserving all columns"""
+        print("Writing metadata tables...")
+
+        # Get full metadata from reader (this loads all columns)
         obs_df = reader.get_obs_metadata()
         var_df = reader.get_var_metadata()
 
-        if self.sort_metadata:
-            # Sort cells by common query patterns
-            sort_columns = []
-            if "cell_type" in obs_df.columns:
-                sort_columns.append("cell_type")
-            if "batch" in obs_df.columns:
-                sort_columns.append("batch")
-
-            if sort_columns:
-                # Preserve original cell IDs before sorting
-                obs_df["cell_id"] = obs_df.index.astype(str)
-                obs_df = obs_df.sort_values(sort_columns).reset_index(drop=True)
-            else:
-                obs_df["cell_id"] = obs_df.index.astype(str)
-                obs_df = obs_df.reset_index(drop=True)
-
-            # Sort genes by expression patterns
-            sort_columns = []
-            if "highly_variable" in var_df.columns:
-                sort_columns.append("highly_variable")
-            if "means" in var_df.columns:
-                sort_columns.append("means")
-
-            if sort_columns:
-                var_df = var_df.sort_values(sort_columns).reset_index(drop=True)
-            else:
-                var_df = var_df.reset_index(drop=True)
-
-        else:
-            # Preserve original order and IDs
+        # Ensure cell_id and gene_id columns exist
+        if "cell_id" not in obs_df.columns:
             obs_df["cell_id"] = obs_df.index.astype(str)
+        if "gene_id" not in var_df.columns:
             var_df["gene_id"] = var_df.index.astype(str)
 
-        return obs_df, var_df
+        # Add integer IDs if enabled
+        if self.use_integer_keys:
+            obs_df["cell_integer_id"] = range(len(obs_df))
+            var_df["gene_integer_id"] = range(len(var_df))
 
-    def _write_sorted_metadata(
-        self, obs_df: pd.DataFrame, var_df: pd.DataFrame, output_path: Path
-    ):
-        """Write sorted metadata tables"""
-        # Create integer mappings to match traditional converter behavior
-        cell_id_mapping = self._create_id_mapping(obs_df.index, "cell")
-        gene_id_mapping = self._create_id_mapping(var_df.index, "gene")
-
-        # Create simplified metadata tables matching traditional converter
+        # Convert to Lance tables
         cell_metadata_table = self._create_metadata_table(
-            obs_df, "cell_id", integer_mapping=cell_id_mapping
+            obs_df,
+            "cell_id",
+            integer_mapping=None,  # Already added above
         )
         gene_metadata_table = self._create_metadata_table(
-            var_df, "gene_id", integer_mapping=gene_id_mapping
+            var_df,
+            "gene_id",
+            integer_mapping=None,  # Already added above
         )
 
         # Get compression settings for metadata tables
         metadata_settings = self._get_compression_settings("metadata")
 
+        # Write metadata tables
         lance.write_dataset(
             cell_metadata_table,
-            str(output_path / "cells.lance"),
+            str(output_path_obj / "cells.lance"),
             mode="overwrite",
             max_rows_per_group=metadata_settings["max_rows_per_group"],
         )
         lance.write_dataset(
             gene_metadata_table,
-            str(output_path / "genes.lance"),
+            str(output_path_obj / "genes.lance"),
             mode="overwrite",
             max_rows_per_group=metadata_settings["max_rows_per_group"],
         )
 
-    def _expression_chunk_iterator_sorted_by_construction(
-        self, reader
-    ) -> Iterator[pa.RecordBatch]:
-        """Iterator that produces naturally sorted chunks by construction"""
-        total_chunks = (reader.n_obs + self.chunk_size - 1) // self.chunk_size
+        print("Metadata tables written!")
 
+    def _process_expression(self, reader, output_path_obj: Path):
+        """Process expression data in single-threaded mode with large chunks"""
+        print("Processing expression data in single-threaded mode...")
+
+        # Calculate total chunks
+        total_chunks = (reader.n_obs + self.chunk_size - 1) // self.chunk_size
+        print(
+            f"Processing {total_chunks} chunks with chunk size {self.chunk_size:,}..."
+        )
+
+        # Memory monitoring
+        try:
+            import psutil
+
+            process = psutil.Process()
+            initial_memory = process.memory_info().rss / 1024 / 1024  # MB
+            print(f"Initial memory usage: {initial_memory:.1f} MB")
+        except ImportError:
+            print("Install psutil for memory monitoring: pip install psutil")
+
+        # Create Lance dataset with schema
+        expression_path = output_path_obj / "expression.lance"
+        schema = self._get_expression_schema()
+
+        # Create empty dataset first
+        print("Creating initial Lance dataset...")
+        if self.optimize_storage:
+            # Only store integer IDs for maximum storage efficiency
+            empty_table = pa.table(
+                {
+                    "cell_integer_id": pa.array([], pa.int32()),
+                    "gene_integer_id": pa.array([], pa.int32()),
+                    "value": pa.array([], pa.float32()),
+                }
+            )
+        else:
+            # Store both string and integer IDs for compatibility
+            empty_table = pa.table(
+                {
+                    "cell_id": pa.array([], pa.string()),
+                    "gene_id": pa.array([], pa.string()),
+                    "cell_integer_id": pa.array([], pa.int32()),
+                    "gene_integer_id": pa.array([], pa.int32()),
+                    "value": pa.array([], pa.float32()),
+                }
+            )
+
+        lance.write_dataset(
+            empty_table,
+            str(expression_path),
+            mode="overwrite",
+            schema=schema,
+            max_rows_per_file=self._get_compression_settings("expression")[
+                "max_rows_per_file"
+            ],
+            max_rows_per_group=self._get_compression_settings("expression")[
+                "max_rows_per_group"
+            ],
+            max_bytes_per_file=self._get_compression_settings("expression")[
+                "max_bytes_per_file"
+            ],
+        )
+
+        # Extract names once
+        cell_names = reader.obs_names
+        gene_names = reader.var_names
+
+        # Process chunks sequentially
+        print("Processing chunks sequentially...")
         for chunk_idx, (chunk, obs_slice) in enumerate(
             reader.iter_chunks(chunk_size=self.chunk_size)
         ):
             print(f"Processing chunk {chunk_idx + 1}/{total_chunks} ({obs_slice})")
 
-            # Convert chunk to COO format with sequential integer IDs
-            chunk_table = self._chunk_to_coo_table_sorted_by_construction(
-                chunk, obs_slice, reader, chunk_idx * self.chunk_size
+            # Convert to COO format
+            if sparse.issparse(chunk):
+                coo_chunk = chunk.tocoo()
+            else:
+                coo_chunk = sparse.coo_matrix(chunk)
+
+            # Get cell names for this chunk
+            chunk_cell_names = cell_names[obs_slice]
+
+            # Create integer IDs
+            global_cell_offset = chunk_idx * self.chunk_size
+            cell_integer_ids = (global_cell_offset + coo_chunk.row).astype(np.int32)
+            gene_integer_ids = coo_chunk.col.astype(np.int32)
+
+            # Create table based on storage optimization
+            if self.optimize_storage:
+                # Only store integer IDs for maximum storage efficiency
+                table = pa.table(
+                    {
+                        "cell_integer_id": pa.array(cell_integer_ids),
+                        "gene_integer_id": pa.array(gene_integer_ids),
+                        "value": pa.array(coo_chunk.data.astype(np.float32)),
+                    }
+                )
+            else:
+                # Store both string and integer IDs for compatibility
+                cell_ids = chunk_cell_names[coo_chunk.row].astype(str)
+                gene_ids = gene_names[coo_chunk.col].astype(str)
+                table = pa.table(
+                    {
+                        "cell_id": pa.array(cell_ids),
+                        "gene_id": pa.array(gene_ids),
+                        "cell_integer_id": pa.array(cell_integer_ids),
+                        "gene_integer_id": pa.array(gene_integer_ids),
+                        "value": pa.array(coo_chunk.data.astype(np.float32)),
+                    }
+                )
+
+            # Append to Lance dataset
+            lance.write_dataset(
+                table,
+                str(expression_path),
+                mode="append",
+                max_rows_per_file=self._get_compression_settings("expression")[
+                    "max_rows_per_file"
+                ],
+                max_rows_per_group=self._get_compression_settings("expression")[
+                    "max_rows_per_group"
+                ],
+                max_bytes_per_file=self._get_compression_settings("expression")[
+                    "max_bytes_per_file"
+                ],
             )
 
-            yield from chunk_table.to_batches()
+            print(f"Completed chunk {chunk_idx + 1}/{total_chunks}")
 
-    def _chunk_to_coo_table_sorted_by_construction(
-        self, chunk, obs_slice, reader, global_cell_offset: int
-    ):
-        """Convert chunk to COO format with sequential integer IDs for natural sorting"""
-        if sparse.issparse(chunk):
-            coo_chunk = chunk.tocoo()
-        else:
-            coo_chunk = sparse.coo_matrix(chunk)
-
-        # Get cell and gene names for this chunk
-        chunk_cell_names = reader.obs_names[obs_slice]
-        chunk_gene_names = reader.var_names
-
-        # Debug: Check dimensions
-        print(f"Debug: chunk shape: {chunk.shape}")
-        print(f"Debug: coo_chunk shape: {coo_chunk.shape}")
-        print(f"Debug: chunk_cell_names length: {len(chunk_cell_names)}")
-        print(f"Debug: chunk_gene_names length: {len(chunk_gene_names)}")
-        print(
-            f"Debug: coo_chunk.col max: {coo_chunk.col.max() if len(coo_chunk.col) > 0 else 'empty'}"
-        )
-        print(
-            f"Debug: coo_chunk.row max: {coo_chunk.row.max() if len(coo_chunk.row) > 0 else 'empty'}"
-        )
-
-        # Validate indices before accessing
-        if len(coo_chunk.col) > 0 and coo_chunk.col.max() >= len(chunk_gene_names):
-            raise ValueError(
-                f"Column index {coo_chunk.col.max()} is out of bounds for gene names array of length {len(chunk_gene_names)}"
+        # Final memory report
+        try:
+            final_memory = process.memory_info().rss / 1024 / 1024  # MB
+            memory_increase = final_memory - initial_memory
+            print(
+                f"Final memory usage: {final_memory:.1f} MB (change: {memory_increase:+.1f} MB)"
             )
-        if len(coo_chunk.row) > 0 and coo_chunk.row.max() >= len(chunk_cell_names):
-            raise ValueError(
-                f"Row index {coo_chunk.row.max()} is out of bounds for cell names array of length {len(chunk_cell_names)}"
-            )
+        except ImportError:
+            pass
 
-        # Integer IDs are sequential within each chunk
-        # This ensures natural sorting by (cell_integer_id, gene_integer_id)
-        cell_integer_ids = (global_cell_offset + coo_chunk.row).astype(np.int32)
-        gene_integer_ids = coo_chunk.col.astype(np.int32)
-
-        # Expression values - always use float32
-        value_array = coo_chunk.data
-        value_dtype = np.float32
-
-        # Create table with string IDs for compatibility
-        cell_ids = chunk_cell_names[coo_chunk.row].astype(str)
-        gene_ids = chunk_gene_names[coo_chunk.col].astype(str)
-
-        table = pa.table(
-            {
-                "cell_id": pa.array(cell_ids),
-                "gene_id": pa.array(gene_ids),
-                "cell_integer_id": pa.array(cell_integer_ids),
-                "gene_integer_id": pa.array(gene_integer_ids),
-                "value": pa.array(value_array.astype(value_dtype)),
-            }
-        )
-
-        return table
+        print("Expression data processing complete!")
 
     def _get_expression_schema(self):
         """Get the schema for expression table"""
-        return pa.schema(
-            [
-                ("cell_id", pa.string()),
-                ("gene_id", pa.string()),
-                ("cell_integer_id", pa.int32()),
-                ("gene_integer_id", pa.int32()),
-                ("value", pa.float32()),
-            ]
-        )
+        if self.optimize_storage:
+            # Only store integer IDs for maximum storage efficiency
+            return pa.schema(
+                [
+                    ("cell_integer_id", pa.int32()),
+                    ("gene_integer_id", pa.int32()),
+                    ("value", pa.float32()),
+                ]
+            )
+        else:
+            # Store both string and integer IDs for compatibility
+            return pa.schema(
+                [
+                    ("cell_id", pa.string()),
+                    ("gene_id", pa.string()),
+                    ("cell_integer_id", pa.int32()),
+                    ("gene_integer_id", pa.int32()),
+                    ("value", pa.float32()),
+                ]
+            )
 
     def _create_id_mapping(self, entity_ids, entity_type: str) -> list[dict[str, Any]]:
         """Create mapping from original entity IDs to integer indices"""
@@ -586,25 +624,43 @@ class SLAFConverter:
         ):
             raise ValueError("Null values found in cell_id or gene_id arrays!")
 
-        # Create table with string IDs for compatibility
-        table = pa.table(
-            {
-                "cell_id": pa.array(cell_id_array, type=pa.string()),
-                "gene_id": pa.array(gene_id_array, type=pa.string()),
-                "cell_integer_id": pa.array(cell_integer_id_array, type=pa.int32()),
-                "gene_integer_id": pa.array(gene_integer_id_array, type=pa.int32()),
-                "value": pa.array(value_array.astype(value_dtype), type=value_type),
-            }
-        )
+        # Create table based on storage optimization
+        if self.optimize_storage:
+            # Only store integer IDs for maximum storage efficiency
+            table = pa.table(
+                {
+                    "cell_integer_id": pa.array(cell_integer_id_array, type=pa.int32()),
+                    "gene_integer_id": pa.array(gene_integer_id_array, type=pa.int32()),
+                    "value": pa.array(value_array.astype(value_dtype), type=value_type),
+                }
+            )
+        else:
+            # Store both string and integer IDs for compatibility
+            table = pa.table(
+                {
+                    "cell_id": pa.array(cell_id_array, type=pa.string()),
+                    "gene_id": pa.array(gene_id_array, type=pa.string()),
+                    "cell_integer_id": pa.array(cell_integer_id_array, type=pa.int32()),
+                    "gene_integer_id": pa.array(gene_integer_id_array, type=pa.int32()),
+                    "value": pa.array(value_array.astype(value_dtype), type=value_type),
+                }
+            )
 
         # Validate schema
-        expected_types = {
-            "cell_id": pa.string(),
-            "gene_id": pa.string(),
-            "cell_integer_id": pa.int32(),
-            "gene_integer_id": pa.int32(),
-            "value": value_type,
-        }
+        if self.optimize_storage:
+            expected_types = {
+                "cell_integer_id": pa.int32(),
+                "gene_integer_id": pa.int32(),
+                "value": value_type,
+            }
+        else:
+            expected_types = {
+                "cell_id": pa.string(),
+                "gene_id": pa.string(),
+                "cell_integer_id": pa.int32(),
+                "gene_integer_id": pa.int32(),
+                "value": value_type,
+            }
 
         # Validate schema
         for col, expected_type in expected_types.items():
@@ -795,6 +851,7 @@ class SLAFConverter:
             },
             "optimizations": {
                 "use_integer_keys": self.use_integer_keys,
+                "optimize_storage": self.optimize_storage,
             },
             "metadata": {
                 "expression_count": int(expression_count),

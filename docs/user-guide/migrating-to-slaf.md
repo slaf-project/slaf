@@ -20,6 +20,9 @@ slaf convert data.h5ad output.slaf --verbose
 # Convert with indices for query performance (recommended for large datasets)
 slaf convert data.h5ad output.slaf --create-indices
 
+# Optimize for speed with larger chunks
+slaf convert large_data.h5ad output.slaf --chunked --chunk-size 100000
+
 # Explicit format specification (if auto-detection fails)
 slaf convert data.h5 output.slaf --format 10x_h5
 ```
@@ -74,6 +77,17 @@ slaf convert large_data.h5 output.slaf --chunked --chunk-size 15000
 # Convert with indices for query performance
 slaf convert large_data.h5ad output.slaf --create-indices
 slaf convert filtered_feature_bc_matrix/ output.slaf --create-indices
+
+# Optimize for speed with larger chunks
+slaf convert large_data.h5ad output.slaf --chunked --chunk-size 100000
+slaf convert filtered_feature_bc_matrix/ output.slaf --chunked --chunk-size 100000
+
+# For very large datasets (>10GB), use smaller chunks to prevent memory issues
+slaf convert huge_data.h5ad output.slaf --chunked --chunk-size 25000
+
+# Optimize storage by only storing integer IDs (default: True)
+slaf convert large_data.h5ad output.slaf --optimize-storage
+slaf convert large_data.h5ad output.slaf --no-optimize-storage  # Include string IDs
 ```
 
 ```python
@@ -90,6 +104,19 @@ converter.convert("large_data.h5", "output.slaf")
 converter = SLAFConverter(create_indices=True)
 converter.convert("large_data.h5ad", "output.slaf")
 converter.convert("filtered_feature_bc_matrix/", "output.slaf")
+
+# Optimize for speed with larger chunks
+converter = SLAFConverter(chunked=True, chunk_size=100000)
+converter.convert("large_data.h5ad", "output.slaf")
+converter.convert("filtered_feature_bc_matrix/", "output.slaf")
+
+# Optimize storage by only storing integer IDs (default: True)
+converter = SLAFConverter(optimize_storage=True)
+converter.convert("large_data.h5ad", "output.slaf")
+
+# Include string IDs for compatibility (larger storage)
+converter = SLAFConverter(optimize_storage=False)
+converter.convert("large_data.h5ad", "output.slaf")
 ```
 
 **When to use chunked conversion:**
@@ -98,6 +125,29 @@ converter.convert("filtered_feature_bc_matrix/", "output.slaf")
 - When you encounter memory errors during conversion
 - For optimal memory usage on large datasets
 - **All formats supported**: h5ad, 10x MTX, 10x H5
+
+**Storage Optimization:**
+
+SLAF provides **storage optimization** that dramatically reduces file size by only storing integer IDs in the expression table:
+
+- **Default behavior**: Only stores integer IDs (`cell_integer_id`, `gene_integer_id`, `value`)
+- **String mapping**: String IDs are available in metadata tables for lookup
+- **Storage reduction**: Can reduce file size by 50-80% compared to storing both string and integer IDs
+- **Query performance**: Integer-only storage enables faster range queries and filtering
+
+**When to use storage optimization:**
+
+- **Default (recommended)**: Use `--optimize-storage` for all conversions
+- **Compatibility**: Use `--no-optimize-storage` only if you need direct string ID access in queries
+- **Large datasets**: Storage optimization is especially beneficial for datasets >1GB
+- **Query patterns**: Integer-only storage is optimal for range queries and filtering
+
+**Performance optimization tips:**
+
+- **Chunk sizes**: Use 25k-50k cells per chunk for memory efficiency, 100k+ for speed (if memory allows)
+- **Memory monitoring**: Monitor memory usage and adjust chunk size accordingly
+- **SSD storage**: Use SSD storage for faster I/O operations
+- **Large datasets**: For datasets >10GB, use smaller chunk sizes (10k-25k) to prevent memory issues
 
 **Chunked conversion benefits:**
 

@@ -1047,7 +1047,7 @@ class TestSLAFConverter:
         converter = SLAFConverter()
         assert converter.use_integer_keys is True
         assert converter.chunked is False
-        assert converter.chunk_size == 1000
+        assert converter.chunk_size == 25000  # Updated default for memory efficiency
         assert converter.sort_metadata is False
         assert converter.create_indices is False
 

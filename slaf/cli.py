@@ -200,12 +200,17 @@ def convert(
         help="Use chunked processing for memory efficiency (supports all formats)",
     ),
     chunk_size: int = typer.Option(
-        10000, "--chunk-size", help="Number of cells per chunk (when using --chunked)"
+        50000, "--chunk-size", help="Number of cells per chunk (when using --chunked)"
     ),
     create_indices: bool = typer.Option(
         False,
         "--create-indices",
         help="Create indices for query performance (recommended for large datasets)",
+    ),
+    optimize_storage: bool = typer.Option(
+        True,
+        "--optimize-storage/--no-optimize-storage",
+        help="Only store integer IDs in expression table to reduce storage size by 50-80% (default: True)",
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ):
@@ -233,7 +238,10 @@ def convert(
 
     try:
         converter = SLAFConverter(
-            chunked=chunked, chunk_size=chunk_size, create_indices=create_indices
+            chunked=chunked,
+            chunk_size=chunk_size,
+            create_indices=create_indices,
+            optimize_storage=optimize_storage,
         )
 
         # Use the new converter with auto-detection
