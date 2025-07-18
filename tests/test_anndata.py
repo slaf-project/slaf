@@ -107,7 +107,7 @@ class TestLazyAnnDataCorrectness:
         native_adata = sparse_adata
 
         # Test mean aggregation (gene-wise)
-        gene_means_lazy = lazy_adata.X.mean(axis=0)
+        gene_means_lazy = lazy_adata.X.mean(axis=0).compute()
         gene_means_native = native_adata.X.mean(axis=0)
         print("\n--- Aggregation Correctness Test (Sparse Edge Case) ---")
         print(f"Lazy gene means shape: {gene_means_lazy.shape}")
@@ -146,7 +146,7 @@ class TestLazyAnnDataCorrectness:
         native_adata = sparse_adata
 
         # Test mean aggregation
-        gene_means_lazy = lazy_adata.X.mean(axis=0)
+        gene_means_lazy = lazy_adata.X.mean(axis=0).compute()
         gene_means_native = native_adata.X.mean(axis=0)
 
         print(f"Lazy gene means shape: {gene_means_lazy.shape}")

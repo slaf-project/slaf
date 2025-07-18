@@ -337,15 +337,25 @@ class TestLazyAnnDataSlicing:
 
         # Test aggregation methods (only for implemented backends)
         if hasattr(adata.X, "mean"):
-            # Test axis-wise aggregation (returns arrays)
+            # Test axis-wise aggregation (returns LazyAggregationResult that can be computed)
             mean_result = adata.X.mean(axis=0)
-            assert isinstance(mean_result, np.ndarray)
-            assert mean_result.shape == (1, 50)  # Mean across cells for each gene
+            assert hasattr(mean_result, "compute")
+            mean_array = mean_result.compute()
+            assert isinstance(mean_array, np.ndarray)
+            assert mean_array.shape == (
+                1,
+                50,
+            )  # Mean across cells for each gene (2D array)
 
             # Test sum method
             sum_result = adata.X.sum(axis=1)
-            assert isinstance(sum_result, np.ndarray)
-            assert sum_result.shape == (100, 1)  # Sum across genes for each cell
+            assert hasattr(sum_result, "compute")
+            sum_array = sum_result.compute()
+            assert isinstance(sum_array, np.ndarray)
+            assert sum_array.shape == (
+                100,
+                1,
+            )  # Sum across genes for each cell (2D array)
 
     def test_chained_slicing_not_supported(self, tiny_slaf):
         """Test that chained slicing raises NotImplementedError (this is by design)"""
