@@ -445,6 +445,23 @@ wheels = [
 ]
 
 [[package]]
+name = "datafusion"
+version = "48.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyarrow" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/84/6a/9363ca73aa2593fce9ac3ad1c6e97db7ec78530a316a3dbc0fa2a330b597/datafusion-48.0.0.tar.gz", hash = "sha256:fcb89124db22a43e00bf5a1a4542157155d83d69589677c5309f106e83156a32", size = 182992 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f6/68/f02fe93c53dd77afdd0b187d592e618b6a10e9477f8de114baa7f8f4ce51/datafusion-48.0.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:24984e3c4077caca7b3746bdcf6d67171c4976325d035970b97bf59d49327c5b", size = 25819127 },
+    { url = "https://files.pythonhosted.org/packages/a1/21/fdbb3bf1f5bb8f8c06cf80de967ee56519c0ead4ad3354ee0ba22b4bff99/datafusion-48.0.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:31e841d02147b0904984850421ae18499d4ab2492ff1ef4dd9d15d3cba3fbef3", size = 23400042 },
+    { url = "https://files.pythonhosted.org/packages/5f/73/95daf83a61e6cc877da78831a848aa13b0af050ca0c9df23a96bb61cf234/datafusion-48.0.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:b6b1ed4552c496b961d648d2cbbb6a43aaae3c6442acebc795a4ef256f549cd4", size = 28555364 },
+    { url = "https://files.pythonhosted.org/packages/3c/ca/0227e285fbf1b35d1a45d15f25dc698b594c718b1a514851a1bc1caab812/datafusion-48.0.0-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:3d316dc339c0231588ac3f4139af490c556912c54c4508c443e3466c81ff457b", size = 26791000 },
+    { url = "https://files.pythonhosted.org/packages/83/c8/48abb69d2482477996cc1cf33274b953524471ae7eea68dd06d374489aa3/datafusion-48.0.0-cp39-abi3-win_amd64.whl", hash = "sha256:3d75026f93083febef2e8b362f56e19cfbd5d8058c61c3847f04e786697fc4bd", size = 28104564 },
+]
+
+[[package]]
 name = "deprecation"
 version = "2.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2880,6 +2897,7 @@ version = "0.1.2"
 source = { editable = "." }
 dependencies = [
     { name = "anndata" },
+    { name = "datafusion" },
     { name = "duckdb" },
     { name = "h5py" },
     { name = "igraph" },
@@ -2944,6 +2962,7 @@ requires-dist = [
     { name = "anndata", specifier = ">=0.11.4" },
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "coverage", marker = "extra == 'test'", specifier = ">=7.9.1" },
+    { name = "datafusion", specifier = ">=48.0.0" },
     { name = "duckdb", specifier = ">=1.3.0" },
     { name = "h5py", specifier = ">=3.10.0" },
     { name = "igraph", specifier = ">=0.11.9" },
