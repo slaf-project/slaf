@@ -664,11 +664,6 @@ def benchmark(
       slaf benchmark all --datasets pbmc3k --auto-convert
     """
 
-    # Temporarily disabled until benchmark module is refactored
-    typer.echo("❌ Benchmark command is temporarily disabled")
-    typer.echo("   The benchmark module needs to be refactored into a proper module")
-    typer.echo("   before this command can be used.")
-    raise typer.Exit(1)
     r"""
     Manage SLAF benchmarks and performance testing.
 
