@@ -593,13 +593,13 @@ class LazySparseMixin:
             return self._sql_other_aggregation(operation, axis)
 
     def _sql_mean_aggregation(self, axis: int | None = None) -> LazyQuery:
-        """Optimized mean aggregation with vectorized operations"""
+        """Optimized mean aggregation with complete SQL calculation"""
         if axis == 0:  # Gene-wise aggregation
-            # Single optimized query with proper ordering
-            sql = """
+            # Complete mean calculation in SQL
+            sql = f"""
             SELECT
                 gene_integer_id,
-                SUM(value) as total_sum
+                SUM(value) / {self.shape[0]} as mean_value
             FROM expression
             GROUP BY gene_integer_id
             ORDER BY gene_integer_id
@@ -607,11 +607,11 @@ class LazySparseMixin:
             return self.slaf_array.lazy_query(sql)
 
         elif axis == 1:  # Cell-wise aggregation
-            # Single optimized query with proper ordering
-            sql = """
+            # Complete mean calculation in SQL
+            sql = f"""
             SELECT
                 cell_integer_id,
-                SUM(value) as total_sum
+                SUM(value) / {self.shape[1]} as mean_value
             FROM expression
             GROUP BY cell_integer_id
             ORDER BY cell_integer_id
@@ -619,19 +619,22 @@ class LazySparseMixin:
             return self.slaf_array.lazy_query(sql)
 
         else:  # Global aggregation
-            # Optimized global query
-            sql = "SELECT SUM(value) as total_sum FROM expression"
+            # Complete mean calculation in SQL
+            sql = f"""
+            SELECT
+                SUM(value) / ({self.shape[0]} * {self.shape[1]}) as mean_value
+            FROM expression
+            """
             return self.slaf_array.lazy_query(sql)
 
     def _sql_variance_aggregation(self, axis: int | None = None) -> LazyQuery:
-        """Optimized variance aggregation with vectorized operations"""
+        """Optimized variance aggregation with complete SQL calculation"""
         if axis == 0:  # Gene-wise aggregation
-            # Single optimized query with all needed statistics
-            sql = """
+            # Complete variance calculation in SQL
+            sql = f"""
             SELECT
                 gene_integer_id,
-                SUM(value) as total_sum,
-                SUM(value * value) as sum_squares
+                (SUM(value * value) / {self.shape[0]}) - (SUM(value) / {self.shape[0]}) * (SUM(value) / {self.shape[0]}) as variance_value
             FROM expression
             GROUP BY gene_integer_id
             ORDER BY gene_integer_id
@@ -639,12 +642,11 @@ class LazySparseMixin:
             return self.slaf_array.lazy_query(sql)
 
         elif axis == 1:  # Cell-wise aggregation
-            # Single optimized query with all needed statistics
-            sql = """
+            # Complete variance calculation in SQL
+            sql = f"""
             SELECT
                 cell_integer_id,
-                SUM(value) as total_sum,
-                SUM(value * value) as sum_squares
+                (SUM(value * value) / {self.shape[1]}) - (SUM(value) / {self.shape[1]}) * (SUM(value) / {self.shape[1]}) as variance_value
             FROM expression
             GROUP BY cell_integer_id
             ORDER BY cell_integer_id
@@ -652,11 +654,11 @@ class LazySparseMixin:
             return self.slaf_array.lazy_query(sql)
 
         else:  # Global aggregation
-            # Optimized global variance query
-            sql = """
+            # Complete variance calculation in SQL
+            sql = f"""
             SELECT
-                SUM(value) as total_sum,
-                SUM(value * value) as sum_squares
+                (SUM(value * value) / ({self.shape[0]} * {self.shape[1]})) -
+                (SUM(value) / ({self.shape[0]} * {self.shape[1]})) * (SUM(value) / ({self.shape[0]} * {self.shape[1]})) as variance_value
             FROM expression
             """
             return self.slaf_array.lazy_query(sql)
@@ -664,12 +666,12 @@ class LazySparseMixin:
     def _sql_other_aggregation(
         self, operation: str, axis: int | None = None
     ) -> LazyQuery:
-        """Optimized non-mean aggregation operations with vectorized operations"""
+        """Optimized non-mean aggregation operations with complete SQL calculation"""
         if axis == 0:  # Gene-wise aggregation
             sql = f"""
             SELECT
                 gene_integer_id,
-                {operation.upper()}(value) as result
+                {operation.upper()}(value) as {operation.lower()}_value
             FROM expression
             GROUP BY gene_integer_id
             ORDER BY gene_integer_id
@@ -680,7 +682,7 @@ class LazySparseMixin:
             sql = f"""
             SELECT
                 cell_integer_id,
-                {operation.upper()}(value) as result
+                {operation.upper()}(value) as {operation.lower()}_value
             FROM expression
             GROUP BY cell_integer_id
             ORDER BY cell_integer_id
@@ -688,7 +690,7 @@ class LazySparseMixin:
             return self.slaf_array.lazy_query(sql)
 
         else:  # Global aggregation
-            sql = f"SELECT {operation.upper()}(value) as result FROM expression"
+            sql = f"SELECT {operation.upper()}(value) as {operation.lower()}_value FROM expression"
             return self.slaf_array.lazy_query(sql)
 
     def _sql_multi_aggregation(self, operations: list, axis: int | None = None) -> dict:
@@ -704,18 +706,18 @@ class LazySparseMixin:
         if axis == 0:  # Gene-wise aggregation
             for op in operations:
                 if op.upper() in ["MEAN", "AVG"]:
-                    sql = """
-                    SELECT gene_integer_id, SUM(value) as total_sum FROM expression GROUP BY gene_integer_id ORDER BY gene_integer_id
+                    sql = f"""
+                    SELECT gene_integer_id, SUM(value) / {self.shape[0]} as mean_value FROM expression GROUP BY gene_integer_id ORDER BY gene_integer_id
                     """
                     queries[op.lower()] = self.slaf_array.lazy_query(sql)
                 elif op.upper() in ["VARIANCE", "VAR"]:
-                    sql = """
-                    SELECT gene_integer_id, SUM(value) as total_sum, SUM(value * value) as sum_squares FROM expression GROUP BY gene_integer_id ORDER BY gene_integer_id
+                    sql = f"""
+                    SELECT gene_integer_id, (SUM(value * value) / {self.shape[0]}) - (SUM(value) / {self.shape[0]}) * (SUM(value) / {self.shape[0]}) as variance_value FROM expression GROUP BY gene_integer_id ORDER BY gene_integer_id
                     """
                     queries[op.lower()] = self.slaf_array.lazy_query(sql)
                 else:
                     sql = f"""
-                    SELECT gene_integer_id, {op.upper()}(value) as result FROM expression GROUP BY gene_integer_id ORDER BY gene_integer_id
+                    SELECT gene_integer_id, {op.upper()}(value) as {op.lower()}_value FROM expression GROUP BY gene_integer_id ORDER BY gene_integer_id
                     """
                     queries[op.lower()] = self.slaf_array.lazy_query(sql)
             return queries
@@ -723,18 +725,18 @@ class LazySparseMixin:
         elif axis == 1:  # Cell-wise aggregation
             for op in operations:
                 if op.upper() in ["MEAN", "AVG"]:
-                    sql = """
-                    SELECT cell_integer_id, SUM(value) as total_sum FROM expression GROUP BY cell_integer_id ORDER BY cell_integer_id
+                    sql = f"""
+                    SELECT cell_integer_id, SUM(value) / {self.shape[1]} as mean_value FROM expression GROUP BY cell_integer_id ORDER BY cell_integer_id
                     """
                     queries[op.lower()] = self.slaf_array.lazy_query(sql)
                 elif op.upper() in ["VARIANCE", "VAR"]:
-                    sql = """
-                    SELECT cell_integer_id, SUM(value) as total_sum, SUM(value * value) as sum_squares FROM expression GROUP BY cell_integer_id ORDER BY cell_integer_id
+                    sql = f"""
+                    SELECT cell_integer_id, (SUM(value * value) / {self.shape[1]}) - (SUM(value) / {self.shape[1]}) * (SUM(value) / {self.shape[1]}) as variance_value FROM expression GROUP BY cell_integer_id ORDER BY cell_integer_id
                     """
                     queries[op.lower()] = self.slaf_array.lazy_query(sql)
                 else:
                     sql = f"""
-                    SELECT cell_integer_id, {op.upper()}(value) as result FROM expression GROUP BY cell_integer_id ORDER BY cell_integer_id
+                    SELECT cell_integer_id, {op.upper()}(value) as {op.lower()}_value FROM expression GROUP BY cell_integer_id ORDER BY cell_integer_id
                     """
                     queries[op.lower()] = self.slaf_array.lazy_query(sql)
             return queries
@@ -742,12 +744,12 @@ class LazySparseMixin:
         else:  # Global aggregation
             for op in operations:
                 if op.upper() in ["MEAN", "AVG"]:
-                    sql = "SELECT SUM(value) as total_sum FROM expression"
+                    sql = f"SELECT SUM(value) / ({self.shape[0]} * {self.shape[1]}) as mean_value FROM expression"
                     queries[op.lower()] = self.slaf_array.lazy_query(sql)
                 elif op.upper() in ["VARIANCE", "VAR"]:
-                    sql = "SELECT SUM(value) as total_sum, SUM(value * value) as sum_squares FROM expression"
+                    sql = f"SELECT (SUM(value * value) / ({self.shape[0]} * {self.shape[1]})) - (SUM(value) / ({self.shape[0]} * {self.shape[1]})) * (SUM(value) / ({self.shape[0]} * {self.shape[1]})) as variance_value FROM expression"
                     queries[op.lower()] = self.slaf_array.lazy_query(sql)
                 else:
-                    sql = f"SELECT {op.upper()}(value) as result FROM expression"
+                    sql = f"SELECT {op.upper()}(value) as {op.lower()}_value FROM expression"
                     queries[op.lower()] = self.slaf_array.lazy_query(sql)
             return queries
