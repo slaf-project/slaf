@@ -9,6 +9,138 @@ from slaf.core.lazy_query import LazyQuery
 from slaf.core.slaf import SLAFArray
 from slaf.core.sparse_ops import LazySparseMixin
 
+
+class LazyAggregationResult:
+    """
+    Lazy aggregation result that can be composed with other operations.
+
+    This class wraps LazyQuery objects for aggregation operations and provides
+    a consistent interface for lazy evaluation of aggregation results.
+    """
+
+    def __init__(
+        self,
+        lazy_query: LazyQuery,
+        operation: str,
+        axis: int | None,
+        shape: tuple[int, int],
+    ):
+        """
+        Initialize lazy aggregation result.
+
+        Args:
+            lazy_query: The underlying LazyQuery object
+            operation: The aggregation operation (mean, sum, variance, std)
+            axis: The axis along which aggregation was performed
+            shape: The original matrix shape (n_cells, n_genes)
+        """
+        self.lazy_query = lazy_query
+        self.operation = operation
+        self.axis = axis
+        self.shape = shape
+        self._computed_result = None
+
+    def compute(self) -> float | np.ndarray:
+        """
+        Compute the aggregation result.
+
+        Returns:
+            float | np.ndarray: The computed aggregation result
+        """
+        if self._computed_result is not None:
+            return self._computed_result
+
+        result_df = self.lazy_query.compute()
+
+        if self.operation == "mean":
+            return self._compute_mean(result_df)
+        elif self.operation == "sum":
+            return self._compute_sum(result_df)
+        elif self.operation == "variance":
+            return self._compute_variance(result_df)
+        elif self.operation == "std":
+            variance = self._compute_variance(result_df)
+            if isinstance(variance, np.ndarray):
+                return np.sqrt(variance)
+            else:
+                return np.sqrt(variance)
+        else:
+            raise ValueError(f"Unknown operation: {self.operation}")
+
+    def _compute_mean(self, result_df: pd.DataFrame) -> float | np.ndarray:
+        """Compute mean from result DataFrame (already calculated in SQL)"""
+        if self.axis == 0:  # Gene-wise aggregation
+            result = np.zeros(self.shape[1])
+            if len(result_df) > 0:
+                gene_indices = result_df["gene_integer_id"].to_numpy()
+                values = result_df["mean_value"].to_numpy()  # Already calculated in SQL
+                valid_mask = (gene_indices >= 0) & (gene_indices < self.shape[1])
+                if np.any(valid_mask):
+                    result[gene_indices[valid_mask]] = values[valid_mask]
+            return result.reshape(1, -1)
+        elif self.axis == 1:  # Cell-wise aggregation
+            result = np.zeros(self.shape[0])
+            if len(result_df) > 0:
+                cell_indices = result_df["cell_integer_id"].to_numpy()
+                values = result_df["mean_value"].to_numpy()  # Already calculated in SQL
+                valid_mask = (cell_indices >= 0) & (cell_indices < self.shape[0])
+                if np.any(valid_mask):
+                    result[cell_indices[valid_mask]] = values[valid_mask]
+            return result.reshape(-1, 1)
+        else:  # Global aggregation
+            return result_df["mean_value"].iloc[0]  # Already calculated in SQL
+
+    def _compute_sum(self, result_df: pd.DataFrame) -> float | np.ndarray:
+        """Compute sum from result DataFrame (already calculated in SQL)"""
+        if self.axis == 0:  # Gene-wise aggregation
+            result = np.zeros(self.shape[1])
+            if len(result_df) > 0:
+                gene_indices = result_df["gene_integer_id"].to_numpy()
+                values = result_df["sum_value"].to_numpy()  # Already calculated in SQL
+                valid_mask = (gene_indices >= 0) & (gene_indices < self.shape[1])
+                if np.any(valid_mask):
+                    result[gene_indices[valid_mask]] = values[valid_mask]
+            return result.reshape(1, -1)
+        elif self.axis == 1:  # Cell-wise aggregation
+            result = np.zeros(self.shape[0])
+            if len(result_df) > 0:
+                cell_indices = result_df["cell_integer_id"].to_numpy()
+                values = result_df["sum_value"].to_numpy()  # Already calculated in SQL
+                valid_mask = (cell_indices >= 0) & (cell_indices < self.shape[0])
+                if np.any(valid_mask):
+                    result[cell_indices[valid_mask]] = values[valid_mask]
+            return result.reshape(-1, 1)
+        else:  # Global aggregation
+            return result_df["sum_value"].iloc[0]  # Already calculated in SQL
+
+    def _compute_variance(self, result_df: pd.DataFrame) -> float | np.ndarray:
+        """Compute variance from result DataFrame (already calculated in SQL)"""
+        if self.axis == 0:  # Gene-wise aggregation
+            result = np.zeros(self.shape[1])
+            if len(result_df) > 0:
+                gene_indices = result_df["gene_integer_id"].to_numpy()
+                values = result_df[
+                    "variance_value"
+                ].to_numpy()  # Already calculated in SQL
+                valid_mask = (gene_indices >= 0) & (gene_indices < self.shape[1])
+                if np.any(valid_mask):
+                    result[gene_indices[valid_mask]] = values[valid_mask]
+            return result.reshape(1, -1)
+        elif self.axis == 1:  # Cell-wise aggregation
+            result = np.zeros(self.shape[0])
+            if len(result_df) > 0:
+                cell_indices = result_df["cell_integer_id"].to_numpy()
+                values = result_df[
+                    "variance_value"
+                ].to_numpy()  # Already calculated in SQL
+                valid_mask = (cell_indices >= 0) & (cell_indices < self.shape[0])
+                if np.any(valid_mask):
+                    result[cell_indices[valid_mask]] = values[valid_mask]
+            return result.reshape(-1, 1)
+        else:  # Global aggregation
+            return result_df["variance_value"].iloc[0]  # Already calculated in SQL
+
+
 if TYPE_CHECKING:
     from typing import Any
 
@@ -856,118 +988,25 @@ class LazyExpressionMatrix(LazySparseMixin):
             matrix = self.compute()
             return func(matrix, *args[1:], **kwargs)
 
-    def mean(self, axis: int | None = None) -> float | np.ndarray:
-        """Compute mean along axis via SQL aggregation"""
+    def mean(self, axis: int | None = None) -> "LazyAggregationResult":
+        """Compute mean along axis via SQL aggregation (lazy)"""
         lazy_query = self._sql_aggregation("avg", axis)
-        result_df = lazy_query.compute()
+        return LazyAggregationResult(lazy_query, "mean", axis, self.shape)
 
-        if axis == 0:  # Gene-wise aggregation
-            # Convert to numpy array with proper shape
-            result = np.zeros(self.shape[1])
-            if len(result_df) > 0:
-                gene_indices = result_df["gene_integer_id"].to_numpy()
-                values = (
-                    result_df["total_sum"].to_numpy() / self.shape[0]
-                )  # Divide by number of cells
-                valid_mask = (gene_indices >= 0) & (gene_indices < self.shape[1])
-                if np.any(valid_mask):
-                    result[gene_indices[valid_mask]] = values[valid_mask]
-            return result.reshape(1, -1)  # Return as 2D array (1, n_genes)
-        elif axis == 1:  # Cell-wise aggregation
-            # Convert to numpy array with proper shape
-            result = np.zeros(self.shape[0])
-            if len(result_df) > 0:
-                cell_indices = result_df["cell_integer_id"].to_numpy()
-                values = (
-                    result_df["total_sum"].to_numpy() / self.shape[1]
-                )  # Divide by number of genes
-                valid_mask = (cell_indices >= 0) & (cell_indices < self.shape[0])
-                if np.any(valid_mask):
-                    result[cell_indices[valid_mask]] = values[valid_mask]
-            return result.reshape(-1, 1)  # Return as 2D array (n_cells, 1)
-        else:  # Global aggregation
-            return result_df["total_sum"].iloc[0] / (self.shape[0] * self.shape[1])
-
-    def sum(self, axis: int | None = None) -> float | np.ndarray:
-        """Compute sum along axis via SQL aggregation"""
+    def sum(self, axis: int | None = None) -> "LazyAggregationResult":
+        """Compute sum along axis via SQL aggregation (lazy)"""
         lazy_query = self._sql_aggregation("sum", axis)
-        result_df = lazy_query.compute()
+        return LazyAggregationResult(lazy_query, "sum", axis, self.shape)
 
-        if axis == 0:  # Gene-wise aggregation
-            # Convert to numpy array with proper shape
-            result = np.zeros(self.shape[1])
-            if len(result_df) > 0:
-                gene_indices = result_df["gene_integer_id"].to_numpy()
-                values = result_df["result"].to_numpy()
-                valid_mask = (gene_indices >= 0) & (gene_indices < self.shape[1])
-                if np.any(valid_mask):
-                    result[gene_indices[valid_mask]] = values[valid_mask]
-            return result.reshape(1, -1)  # Return as 2D array (1, n_genes)
-        elif axis == 1:  # Cell-wise aggregation
-            # Convert to numpy array with proper shape
-            result = np.zeros(self.shape[0])
-            if len(result_df) > 0:
-                cell_indices = result_df["cell_integer_id"].to_numpy()
-                values = result_df["result"].to_numpy()
-                valid_mask = (cell_indices >= 0) & (cell_indices < self.shape[0])
-                if np.any(valid_mask):
-                    result[cell_indices[valid_mask]] = values[valid_mask]
-            return result.reshape(-1, 1)  # Return as 2D array (n_cells, 1)
-        else:  # Global aggregation
-            return result_df["result"].iloc[0]
-
-    def var(self, axis: int | None = None) -> float | np.ndarray:
-        """Compute variance along axis via SQL aggregation"""
+    def var(self, axis: int | None = None) -> "LazyAggregationResult":
+        """Compute variance along axis via SQL aggregation (lazy)"""
         lazy_query = self._sql_aggregation("variance", axis)
-        result_df = lazy_query.compute()
+        return LazyAggregationResult(lazy_query, "variance", axis, self.shape)
 
-        if axis == 0:  # Gene-wise aggregation
-            # Convert to numpy array with proper shape
-            result = np.zeros(self.shape[1])
-            if len(result_df) > 0:
-                gene_indices = result_df["gene_integer_id"].to_numpy()
-                sums = result_df["total_sum"].to_numpy()
-                sum_squares = result_df["sum_squares"].to_numpy()
-                valid_mask = (gene_indices >= 0) & (gene_indices < self.shape[1])
-                if np.any(valid_mask):
-                    valid_indices = gene_indices[valid_mask]
-                    valid_sums = sums[valid_mask]
-                    valid_sum_squares = sum_squares[valid_mask]
-                    means = valid_sums / self.shape[0]
-                    variances = (valid_sum_squares / self.shape[0]) - (means * means)
-                    result[valid_indices] = variances
-            return result.reshape(1, -1)  # Return as 2D array (1, n_genes)
-        elif axis == 1:  # Cell-wise aggregation
-            # Convert to numpy array with proper shape
-            result = np.zeros(self.shape[0])
-            if len(result_df) > 0:
-                cell_indices = result_df["cell_integer_id"].to_numpy()
-                sums = result_df["total_sum"].to_numpy()
-                sum_squares = result_df["sum_squares"].to_numpy()
-                valid_mask = (cell_indices >= 0) & (cell_indices < self.shape[0])
-                if np.any(valid_mask):
-                    valid_indices = cell_indices[valid_mask]
-                    valid_sums = sums[valid_mask]
-                    valid_sum_squares = sum_squares[valid_mask]
-                    means = valid_sums / self.shape[1]
-                    variances = (valid_sum_squares / self.shape[1]) - (means * means)
-                    result[valid_indices] = variances
-            return result.reshape(-1, 1)  # Return as 2D array (n_cells, 1)
-        else:  # Global aggregation
-            total_sum = result_df["total_sum"].iloc[0]
-            sum_squares = result_df["sum_squares"].iloc[0]
-            n = self.shape[0] * self.shape[1]
-            mean = total_sum / n
-            variance = (sum_squares / n) - (mean * mean)
-            return variance
-
-    def std(self, axis: int | None = None) -> float | np.ndarray:
-        """Compute standard deviation along axis"""
-        variance = self.var(axis)
-        if isinstance(variance, np.ndarray):
-            return np.sqrt(variance)
-        else:
-            return np.sqrt(variance)
+    def std(self, axis: int | None = None) -> "LazyAggregationResult":
+        """Compute standard deviation along axis (lazy)"""
+        variance_query = self._sql_aggregation("variance", axis)
+        return LazyAggregationResult(variance_query, "std", axis, self.shape)
 
     def toarray(self) -> np.ndarray:
         """Convert to dense numpy array"""
