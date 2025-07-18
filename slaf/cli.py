@@ -202,6 +202,11 @@ def convert(
     chunk_size: int = typer.Option(
         10000, "--chunk-size", help="Number of cells per chunk (when using --chunked)"
     ),
+    create_indices: bool = typer.Option(
+        False,
+        "--create-indices",
+        help="Create indices for query performance (recommended for large datasets)",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ):
     """Convert single-cell datasets to SLAF format with optimized storage."""
@@ -227,7 +232,9 @@ def convert(
         typer.echo(f"📦 Using chunked processing (chunk size: {chunk_size:,} cells)")
 
     try:
-        converter = SLAFConverter(chunked=chunked, chunk_size=chunk_size)
+        converter = SLAFConverter(
+            chunked=chunked, chunk_size=chunk_size, create_indices=create_indices
+        )
 
         # Use the new converter with auto-detection
         if format:

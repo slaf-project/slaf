@@ -17,6 +17,9 @@ slaf convert data.h5 output.slaf
 # Convert with verbose output
 slaf convert data.h5ad output.slaf --verbose
 
+# Convert with indices for query performance (recommended for large datasets)
+slaf convert data.h5ad output.slaf --create-indices
+
 # Explicit format specification (if auto-detection fails)
 slaf convert data.h5 output.slaf --format 10x_h5
 ```
@@ -67,6 +70,10 @@ SLAF supports **chunked conversion** for all input formats, enabling memory-effi
 slaf convert large_data.h5ad output.slaf --chunked --chunk-size 10000
 slaf convert filtered_feature_bc_matrix/ output.slaf --chunked --chunk-size 5000
 slaf convert large_data.h5 output.slaf --chunked --chunk-size 15000
+
+# Convert with indices for query performance
+slaf convert large_data.h5ad output.slaf --create-indices
+slaf convert filtered_feature_bc_matrix/ output.slaf --create-indices
 ```
 
 ```python
@@ -78,6 +85,11 @@ converter = SLAFConverter(chunked=True, chunk_size=10000)
 converter.convert("large_data.h5ad", "output.slaf")
 converter.convert("filtered_feature_bc_matrix/", "output.slaf")
 converter.convert("large_data.h5", "output.slaf")
+
+# Convert with indices for query performance
+converter = SLAFConverter(create_indices=True)
+converter.convert("large_data.h5ad", "output.slaf")
+converter.convert("filtered_feature_bc_matrix/", "output.slaf")
 ```
 
 **When to use chunked conversion:**
@@ -100,6 +112,23 @@ converter.convert("large_data.h5", "output.slaf")
 - **Memory streaming**: Data is processed in configurable chunks to minimize memory usage
 - **Format detection**: Automatically selects the appropriate chunked reader based on input format
 - **Consistent API**: Same chunked interface works across all supported formats
+
+### Query Performance Optimization
+
+SLAF supports **index creation** for improved query performance on large datasets:
+
+**When to use indices:**
+
+- Datasets with 100k+ cells where query performance is important
+- When you plan to run frequent SQL queries on the data
+- For interactive analysis and exploration
+- **Trade-off**: Indices increase storage size but improve query speed
+
+**Index benefits:**
+
+- **Faster queries**: Indexed columns enable efficient range and equality queries
+- **Better performance**: Especially for filtering by cell_id, gene_id, or expression values
+- **Interactive analysis**: Enables responsive exploration of large datasets
 
 ## Current Support
 
@@ -136,6 +165,10 @@ slaf convert filtered_feature_bc_matrix.h5 output.slaf
 # Chunked conversion for large datasets
 slaf convert filtered_feature_bc_matrix/ output.slaf --chunked --chunk-size 5000
 slaf convert filtered_feature_bc_matrix.h5 output.slaf --chunked --chunk-size 10000
+
+# Convert with indices for query performance
+slaf convert filtered_feature_bc_matrix/ output.slaf --create-indices
+slaf convert filtered_feature_bc_matrix.h5 output.slaf --create-indices
 ```
 
 ### From AnnData
@@ -146,6 +179,9 @@ slaf convert data.h5ad output.slaf
 
 # Chunked conversion for large h5ad files
 slaf convert large_data.h5ad output.slaf --chunked --chunk-size 15000
+
+# Convert with indices for query performance
+slaf convert large_data.h5ad output.slaf --create-indices
 ```
 
 ### From Python
@@ -161,6 +197,12 @@ converter.convert("your_10x_file.h5", "output.slaf")
 
 # Chunked conversion for all formats
 converter = SLAFConverter(chunked=True, chunk_size=10000)
+converter.convert("large_data.h5ad", "output.slaf")
+converter.convert("large_10x_directory/", "output.slaf")
+converter.convert("large_10x_file.h5", "output.slaf")
+
+# Convert with indices for query performance
+converter = SLAFConverter(create_indices=True)
 converter.convert("large_data.h5ad", "output.slaf")
 converter.convert("large_10x_directory/", "output.slaf")
 converter.convert("large_10x_file.h5", "output.slaf")

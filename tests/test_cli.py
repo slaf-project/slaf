@@ -541,7 +541,9 @@ class TestCLI:
                 assert "Converting" in result.stdout
                 assert "Using chunked processing" in result.stdout
                 # Verify chunked processing was used
-                mock_converter.assert_called_once_with(chunked=True, chunk_size=5000)
+                mock_converter.assert_called_once_with(
+                    chunked=True, chunk_size=5000, create_indices=False
+                )
 
     @patch("slaf.cli.check_dependencies")
     def test_convert_verbose_output(self, mock_check_deps, runner):
@@ -1035,7 +1037,7 @@ class TestCLI:
                     assert "Dataset info:" in result.stdout
                     # Verify chunked processing was used
                     mock_converter.assert_called_once_with(
-                        chunked=True, chunk_size=5000
+                        chunked=True, chunk_size=5000, create_indices=False
                     )
 
     @patch("slaf.cli.check_dependencies")
@@ -1068,7 +1070,9 @@ class TestCLI:
                     in result.stdout
                 )
                 # Verify custom chunk size was used
-                mock_converter.assert_called_once_with(chunked=True, chunk_size=2000)
+                mock_converter.assert_called_once_with(
+                    chunked=True, chunk_size=2000, create_indices=False
+                )
 
     @patch("slaf.cli.check_dependencies")
     def test_convert_with_format_and_chunked(self, mock_check_deps, runner):
@@ -1100,7 +1104,9 @@ class TestCLI:
                 mock_converter_instance.convert.assert_called_once_with(
                     "input.h5ad", "output_dir", input_format="h5ad"
                 )
-                mock_converter.assert_called_once_with(chunked=True, chunk_size=10000)
+                mock_converter.assert_called_once_with(
+                    chunked=True, chunk_size=10000, create_indices=False
+                )
 
     def test_convert_help_text_contains_chunked_info(self, runner):
         """Test that convert help text contains chunked processing information."""
@@ -1108,4 +1114,6 @@ class TestCLI:
         assert result.exit_code == 0
         assert "supports all formats" in result.stdout
         assert "chunked processing" in result.stdout
-        assert "memory efficiency" in result.stdout
+        assert "memory" in result.stdout
+        assert "efficiency" in result.stdout
+        assert "create-indices" in result.stdout

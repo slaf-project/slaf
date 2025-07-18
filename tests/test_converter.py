@@ -1042,12 +1042,93 @@ class TestSLAFConverter:
             chunked_converter.convert_anndata(None, str(tmp_path / "output.slaf"))
 
     def test_converter_backward_compatibility(self, tmp_path):
-        """Test that non-chunked mode works as before"""
-        converter = SLAFConverter(chunked=False)
-
-        # Test that chunked mode is disabled
+        """Test that converter maintains backward compatibility"""
+        # This test ensures the simplified API still works
+        converter = SLAFConverter()
+        assert converter.use_integer_keys is True
         assert converter.chunked is False
-        assert converter.chunk_size == 1000  # Default value
+        assert converter.chunk_size == 1000
+        assert converter.sort_metadata is False
+        assert converter.create_indices is False
+
+    def test_compression_settings_default(self, tmp_path):
+        """Test that default compression settings are optimal for large datasets"""
+        converter = SLAFConverter()
+
+        # Test expression table settings
+        expression_settings = converter._get_compression_settings("expression")
+        assert expression_settings["max_rows_per_file"] == 10000000  # 10M
+        assert expression_settings["max_rows_per_group"] == 2000000  # 2M
+        assert (
+            expression_settings["max_bytes_per_file"] == 50 * 1024 * 1024 * 1024
+        )  # 50GB
+
+        # Test metadata table settings
+        metadata_settings = converter._get_compression_settings("metadata")
+        assert metadata_settings["max_rows_per_group"] == 200000  # 200K
+
+    def test_simplified_api_parameters(self, small_sample_adata, tmp_path):
+        """Test that the simplified API parameters work correctly"""
+        # Save sample data as h5ad
+        h5ad_path = tmp_path / "test.h5ad"
+        small_sample_adata.write(h5ad_path)
+
+        # Test default settings
+        converter = SLAFConverter()
+        output_path = tmp_path / "test_default.slaf"
+        converter.convert(str(h5ad_path), str(output_path))
+
+        # Verify files were created
+        assert (output_path / "expression.lance").exists()
+        assert (output_path / "cells.lance").exists()
+        assert (output_path / "genes.lance").exists()
+
+        # Test with indices enabled
+        converter_with_indices = SLAFConverter(create_indices=True)
+        output_path_with_indices = tmp_path / "test_with_indices.slaf"
+        converter_with_indices.convert(str(h5ad_path), str(output_path_with_indices))
+
+        # Verify files were created
+        assert (output_path_with_indices / "expression.lance").exists()
+        assert (output_path_with_indices / "cells.lance").exists()
+        assert (output_path_with_indices / "genes.lance").exists()
+
+    def test_string_ids_always_preserved(self, small_sample_adata, tmp_path):
+        """Test that string IDs are always preserved in the schema"""
+        # Save sample data as h5ad
+        h5ad_path = tmp_path / "test.h5ad"
+        small_sample_adata.write(h5ad_path)
+
+        # Convert with default settings
+        output_path = tmp_path / "test.slaf"
+        converter = SLAFConverter()
+        converter.convert(str(h5ad_path), str(output_path))
+
+        # Load expression table
+        expression_dataset = lance.dataset(output_path / "expression.lance")
+        expression_df = expression_dataset.to_table().to_pandas()
+
+        # Verify string IDs are always present
+        assert "cell_id" in expression_df.columns
+        assert "gene_id" in expression_df.columns
+
+        # Verify integer IDs are also present (default behavior)
+        assert "cell_integer_id" in expression_df.columns
+        assert "gene_integer_id" in expression_df.columns
+
+        # Verify string IDs contain the expected values
+        # Only cells with non-zero expression will be in the table
+        expected_cell_ids = [f"cell_{i}" for i in range(small_sample_adata.n_obs)]
+        actual_cell_ids = expression_df["cell_id"].unique()
+        # Check that all actual cell IDs are in the expected list
+        assert all(cell_id in expected_cell_ids for cell_id in actual_cell_ids)
+        # Check that we have the right number of unique cell IDs
+        assert len(actual_cell_ids) <= len(expected_cell_ids)
+
+        # Verify gene IDs match AnnData
+        expected_gene_ids = set(small_sample_adata.var.index)
+        actual_gene_ids = set(expression_df["gene_id"].unique())
+        assert actual_gene_ids == expected_gene_ids
 
     def test_expression_schema(self, tmp_path):
         """Test that expression schema is correct"""
