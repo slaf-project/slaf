@@ -63,6 +63,7 @@ class SLAFConverter:
         chunked: bool = False,
         chunk_size: int = 1000,
         sort_metadata: bool = False,
+        create_indices: bool = False,  # Disable indices by default for small datasets
     ):
         """
         Initialize converter with optimization options.
@@ -73,6 +74,9 @@ class SLAFConverter:
                              Set to False only if you need to preserve original string IDs.
             chunked: Use chunked processing for memory efficiency (no scanpy dependency).
             chunk_size: Size of each chunk when chunked=True.
+            create_indices: Whether to create indices for query performance.
+                          Default: False for small datasets to reduce storage overhead.
+                          Set to True for large datasets where query performance is important.
 
         Examples:
             >>> # Default optimization (recommended)
@@ -94,6 +98,7 @@ class SLAFConverter:
         self.chunked = chunked
         self.chunk_size = chunk_size
         self.sort_metadata = sort_metadata
+        self.create_indices = create_indices
 
     def convert(self, input_path: str, output_path: str, input_format: str = "auto"):
         """
@@ -361,15 +366,22 @@ class SLAFConverter:
                 self._expression_chunk_iterator_sorted_by_construction(reader)
             )
 
+            # Get optimal compression settings
+            compression_settings = self._get_compression_settings("expression")
+
             lance.write_dataset(
                 expression_iterator,
                 str(output_path_obj / "expression.lance"),
                 schema=self._get_expression_schema(),
                 mode="overwrite",
+                max_rows_per_file=compression_settings["max_rows_per_file"],
+                max_rows_per_group=compression_settings["max_rows_per_group"],
+                max_bytes_per_file=compression_settings["max_bytes_per_file"],
             )
 
-            # Create optimized indices
-            self._create_optimized_indices(output_path_obj)
+            # Create indices (if enabled)
+            if self.create_indices:
+                self._create_indices(output_path_obj)
 
             # Save config
             self._save_config(output_path_obj, (reader.n_obs, reader.n_vars))
@@ -431,11 +443,20 @@ class SLAFConverter:
             var_df, "gene_id", integer_mapping=gene_id_mapping
         )
 
+        # Get compression settings for metadata tables
+        metadata_settings = self._get_compression_settings("metadata")
+
         lance.write_dataset(
-            cell_metadata_table, str(output_path / "cells.lance"), mode="overwrite"
+            cell_metadata_table,
+            str(output_path / "cells.lance"),
+            mode="overwrite",
+            max_rows_per_group=metadata_settings["max_rows_per_group"],
         )
         lance.write_dataset(
-            gene_metadata_table, str(output_path / "genes.lance"), mode="overwrite"
+            gene_metadata_table,
+            str(output_path / "genes.lance"),
+            mode="overwrite",
+            max_rows_per_group=metadata_settings["max_rows_per_group"],
         )
 
     def _expression_chunk_iterator_sorted_by_construction(
@@ -491,23 +512,26 @@ class SLAFConverter:
                 f"Row index {coo_chunk.row.max()} is out of bounds for cell names array of length {len(chunk_cell_names)}"
             )
 
-        # Create arrays
-        cell_ids = chunk_cell_names[coo_chunk.row].astype(str)
-        gene_ids = chunk_gene_names[coo_chunk.col].astype(str)
-
         # Integer IDs are sequential within each chunk
         # This ensures natural sorting by (cell_integer_id, gene_integer_id)
         cell_integer_ids = (global_cell_offset + coo_chunk.row).astype(np.int32)
         gene_integer_ids = coo_chunk.col.astype(np.int32)
 
-        # Create table - naturally sorted by construction
+        # Expression values - always use float32
+        value_array = coo_chunk.data
+        value_dtype = np.float32
+
+        # Create table with string IDs for compatibility
+        cell_ids = chunk_cell_names[coo_chunk.row].astype(str)
+        gene_ids = chunk_gene_names[coo_chunk.col].astype(str)
+
         table = pa.table(
             {
                 "cell_id": pa.array(cell_ids),
                 "gene_id": pa.array(gene_ids),
                 "cell_integer_id": pa.array(cell_integer_ids),
                 "gene_integer_id": pa.array(gene_integer_ids),
-                "value": pa.array(coo_chunk.data.astype(np.float32)),
+                "value": pa.array(value_array.astype(value_dtype)),
             }
         )
 
@@ -524,56 +548,6 @@ class SLAFConverter:
                 ("value", pa.float32()),
             ]
         )
-
-    def _create_optimized_indices(self, output_path: Path):
-        """Create indices optimized for common query patterns"""
-        print("Creating optimized indices for query performance...")
-
-        # Expression table indices
-        expression_path = output_path / "expression.lance"
-        if expression_path.exists():
-            dataset = lance.dataset(str(expression_path))
-
-            # Primary indices for range queries
-            dataset.create_scalar_index("cell_integer_id", "BTREE")
-            dataset.create_scalar_index("gene_integer_id", "BTREE")
-
-            # Composite index for cell-gene lookups
-            # Note: Lance may not support composite indices yet, so we'll create individual indices
-            dataset.create_scalar_index("cell_integer_id", "BTREE")
-            dataset.create_scalar_index("gene_integer_id", "BTREE")
-
-            # String indices for exact matches
-            dataset.create_scalar_index("cell_id", "BTREE")
-            dataset.create_scalar_index("gene_id", "BTREE")
-
-        # Metadata table indices
-        for table_name in ["cells", "genes"]:
-            table_path = output_path / f"{table_name}.lance"
-            if table_path.exists():
-                dataset = lance.dataset(str(table_path))
-
-                # Integer ID indices for joins
-                integer_id_col = f"{table_name[:-1]}_integer_id"
-                if integer_id_col in dataset.schema.names:
-                    dataset.create_scalar_index(integer_id_col, "BTREE")
-
-                # Common metadata columns
-                common_columns = {
-                    "cells": [
-                        "cell_type",
-                        "batch",
-                        "total_counts",
-                        "n_genes_by_counts",
-                    ],
-                    "genes": ["highly_variable", "means", "dispersions"],
-                }
-
-                for col in common_columns.get(table_name, []):
-                    if col in dataset.schema.names:
-                        dataset.create_scalar_index(col, "BTREE")
-
-        print("Index creation complete!")
 
     def _create_id_mapping(self, entity_ids, entity_type: str) -> list[dict[str, Any]]:
         """Create mapping from original entity IDs to integer indices"""
@@ -593,16 +567,18 @@ class SLAFConverter:
         coo_matrix = sparse_matrix.tocoo()
         print(f"Processing {len(coo_matrix.data):,} non-zero elements...")
 
-        # Create string ID arrays
-        cell_id_array = np.array(cell_ids)[coo_matrix.row].astype(str)
-        gene_id_array = np.array(gene_ids)[coo_matrix.col].astype(str)
-
         # Create integer ID arrays for efficient range queries
         cell_integer_id_array = coo_matrix.row.astype(np.int32)
         gene_integer_id_array = coo_matrix.col.astype(np.int32)
 
-        # Expression values
+        # Expression values - always use float32
         value_array = coo_matrix.data
+        value_dtype = np.float32
+        value_type = pa.float32()
+
+        # Create string ID arrays
+        cell_id_array = np.array(cell_ids)[coo_matrix.row].astype(str)
+        gene_id_array = np.array(gene_ids)[coo_matrix.col].astype(str)
 
         # Check for nulls in string arrays
         if bool(np.any(pd.isnull(cell_id_array))) or bool(
@@ -610,17 +586,16 @@ class SLAFConverter:
         ):
             raise ValueError("Null values found in cell_id or gene_id arrays!")
 
+        # Create table with string IDs for compatibility
         table = pa.table(
             {
                 "cell_id": pa.array(cell_id_array, type=pa.string()),
                 "gene_id": pa.array(gene_id_array, type=pa.string()),
                 "cell_integer_id": pa.array(cell_integer_id_array, type=pa.int32()),
                 "gene_integer_id": pa.array(gene_integer_id_array, type=pa.int32()),
-                "value": pa.array(value_array, type=pa.float32()),
+                "value": pa.array(value_array.astype(value_dtype), type=value_type),
             }
         )
-
-        # Note: Removed debug print for production
 
         # Validate schema
         expected_types = {
@@ -628,9 +603,10 @@ class SLAFConverter:
             "gene_id": pa.string(),
             "cell_integer_id": pa.int32(),
             "gene_integer_id": pa.int32(),
-            "value": pa.float32(),
+            "value": value_type,
         }
 
+        # Validate schema
         for col, expected_type in expected_types.items():
             assert table.schema.field(col).type == expected_type, (
                 f"{col} is not {expected_type} type!"
@@ -638,6 +614,22 @@ class SLAFConverter:
             assert table.column(col).null_count == 0, f"Nulls found in {col} column!"
 
         return table
+
+    def _get_compression_settings(self, table_type: str = "expression"):
+        """Get optimal compression settings for high compression (write once, query infinitely)"""
+        if table_type == "expression":
+            # Expression tables benefit from very large groups due to sparsity
+            # Use maximum compression settings for massive datasets
+            return {
+                "max_rows_per_file": 10000000,  # 10M rows per file
+                "max_rows_per_group": 2000000,  # 2M rows per group for best compression
+                "max_bytes_per_file": 50 * 1024 * 1024 * 1024,  # 50GB limit
+            }
+        else:
+            # Metadata tables
+            return {
+                "max_rows_per_group": 200000,  # 200K rows per group for best compression
+            }
 
     def _create_metadata_table(
         self,
@@ -679,32 +671,47 @@ class SLAFConverter:
         """Write multiple Lance tables with consistent naming"""
         for table_name, table in table_configs:
             table_path = output_path / f"{table_name}.lance"
-            lance.write_dataset(table, str(table_path))
 
-        # Create indices after all tables are written
-        self._create_indices(output_path)
+            # Use optimized compression settings based on table type
+            if table_name == "expression":
+                compression_settings = self._get_compression_settings("expression")
+                lance.write_dataset(
+                    table,
+                    str(table_path),
+                    max_rows_per_file=compression_settings["max_rows_per_file"],
+                    max_rows_per_group=compression_settings["max_rows_per_group"],
+                    max_bytes_per_file=compression_settings["max_bytes_per_file"],
+                )
+            else:
+                # Metadata tables
+                compression_settings = self._get_compression_settings("metadata")
+                lance.write_dataset(
+                    table,
+                    str(table_path),
+                    max_rows_per_group=compression_settings["max_rows_per_group"],
+                )
+
+        # Create indices after all tables are written (if enabled)
+        if self.create_indices:
+            self._create_indices(output_path)
 
     def _create_indices(self, output_path: Path):
         """Create optimal indices for SLAF tables with column existence checks"""
         print("Creating indices for optimal query performance...")
 
         # Define desired indices for each table
+        # For small datasets, create fewer indices to reduce overhead
         table_indices = {
             "cells": [
                 "cell_id",
                 "cell_integer_id",
-                "cell_type",
-                "batch",
-                "total_counts",
-                "n_genes_by_counts",
+                # Only create metadata indices for larger datasets
             ],
-            "genes": ["gene_id", "gene_integer_id", "highly_variable"],
+            "genes": ["gene_id", "gene_integer_id"],
             "expression": [
-                "cell_id",
-                "gene_id",
                 "cell_integer_id",
                 "gene_integer_id",
-            ],
+            ],  # Only integer indices for efficiency
         }
 
         # Create indices for each table
