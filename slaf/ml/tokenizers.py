@@ -296,15 +296,17 @@ class SLAFTokenizer:
         sql = f"""
         WITH ranked_genes AS (
             SELECT
-                cell_id,
-                gene_id,
-                value,
+                c.cell_id,
+                g.gene_id,
+                e.value,
                 ROW_NUMBER() OVER (
-                    PARTITION BY cell_id
-                    ORDER BY value DESC, gene_id ASC
+                    PARTITION BY c.cell_id
+                    ORDER BY e.value DESC, g.gene_id ASC
                 ) as gene_rank
-            FROM expression
-            WHERE cell_integer_id BETWEEN {start} AND {end - 1}
+            FROM expression e
+            JOIN cells c ON e.cell_integer_id = c.cell_integer_id
+            JOIN genes g ON e.gene_integer_id = g.gene_integer_id
+            WHERE e.cell_integer_id BETWEEN {start} AND {end - 1}
         ),
         limited_genes AS (
             SELECT cell_id, gene_id, value, gene_rank
@@ -365,23 +367,25 @@ class SLAFTokenizer:
         sql = f"""
         WITH ranked_genes AS (
             SELECT
-                cell_id,
-                gene_id,
-                value,
+                c.cell_id,
+                g.gene_id,
+                e.value,
                 -- Calculate expression bin in SQL using window functions
                 LEAST(
                     {self.n_expression_bins - 1},
                     FLOOR(
-                        (ln(1 + value) - MIN(ln(1 + value)) OVER ()) * {self.n_expression_bins} /
-                        NULLIF(MAX(ln(1 + value)) OVER () - MIN(ln(1 + value)) OVER (), 0)
+                        (ln(1 + e.value) - MIN(ln(1 + e.value)) OVER ()) * {self.n_expression_bins} /
+                        NULLIF(MAX(ln(1 + e.value)) OVER () - MIN(ln(1 + e.value)) OVER (), 0)
                     )
                 ) as expr_bin,
                 ROW_NUMBER() OVER (
-                    PARTITION BY cell_id
-                    ORDER BY value DESC, gene_id ASC
+                    PARTITION BY c.cell_id
+                    ORDER BY e.value DESC, g.gene_id ASC
                 ) as gene_rank
-            FROM expression
-            WHERE cell_integer_id BETWEEN {start} AND {end - 1}
+            FROM expression e
+            JOIN cells c ON e.cell_integer_id = c.cell_integer_id
+            JOIN genes g ON e.gene_integer_id = g.gene_integer_id
+            WHERE e.cell_integer_id BETWEEN {start} AND {end - 1}
         )
         SELECT
             cell_id,
@@ -533,15 +537,17 @@ class SLAFTokenizer:
         sql = f"""
         WITH ranked_expression AS (
             SELECT
-                cell_id,
-                gene_id,
-                value,
+                c.cell_id,
+                g.gene_id,
+                e.value,
                 RANK() OVER (
-                    PARTITION BY cell_id
-                    ORDER BY value DESC, gene_id ASC
+                    PARTITION BY c.cell_id
+                    ORDER BY e.value DESC, g.gene_id ASC
                 ) as expression_rank
-            FROM expression
-            WHERE cell_integer_id BETWEEN {start} AND {end - 1}
+            FROM expression e
+            JOIN cells c ON e.cell_integer_id = c.cell_integer_id
+            JOIN genes g ON e.gene_integer_id = g.gene_integer_id
+            WHERE e.cell_integer_id BETWEEN {start} AND {end - 1}
         )
         SELECT
             cell_id,
@@ -584,15 +590,17 @@ class SLAFTokenizer:
         sql = f"""
         WITH cell_percentiles AS (
             SELECT
-                cell_id,
-                gene_id,
-                value,
+                c.cell_id,
+                g.gene_id,
+                e.value,
                 PERCENT_RANK() OVER (
-                    PARTITION BY cell_id
-                    ORDER BY value
+                    PARTITION BY c.cell_id
+                    ORDER BY e.value
                 ) * 100 as expr_percentile
-            FROM expression
-            WHERE cell_integer_id BETWEEN {start} AND {end - 1}
+            FROM expression e
+            JOIN cells c ON e.cell_integer_id = c.cell_integer_id
+            JOIN genes g ON e.gene_integer_id = g.gene_integer_id
+            WHERE e.cell_integer_id BETWEEN {start} AND {end - 1}
         ),
         filtered_genes AS (
             SELECT

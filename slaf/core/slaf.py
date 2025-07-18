@@ -569,8 +569,23 @@ class SLAFArray:
         # Convert to integer IDs
         integer_ids = self._normalize_entity_ids(cell_ids, "cell")
 
-        # Use optimized query strategy
-        sql = QueryOptimizer.build_optimized_query(integer_ids, "cell")
+        # Build query that joins with metadata tables to get string IDs
+        if not integer_ids:
+            return pd.DataFrame({"cell_id": [], "gene_id": [], "value": []})
+
+        # Use optimized query strategy but join with metadata tables
+        base_sql = QueryOptimizer.build_optimized_query(integer_ids, "cell")
+
+        # Wrap the base query to join with metadata tables
+        sql = f"""
+        SELECT
+            c.cell_id,
+            g.gene_id,
+            e.value
+        FROM ({base_sql}) e
+        JOIN cells c ON e.cell_integer_id = c.cell_integer_id
+        JOIN genes g ON e.gene_integer_id = g.gene_integer_id
+        """
 
         return self.query(sql)
 
@@ -616,8 +631,23 @@ class SLAFArray:
         # Convert to integer IDs
         integer_ids = self._normalize_entity_ids(gene_ids, "gene")
 
-        # Use optimized query strategy
-        sql = QueryOptimizer.build_optimized_query(integer_ids, "gene")
+        # Build query that joins with metadata tables to get string IDs
+        if not integer_ids:
+            return pd.DataFrame({"cell_id": [], "gene_id": [], "value": []})
+
+        # Use optimized query strategy but join with metadata tables
+        base_sql = QueryOptimizer.build_optimized_query(integer_ids, "gene")
+
+        # Wrap the base query to join with metadata tables
+        sql = f"""
+        SELECT
+            c.cell_id,
+            g.gene_id,
+            e.value
+        FROM ({base_sql}) e
+        JOIN cells c ON e.cell_integer_id = c.cell_integer_id
+        JOIN genes g ON e.gene_integer_id = g.gene_integer_id
+        """
 
         return self.query(sql)
 
@@ -686,12 +716,23 @@ class SLAFArray:
             Error: Cell selector out of bounds
         """
         # Use optimized query builder from QueryOptimizer
-        sql = QueryOptimizer.build_submatrix_query(
+        base_sql = QueryOptimizer.build_submatrix_query(
             cell_selector=cell_selector,
             gene_selector=gene_selector,
             cell_count=self.shape[0],
             gene_count=self.shape[1],
         )
+
+        # Wrap the base query to join with metadata tables
+        sql = f"""
+        SELECT
+            c.cell_id,
+            g.gene_id,
+            e.value
+        FROM ({base_sql}) e
+        JOIN cells c ON e.cell_integer_id = c.cell_integer_id
+        JOIN genes g ON e.gene_integer_id = g.gene_integer_id
+        """
 
         return self.query(sql)
 

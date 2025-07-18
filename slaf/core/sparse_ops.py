@@ -327,15 +327,9 @@ class LazySparseMixin:
             result_shape = self._get_result_shape(cell_selector, gene_selector)
             return scipy.sparse.csr_matrix(result_shape)
 
-        # Get integer IDs from in-memory obs/var
-        cell_ids = records["cell_id"].values
-        gene_ids = records["gene_id"].values
-        cell_integer_ids = self.slaf_array.obs.loc[cell_ids][
-            "cell_integer_id"
-        ].values.astype(np.int64)
-        gene_integer_ids = self.slaf_array.var.loc[gene_ids][
-            "gene_integer_id"
-        ].values.astype(np.int64)
+        # Get integer IDs directly from the expression table
+        cell_integer_ids = records["cell_integer_id"].values.astype(np.int64)
+        gene_integer_ids = records["gene_integer_id"].values.astype(np.int64)
         values = records["value"].values
 
         # Build output row indices

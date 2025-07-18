@@ -434,20 +434,24 @@ class LazyExpressionMatrix(LazySparseMixin):
         # Wrap the query to apply normalization
         return f"""
         SELECT
-            cell_id,
-            gene_id,
-            value * {factor_case} as value
-        FROM ({query}) as base_data
+            c.cell_id,
+            g.gene_id,
+            e.value * {factor_case} as value
+        FROM ({query}) as base_data e
+        JOIN cells c ON e.cell_integer_id = c.cell_integer_id
+        JOIN genes g ON e.gene_integer_id = g.gene_integer_id
         """
 
     def _apply_sql_log1p(self, query: str) -> str:
         """Apply log1p transformation in SQL, only to nonzero values (sparse semantics)"""
         return f"""
         SELECT
-            cell_id,
-            gene_id,
-            CASE WHEN value != 0 THEN LN(1 + value) ELSE 0 END as value
-        FROM ({query}) as base_data
+            c.cell_id,
+            g.gene_id,
+            CASE WHEN e.value != 0 THEN LN(1 + e.value) ELSE 0 END as value
+        FROM ({query}) as base_data e
+        JOIN cells c ON e.cell_integer_id = c.cell_integer_id
+        JOIN genes g ON e.gene_integer_id = g.gene_integer_id
         """
 
     def _apply_numpy_transformations(

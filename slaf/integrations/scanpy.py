@@ -64,12 +64,13 @@ class LazyPreprocessing:
         # Calculate cell-level metrics via SQL using simple aggregation (no JOINs)
         cell_qc_sql = """
         SELECT
-            cell_id,
-            COUNT(DISTINCT gene_id) as n_genes_by_counts,
-            SUM(value) as total_counts
-        FROM expression
-        GROUP BY cell_id
-        ORDER BY cell_id
+            c.cell_id,
+            COUNT(DISTINCT e.gene_integer_id) as n_genes_by_counts,
+            SUM(e.value) as total_counts
+        FROM expression e
+        JOIN cells c ON e.cell_integer_id = c.cell_integer_id
+        GROUP BY c.cell_id, c.cell_integer_id
+        ORDER BY c.cell_id
         """
 
         cell_qc = adata.slaf.query(cell_qc_sql)
@@ -82,12 +83,13 @@ class LazyPreprocessing:
         # Calculate gene-level metrics via SQL using simple aggregation (no JOINs)
         gene_qc_sql = """
         SELECT
-            gene_id,
-            COUNT(DISTINCT cell_id) AS n_cells_by_counts,
-            SUM(value) AS total_counts
-        FROM expression
-        GROUP BY gene_id
-        ORDER BY gene_id
+            g.gene_id,
+            COUNT(DISTINCT e.cell_integer_id) AS n_cells_by_counts,
+            SUM(e.value) AS total_counts
+        FROM expression e
+        JOIN genes g ON e.gene_integer_id = g.gene_integer_id
+        GROUP BY g.gene_id, g.gene_integer_id
+        ORDER BY g.gene_id
         """
 
         gene_qc = adata.slaf.query(gene_qc_sql)
@@ -231,17 +233,18 @@ class LazyPreprocessing:
 
         # Get filtered cell IDs using simple aggregation (no JOINs)
         filter_sql = f"""
-        SELECT cell_id
+        SELECT c.cell_id
         FROM (
             SELECT
-                cell_id,
-                COUNT(DISTINCT gene_id) as n_genes_by_counts,
-                SUM(value) as total_counts
-            FROM expression
-            GROUP BY cell_id
+                e.cell_integer_id,
+                COUNT(DISTINCT e.gene_integer_id) as n_genes_by_counts,
+                SUM(e.value) as total_counts
+            FROM expression e
+            GROUP BY e.cell_integer_id
         ) cell_stats
+        JOIN cells c ON cell_stats.cell_integer_id = c.cell_integer_id
         WHERE ({where_clause})
-        ORDER BY cell_id
+        ORDER BY c.cell_id
         """
 
         filtered_cells = adata.slaf.query(filter_sql)
@@ -344,17 +347,18 @@ class LazyPreprocessing:
 
         # Get filtered gene IDs using simple aggregation (no JOINs)
         filter_sql = f"""
-        SELECT gene_id
+        SELECT g.gene_id
         FROM (
             SELECT
-                gene_id,
-                COUNT(DISTINCT cell_id) AS n_cells_by_counts,
-                SUM(value) AS total_counts
-            FROM expression
-            GROUP BY gene_id
+                e.gene_integer_id,
+                COUNT(DISTINCT e.cell_integer_id) AS n_cells_by_counts,
+                SUM(e.value) AS total_counts
+            FROM expression e
+            GROUP BY e.gene_integer_id
         ) gene_stats
+        JOIN genes g ON gene_stats.gene_integer_id = g.gene_integer_id
         WHERE {where_clause}
-        ORDER BY gene_id
+        ORDER BY g.gene_id
         """
 
         filtered_genes = adata.slaf.query(filter_sql)
@@ -443,12 +447,13 @@ class LazyPreprocessing:
         # Get cell totals for normalization using only the expression table
         cell_totals_sql = """
         SELECT
-            cell_id,
-            SUM(value) as total_counts,
-            cell_integer_id
-        FROM expression
-        GROUP BY cell_id, cell_integer_id
-        ORDER BY cell_integer_id
+            c.cell_id,
+            SUM(e.value) as total_counts,
+            e.cell_integer_id
+        FROM expression e
+        JOIN cells c ON e.cell_integer_id = c.cell_integer_id
+        GROUP BY c.cell_id, e.cell_integer_id
+        ORDER BY e.cell_integer_id
         """
 
         cell_totals = adata.slaf.query(cell_totals_sql)
@@ -613,14 +618,15 @@ class LazyPreprocessing:
         # Calculate gene statistics via SQL using simple aggregation (no JOINs)
         stats_sql = """
         SELECT
-            gene_id,
-            COUNT(DISTINCT cell_id) AS n_cells,
-            AVG(value) AS mean_expr,
-            VARIANCE(value) AS variance,
-            CASE WHEN AVG(value) > 0 THEN VARIANCE(value) / AVG(value) ELSE 0 END as dispersion
-        FROM expression
-        GROUP BY gene_id
-        ORDER BY gene_id
+            g.gene_id,
+            COUNT(DISTINCT e.cell_integer_id) AS n_cells,
+            AVG(e.value) AS mean_expr,
+            VARIANCE(e.value) AS variance,
+            CASE WHEN AVG(e.value) > 0 THEN VARIANCE(e.value) / AVG(e.value) ELSE 0 END as dispersion
+        FROM expression e
+        JOIN genes g ON e.gene_integer_id = g.gene_integer_id
+        GROUP BY g.gene_id, g.gene_integer_id
+        ORDER BY g.gene_id
         """
 
         gene_stats = adata.slaf.query(stats_sql)
