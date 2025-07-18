@@ -208,7 +208,7 @@ class TestSLAFArray:
             c.cell_type,
             COUNT(e.value) as expressed_genes
         FROM cells c
-        LEFT JOIN expression e ON c.cell_id = e.cell_id
+        LEFT JOIN expression e ON c.cell_integer_id = e.cell_integer_id
         GROUP BY c.cell_id, c.cell_type
         LIMIT 5
         """

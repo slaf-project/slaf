@@ -133,17 +133,18 @@ class TestLazyPreprocessingCorrectness:
         # by checking the cell metadata directly using the correct table structure
         cell_qc = lazy_adata.slaf.query(
             f"""
-            SELECT cell_id, total_counts, n_genes_by_counts
+            SELECT c.cell_id, e.total_counts, e.n_genes_by_counts
             FROM (
                 SELECT
-                    cell_id,
-                    COUNT(DISTINCT gene_id) as n_genes_by_counts,
+                    cell_integer_id,
+                    COUNT(DISTINCT gene_integer_id) as n_genes_by_counts,
                     SUM(value) as total_counts
                 FROM expression
-                GROUP BY cell_id
-            ) cell_stats
-            WHERE total_counts >= {min_counts} AND n_genes_by_counts >= {min_genes}
-            ORDER BY cell_id
+                GROUP BY cell_integer_id
+            ) e
+            JOIN cells c ON e.cell_integer_id = c.cell_integer_id
+            WHERE e.total_counts >= {min_counts} AND e.n_genes_by_counts >= {min_genes}
+            ORDER BY c.cell_id
         """
         )
 

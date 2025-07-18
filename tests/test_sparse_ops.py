@@ -310,8 +310,8 @@ class TestLazySparseMixin:
 
         records = pd.DataFrame(
             {
-                "cell_id": ["cell_0", "cell_1", "cell_2"],
-                "gene_id": ["gene_0", "gene_1", "gene_2"],
+                "cell_integer_id": [0, 1, 2],
+                "gene_integer_id": [0, 1, 2],
                 "value": [1.0, 2.0, 3.0],
             }
         )
