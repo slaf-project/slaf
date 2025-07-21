@@ -2226,6 +2226,20 @@ wheels = [
 ]
 
 [[package]]
+name = "polars-lts-cpu"
+version = "1.31.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/fb/d5/198c77abe78c06af8768f71eecbd8714b2930a0da97eaf4d5aebe8f757a8/polars_lts_cpu-1.31.0.tar.gz", hash = "sha256:574a7b077aa5f71add4a099d491a28b31e9ec72e020b27b1c9731fc9a638280a", size = 4680376 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9c/ac/1e7cde190510d49725539bfd9a261c99413980717f5d8aca5b2f397f9966/polars_lts_cpu-1.31.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:f699d5ab25781a116adb7288a7d34b333626014b37d61c75f700db201da5aa30", size = 34202968 },
+    { url = "https://files.pythonhosted.org/packages/a9/bf/81b2d7ad1c96ada39ff3a46b433e012838b2fbc9b680faed60a7816ce34a/polars_lts_cpu-1.31.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:7c63d36eca8f534662eaf92fc80217e6821183d609ceff24029473b9c4d0cd18", size = 31377827 },
+    { url = "https://files.pythonhosted.org/packages/1f/16/7d2aae57715b879aa3b415f487764aa5ec20ca942aa1fb6dea13d00e37ff/polars_lts_cpu-1.31.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:81870f8bf27258d34bd474bc5b9213534834a647e39f4e18b4aa49600356f982", size = 34733404 },
+    { url = "https://files.pythonhosted.org/packages/d3/4d/fbd9e8bfa8af55472b14f1700ac40bc5f06b0bd24caa2cefc2c808b2fe07/polars_lts_cpu-1.31.0-cp39-abi3-manylinux_2_24_aarch64.whl", hash = "sha256:9cea1c270b080aa5215d64d14ec251e643525f386fb669d064dea6176f45e533", size = 32260917 },
+    { url = "https://files.pythonhosted.org/packages/1f/a3/8f1886f8eb435f8d56db5ca4989543a5d11f050238aee440670b51f1a108/polars_lts_cpu-1.31.0-cp39-abi3-win_amd64.whl", hash = "sha256:a639c014fca4a497b24c5e16d6aabe3f9d29ddd8169d6d9aea87483138b5ece0", size = 35071460 },
+    { url = "https://files.pythonhosted.org/packages/57/d0/d6a9ec099bfc7520e8bba2efcf6a2876a3d79c453dce8c4dbbde3564e31c/polars_lts_cpu-1.31.0-cp39-abi3-win_arm64.whl", hash = "sha256:5e9583f21ebfa7a6e36e2527d64416a3f2892f957c68fd3adbc5516fd96eacdb", size = 31469156 },
+]
+
+[[package]]
 name = "pre-commit"
 version = "4.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2907,6 +2921,7 @@ dependencies = [
     { name = "numpy" },
     { name = "orjson" },
     { name = "pandas" },
+    { name = "polars-lts-cpu" },
     { name = "pyarrow" },
     { name = "pylance" },
     { name = "requests" },
@@ -2987,6 +3002,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.2.0" },
     { name = "orjson", specifier = ">=3.10.15" },
     { name = "pandas", specifier = ">=2.3.0" },
+    { name = "polars-lts-cpu", specifier = ">=1.31.0" },
     { name = "psutil", marker = "extra == 'dev'", specifier = ">=6.0.0" },
     { name = "pyarrow", specifier = ">=20.0.0" },
     { name = "pylance", specifier = ">=0.30.0" },
