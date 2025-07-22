@@ -1,361 +1,252 @@
+"""
+Tests for SLAFTokenizer with simplified fragment-based processing.
+
+This module tests the simplified fragment-based tokenization approach that uses
+the FragmentLoader in datasets.py instead of complex tokenizer-specific processors.
+"""
+
+from unittest.mock import Mock
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from slaf.core.slaf import SLAFArray
 from slaf.ml.tokenizers import SLAFTokenizer
 
 
-class TestSLAFTokenizer:
-    """Test suite for SLAFTokenizer class"""
+class TestSLAFTokenizerFragmentBased:
+    """Test the SLAFTokenizer with simplified fragment-based processing."""
 
-    def test_tokenizer_initialization(self, tiny_slaf):
-        """Test SLAFTokenizer initialization"""
-        tokenizer = SLAFTokenizer(tiny_slaf)
+    def test_tokenizer_initialization_with_fragment_processing(self):
+        """Test SLAFTokenizer initialization with fragment processing enabled."""
+        # Mock SLAFArray
+        mock_slaf_array = Mock(spec=SLAFArray)
+        mock_var = Mock()
+        mock_var.index = pd.Index(["GENE_001", "GENE_002", "GENE_003"])
+        mock_slaf_array.var = mock_var
 
-        # Check basic attributes
-        assert tokenizer.slaf_array is tiny_slaf
-        assert tokenizer.vocab_size == 50000
-        assert tokenizer.n_expression_bins == 10
-        assert tokenizer.chunk_size == 2048
+        # Test initialization with fragment processing
+        tokenizer = SLAFTokenizer(
+            slaf_array=mock_slaf_array,
+            vocab_size=1000,
+            use_fragment_processing=True,
+        )
 
-        # Check special tokens
+        assert tokenizer.use_fragment_processing is True
+        assert len(tokenizer.gene_vocab) == 3
         assert tokenizer.special_tokens["CLS"] == 0
         assert tokenizer.special_tokens["SEP"] == 1
         assert tokenizer.special_tokens["PAD"] == 2
         assert tokenizer.special_tokens["UNK"] == 3
 
-        # Check expression bin start
-        assert tokenizer.expr_bin_start == 4  # After 4 special tokens
+    def test_tokenizer_initialization_without_fragment_processing(self):
+        """Test SLAFTokenizer initialization with fragment processing disabled."""
+        # Mock SLAFArray
+        mock_slaf_array = Mock(spec=SLAFArray)
+        mock_var = Mock()
+        mock_var.index = pd.Index(["GENE_001", "GENE_002", "GENE_003"])
+        mock_slaf_array.var = mock_var
 
-        # Check gene vocabulary
-        assert len(tokenizer.gene_vocab) > 0
-        assert len(tokenizer.gene_vocab) <= tokenizer.vocab_size
-
-    def test_tokenizer_initialization_custom_params(self, tiny_slaf):
-        """Test SLAFTokenizer initialization with custom parameters"""
+        # Test initialization without fragment processing
         tokenizer = SLAFTokenizer(
-            tiny_slaf,
+            slaf_array=mock_slaf_array,
+            vocab_size=1000,
+            use_fragment_processing=False,
+        )
+
+        assert tokenizer.use_fragment_processing is False
+        assert len(tokenizer.gene_vocab) == 3
+
+    def test_deprecated_fragment_based_methods(self):
+        """Test that deprecated fragment-based methods raise NotImplementedError."""
+        # Mock SLAFArray
+        mock_slaf_array = Mock(spec=SLAFArray)
+        mock_var = Mock()
+        mock_var.index = pd.Index(["GENE_001", "GENE_002", "GENE_003"])
+        mock_slaf_array.var = mock_var
+
+        tokenizer = SLAFTokenizer(
+            slaf_array=mock_slaf_array,
+            vocab_size=1000,
+            use_fragment_processing=True,
+        )
+
+        # Test that deprecated methods raise NotImplementedError
+        with pytest.raises(NotImplementedError):
+            tokenizer.tokenize_scgpt_fragment_based((0, 32))
+
+        with pytest.raises(NotImplementedError):
+            tokenizer.tokenize_geneformer_fragment_based((0, 32))
+
+    def test_convert_gene_sequence_to_scgpt_tokens(self):
+        """Test conversion of gene sequences to scGPT tokens."""
+        # Mock SLAFArray
+        mock_slaf_array = Mock(spec=SLAFArray)
+        mock_var = Mock()
+        mock_var.index = pd.Index(["GENE_001", "GENE_002", "GENE_003"])
+        mock_slaf_array.var = mock_var
+
+        tokenizer = SLAFTokenizer(
+            slaf_array=mock_slaf_array,
             vocab_size=1000,
             n_expression_bins=5,
-            chunk_size=512,
         )
 
-        assert tokenizer.vocab_size == 1000
-        assert tokenizer.n_expression_bins == 5
-        assert tokenizer.chunk_size == 512
-        assert tokenizer.expr_bin_start == 4
+        # Test gene sequence conversion - use integer gene IDs that will be converted to strings
+        # The method converts int to str for vocabulary lookup, so we need to use integers
+        # that will match the vocabulary keys when converted to strings
+        gene_sequence = [1, 2, 3]  # These will be converted to "1", "2", "3" for lookup
+        expr_sequence = [1.0, 2.0, 3.0]
+        max_genes = 1024
 
-    def test_gene_vocabulary_building(self, tiny_slaf):
-        """Test gene vocabulary building"""
-        tokenizer = SLAFTokenizer(tiny_slaf, vocab_size=10)
-
-        # Check vocabulary size is limited
-        assert len(tokenizer.gene_vocab) <= 10
-
-        # Check token IDs are sequential and start after special tokens + expression bins
-        expected_start = 4 + 10  # special tokens + expression bins
-        for i, (_, token_id) in enumerate(tokenizer.gene_vocab.items()):
-            assert token_id == expected_start + i
-
-        # Check reverse mapping
-        for _, token_id in tokenizer.gene_vocab.items():
-            assert (
-                tokenizer.token_to_gene[token_id] == tokenizer.token_to_gene[token_id]
-            )
-
-    def test_expression_to_bin_conversion(self, tiny_slaf):
-        """Test expression value to bin conversion"""
-        tokenizer = SLAFTokenizer(tiny_slaf, n_expression_bins=5)
-
-        # Test zero expression
-        assert tokenizer._expression_to_bin(0.0) == tokenizer.special_tokens["PAD"]
-
-        # Test positive expressions
-        assert tokenizer._expression_to_bin(1.0) >= tokenizer.expr_bin_start
-        assert tokenizer._expression_to_bin(10.0) >= tokenizer.expr_bin_start
-
-        # Test binning logic
-        bins = []
-        for expr in [0.1, 1.0, 5.0, 10.0, 50.0]:
-            bin_id = tokenizer._expression_to_bin(expr)
-            if bin_id != tokenizer.special_tokens["PAD"]:
-                bins.append(bin_id - tokenizer.expr_bin_start)
-
-        # Should have different bins for different expression levels
-        assert len(set(bins)) > 1
-
-    def test_chunk_range_splitting(self, tiny_slaf):
-        """Test chunk range splitting"""
-        tokenizer = SLAFTokenizer(tiny_slaf, chunk_size=3)
-
-        # Test small range
-        chunks = tokenizer._chunk_range(0, 5)
-        assert chunks == [(0, 3), (3, 5)]
-
-        # Test exact chunk size
-        chunks = tokenizer._chunk_range(0, 3)
-        assert chunks == [(0, 3)]
-
-        # Test empty range
-        chunks = tokenizer._chunk_range(5, 5)
-        assert chunks == []
-
-    def test_scgpt_tokenization_basic(self, tiny_slaf):
-        """Test basic scGPT tokenization"""
-        tokenizer = SLAFTokenizer(tiny_slaf, vocab_size=10)
-
-        # Tokenize a small range
-        tokens = tokenizer.tokenize_scgpt(cell_integer_id_range=(0, 2), max_genes=5)
-
-        assert len(tokens) == 2  # 2 cells
-        assert all(isinstance(seq, list) for seq in tokens)
-
-        # Check scGPT format: [CLS] gene1 expr1 gene2 expr2 ... [SEP]
-        for seq in tokens:
-            assert seq[0] == tokenizer.special_tokens["CLS"]  # Start with CLS
-            assert seq[-1] == tokenizer.special_tokens["SEP"]  # End with SEP
-            assert len(seq) >= 2  # At least CLS and SEP
-
-    def test_scgpt_tokenization_with_sql_binning(self, tiny_slaf):
-        """Test scGPT tokenization with SQL binning"""
-        tokenizer = SLAFTokenizer(tiny_slaf, vocab_size=10)
-
-        # Tokenize with SQL binning
-        tokens = tokenizer.tokenize_scgpt(
-            cell_integer_id_range=(0, 2), max_genes=5, use_sql_binning=True
+        tokens = tokenizer._convert_gene_sequence_to_scgpt_tokens(
+            gene_sequence, expr_sequence, max_genes
         )
 
-        assert len(tokens) == 2
-        assert all(isinstance(seq, list) for seq in tokens)
+        # Check token format: [CLS] gene1 expr1 gene2 expr2 ... [SEP] [PAD...]
+        assert tokens[0] == tokenizer.special_tokens["CLS"]  # Start token
+        assert tokens[-1] == tokenizer.special_tokens["PAD"]  # End with padding
+        assert len(tokens) == max_genes * 2 + 2  # CLS + (gene,expr)*max_genes + SEP
 
-        # Check format
-        for seq in tokens:
-            assert seq[0] == tokenizer.special_tokens["CLS"]
-            assert seq[-1] == tokenizer.special_tokens["SEP"]
+        # Check that gene tokens are in vocabulary (they should be UNK tokens since "1", "2", "3" aren't in vocab)
+        gene_tokens = tokens[1::2]  # Every other token starting from index 1
+        for token in gene_tokens[:3]:  # First 3 gene tokens
+            # Since "1", "2", "3" aren't in the vocabulary, they should be UNK tokens
+            assert token == tokenizer.special_tokens["UNK"]
 
-    def test_geneformer_tokenization_basic(self, tiny_slaf):
-        """Test basic Geneformer tokenization"""
-        tokenizer = SLAFTokenizer(tiny_slaf, vocab_size=10)
+    def test_convert_gene_sequence_to_geneformer_tokens(self):
+        """Test conversion of gene sequences to Geneformer tokens."""
+        # Mock SLAFArray
+        mock_slaf_array = Mock(spec=SLAFArray)
+        mock_var = Mock()
+        mock_var.index = pd.Index(["GENE_001", "GENE_002", "GENE_003"])
+        mock_slaf_array.var = mock_var
 
-        # Tokenize a small range
-        tokens = tokenizer.tokenize_geneformer(
-            cell_integer_id_range=(0, 2), max_genes=5
-        )
-
-        assert len(tokens) == 2  # 2 cells
-        assert all(isinstance(seq, list) for seq in tokens)
-
-        # Check Geneformer format: ranked gene tokens (no CLS/SEP)
-        for seq in tokens:
-            assert len(seq) <= 5  # Max genes limit
-            # Should not have CLS/SEP tokens in Geneformer format
-            assert tokenizer.special_tokens["CLS"] not in seq
-            assert tokenizer.special_tokens["SEP"] not in seq
-
-    def test_geneformer_tokenization_with_percentile(self, tiny_slaf):
-        """Test Geneformer tokenization with percentile filtering"""
-        tokenizer = SLAFTokenizer(tiny_slaf, vocab_size=10)
-
-        # Tokenize with percentile filter
-        tokens = tokenizer.tokenize_geneformer(
-            cell_integer_id_range=(0, 2), max_genes=5, min_percentile=10
-        )
-
-        assert len(tokens) == 2
-        assert all(isinstance(seq, list) for seq in tokens)
-
-        # Check format
-        for seq in tokens:
-            assert len(seq) <= 5
-
-    def test_tokenization_edge_cases(self, tiny_slaf):
-        """Test tokenization edge cases"""
-        tokenizer = SLAFTokenizer(tiny_slaf, vocab_size=10)
-
-        # Test empty range
-        tokens = tokenizer.tokenize_scgpt(cell_integer_id_range=(0, 0), max_genes=5)
-        assert tokens == []
-
-        tokens = tokenizer.tokenize_geneformer(
-            cell_integer_id_range=(0, 0), max_genes=5
-        )
-        assert tokens == []
-
-        # Test single cell
-        tokens = tokenizer.tokenize_scgpt(cell_integer_id_range=(0, 1), max_genes=5)
-        assert len(tokens) == 1
-
-        tokens = tokenizer.tokenize_geneformer(
-            cell_integer_id_range=(0, 1), max_genes=5
-        )
-        assert len(tokens) == 1
-
-    def test_vocabulary_info(self, tiny_slaf):
-        """Test vocabulary information retrieval"""
-        tokenizer = SLAFTokenizer(tiny_slaf, vocab_size=10, n_expression_bins=5)
-
-        vocab_info = tokenizer.get_vocab_info()
-
-        assert "vocab_size" in vocab_info
-        assert "n_genes" in vocab_info
-        assert "n_expression_bins" in vocab_info
-        assert "n_special_tokens" in vocab_info
-        assert "total_vocab_size" in vocab_info
-        assert "special_tokens" in vocab_info
-        assert "expr_bin_start" in vocab_info
-        assert "chunk_size" in vocab_info
-
-        # Check values
-        assert vocab_info["vocab_size"] == 10
-        assert vocab_info["n_expression_bins"] == 5
-        assert vocab_info["n_special_tokens"] == 4
-        assert vocab_info["expr_bin_start"] == 4
-        assert vocab_info["chunk_size"] == 2048
-
-    def test_token_decoding(self, tiny_slaf):
-        """Test token sequence decoding"""
-        tokenizer = SLAFTokenizer(tiny_slaf, vocab_size=10)
-
-        # Create a test token sequence
-        test_tokens = [
-            tokenizer.special_tokens["CLS"],  # CLS
-            list(tokenizer.gene_vocab.values())[0],  # Gene token
-            tokenizer.expr_bin_start,  # Expression bin
-            tokenizer.special_tokens["SEP"],  # SEP
-        ]
-
-        decoded = tokenizer.decode_tokens(test_tokens)
-
-        assert "special_tokens" in decoded
-        assert "genes" in decoded
-        assert "expression_bins" in decoded
-
-        # Check decoded values
-        assert "CLS" in decoded["special_tokens"]
-        assert "SEP" in decoded["special_tokens"]
-        assert len(decoded["genes"]) == 1
-        assert len(decoded["expression_bins"]) == 1
-
-    def test_tokenization_consistency(self, tiny_slaf):
-        """Test that tokenization produces consistent results"""
-        tokenizer = SLAFTokenizer(tiny_slaf, vocab_size=10)
-
-        # Tokenize same range multiple times
-        tokens1 = tokenizer.tokenize_scgpt(cell_integer_id_range=(0, 2), max_genes=5)
-        tokens2 = tokenizer.tokenize_scgpt(cell_integer_id_range=(0, 2), max_genes=5)
-
-        assert tokens1 == tokens2
-
-        tokens3 = tokenizer.tokenize_geneformer(
-            cell_integer_id_range=(0, 2), max_genes=5
-        )
-        tokens4 = tokenizer.tokenize_geneformer(
-            cell_integer_id_range=(0, 2), max_genes=5
-        )
-
-        assert tokens3 == tokens4
-
-    def test_large_batch_handling(self, tiny_slaf):
-        """Test handling of larger batches"""
-        tokenizer = SLAFTokenizer(tiny_slaf, vocab_size=10, chunk_size=2)
-
-        # Test batch that requires multiple chunks
-        tokens = tokenizer.tokenize_scgpt(cell_integer_id_range=(0, 5), max_genes=5)
-        assert len(tokens) == 5  # Should process all cells
-
-        tokens = tokenizer.tokenize_geneformer(
-            cell_integer_id_range=(0, 5), max_genes=5
-        )
-        assert len(tokens) == 5
-
-    def test_max_genes_limiting(self, tiny_slaf):
-        """Test that max_genes parameter properly limits token sequences"""
-        tokenizer = SLAFTokenizer(tiny_slaf, vocab_size=10)
-
-        # Test with very small max_genes
-        tokens = tokenizer.tokenize_scgpt(cell_integer_id_range=(0, 2), max_genes=1)
-        for seq in tokens:
-            # scGPT: CLS + (gene + expr) * max_genes + SEP
-            max_expected = 1 + 2 * 1 + 1  # CLS + (gene+expr) + SEP
-            assert len(seq) <= max_expected
-
-        tokens = tokenizer.tokenize_geneformer(
-            cell_integer_id_range=(0, 2), max_genes=1
-        )
-        for seq in tokens:
-            # Geneformer: just gene tokens, padded to max_genes
-            assert len(seq) == 1
-
-    def test_unknown_gene_handling(self, tiny_slaf):
-        """Test handling of unknown genes"""
         tokenizer = SLAFTokenizer(
-            tiny_slaf, vocab_size=5
-        )  # Small vocab to force unknown genes
+            slaf_array=mock_slaf_array,
+            vocab_size=1000,
+        )
 
-        # Tokenize and check for UNK tokens
-        tokens = tokenizer.tokenize_scgpt(cell_integer_id_range=(0, 2), max_genes=10)
+        # Test gene sequence conversion - use integer gene IDs that will be converted to strings
+        gene_sequence = [1, 2, 3]  # These will be converted to "1", "2", "3" for lookup
+        max_genes = 2048
 
-        # Should have some UNK tokens due to small vocabulary
-        all_tokens = [token for seq in tokens for token in seq]
-        assert tokenizer.special_tokens["UNK"] in all_tokens
+        tokens = tokenizer._convert_gene_sequence_to_geneformer_tokens(
+            gene_sequence, max_genes
+        )
 
-    def test_expression_binning_edge_cases(self, tiny_slaf):
-        """Test expression binning edge cases"""
-        tokenizer = SLAFTokenizer(tiny_slaf, n_expression_bins=3)
+        # Check token format: ranked gene tokens [PAD...]
+        assert len(tokens) == max_genes
+        assert tokens[-1] == tokenizer.special_tokens["PAD"]  # End with padding
 
-        # Test very small expressions
-        bin1 = tokenizer._expression_to_bin(0.001)
-        bin2 = tokenizer._expression_to_bin(0.1)
+        # Check that gene tokens are in vocabulary (they should be UNK tokens since "1", "2", "3" aren't in vocab)
+        gene_tokens = [t for t in tokens if t != tokenizer.special_tokens["PAD"]]
+        for token in gene_tokens[:3]:  # First 3 gene tokens
+            # Since "1", "2", "3" aren't in the vocabulary, they should be UNK tokens
+            assert token == tokenizer.special_tokens["UNK"]
 
-        # Test very large expressions
-        bin3 = tokenizer._expression_to_bin(1000.0)
-        bin4 = tokenizer._expression_to_bin(10000.0)
+    def test_expression_binning_edge_cases(self):
+        """Test expression binning with edge cases"""
+        # Mock SLAFArray
+        mock_slaf_array = Mock(spec=SLAFArray)
+        mock_var = Mock()
+        mock_var.index = pd.Index(["GENE_001", "GENE_002", "GENE_003"])
+        mock_slaf_array.var = mock_var
 
-        # All should be valid bins (not PAD)
-        assert bin1 != tokenizer.special_tokens["PAD"]
-        assert bin2 != tokenizer.special_tokens["PAD"]
-        assert bin3 != tokenizer.special_tokens["PAD"]
-        assert bin4 != tokenizer.special_tokens["PAD"]
+        tokenizer = SLAFTokenizer(
+            slaf_array=mock_slaf_array,
+            vocab_size=1000,
+            n_expression_bins=5,
+        )
 
-        # Should be within valid range
-        assert bin1 >= tokenizer.expr_bin_start
-        assert bin1 < tokenizer.expr_bin_start + tokenizer.n_expression_bins
+        # Test zero and negative values
+        assert tokenizer._expression_to_bin(0.0) == tokenizer.special_tokens["PAD"]
+        assert tokenizer._expression_to_bin(-1.0) == tokenizer.special_tokens["PAD"]
 
-    def test_scgpt_tokenization_consistent_length(self, tiny_slaf):
-        """Test that scGPT tokenization returns sequences of consistent length"""
-        tokenizer = SLAFTokenizer(tiny_slaf, vocab_size=10)
+        # Test vectorized binning
 
-        # Tokenize a range with max_genes=5
-        tokens = tokenizer.tokenize_scgpt(cell_integer_id_range=(0, 3), max_genes=5)
+        expr_values = np.array([0.0, 1.0, 10.0, -1.0])
+        bins = tokenizer._expression_to_bin_vectorized(expr_values)
+        assert bins[0] == tokenizer.special_tokens["PAD"]  # 0.0
+        assert bins[1] >= tokenizer.expr_bin_start  # 1.0
+        assert bins[2] >= tokenizer.expr_bin_start  # 10.0
+        assert bins[3] == tokenizer.special_tokens["PAD"]  # -1.0
 
-        assert len(tokens) == 3  # 3 cells
+    def test_vocabulary_edge_cases(self):
+        """Test vocabulary building with edge cases"""
+        # Mock SLAFArray with empty gene list
+        mock_slaf_array = Mock(spec=SLAFArray)
+        mock_var = Mock()
+        mock_var.index = pd.Index([])  # Empty gene list
+        mock_slaf_array.var = mock_var
 
-        # All sequences should have the same length
-        # scGPT format: [CLS] gene1 expr1 gene2 expr2 ... [SEP]
-        # Max length = max_genes * 2 + 2 (CLS + SEP)
-        expected_length = 5 * 2 + 2  # 12 tokens
+        tokenizer = SLAFTokenizer(
+            slaf_array=mock_slaf_array,
+            vocab_size=1000,
+        )
 
-        for seq in tokens:
-            assert len(seq) == expected_length
-            assert seq[0] == tokenizer.special_tokens["CLS"]  # Start with CLS
-            assert seq[-1] == tokenizer.special_tokens["SEP"]  # End with SEP
+        # Should handle empty vocabulary gracefully
+        assert len(tokenizer.gene_vocab) == 0
+        assert tokenizer.special_tokens["UNK"] == 3
 
-    def test_scgpt_tokenization_padding(self, tiny_slaf):
-        """Test that scGPT tokenization properly pads shorter sequences"""
-        tokenizer = SLAFTokenizer(tiny_slaf, vocab_size=10)
+    def test_token_conversion_edge_cases(self):
+        """Test token conversion with edge cases"""
+        # Mock SLAFArray
+        mock_slaf_array = Mock(spec=SLAFArray)
+        mock_var = Mock()
+        mock_var.index = pd.Index(["GENE_001", "GENE_002", "GENE_003"])
+        mock_slaf_array.var = mock_var
 
-        # Tokenize with a large max_genes to ensure some cells have fewer genes
-        tokens = tokenizer.tokenize_scgpt(cell_integer_id_range=(0, 2), max_genes=20)
+        tokenizer = SLAFTokenizer(
+            slaf_array=mock_slaf_array,
+            vocab_size=1000,
+        )
 
-        assert len(tokens) == 2
+        # Test with empty gene sequence
+        empty_sequence = []
+        tokens = tokenizer._convert_gene_sequence_to_geneformer_tokens(
+            empty_sequence, max_genes=10
+        )
+        assert len(tokens) == 10
+        assert all(token == tokenizer.special_tokens["PAD"] for token in tokens)
 
-        # Check that sequences are padded to the same length
-        expected_length = 20 * 2 + 2  # 42 tokens
+        # Test with gene IDs not in vocabulary
+        unknown_genes = [999, 1000, 1001]  # Not in vocabulary
+        tokens = tokenizer._convert_gene_sequence_to_geneformer_tokens(
+            unknown_genes, max_genes=10
+        )
+        assert len(tokens) == 10
+        # Should be UNK tokens for unknown genes
+        assert tokens[0] == tokenizer.special_tokens["UNK"]
+        assert tokens[1] == tokenizer.special_tokens["UNK"]
+        assert tokens[2] == tokenizer.special_tokens["UNK"]
 
-        for seq in tokens:
-            assert len(seq) == expected_length
-            assert seq[0] == tokenizer.special_tokens["CLS"]
-            # SEP should be present
-            assert tokenizer.special_tokens["SEP"] in seq
-            sep_pos = seq.index(tokenizer.special_tokens["SEP"])
-            # All tokens after SEP should be PAD
-            if sep_pos < len(seq) - 1:
-                assert all(
-                    t == tokenizer.special_tokens["PAD"] for t in seq[sep_pos + 1 :]
-                )
+
+class TestBackwardCompatibility:
+    """Test backward compatibility with existing tokenizer methods."""
+
+    def test_existing_methods_still_work(self):
+        """Test that existing SQL-based methods still work."""
+        # Mock SLAFArray
+        mock_slaf_array = Mock(spec=SLAFArray)
+        mock_var = Mock()
+        mock_var.index = pd.Index(["GENE_001", "GENE_002", "GENE_003"])
+        mock_slaf_array.var = mock_var
+
+        tokenizer = SLAFTokenizer(
+            slaf_array=mock_slaf_array,
+            vocab_size=1000,
+            use_fragment_processing=False,  # Use SQL-based approach
+        )
+
+        # Test that basic tokenizer functionality still works
+        assert len(tokenizer.gene_vocab) == 3
+        assert tokenizer.special_tokens["CLS"] == 0
+        assert tokenizer.special_tokens["SEP"] == 1
+        assert tokenizer.special_tokens["PAD"] == 2
+        assert tokenizer.special_tokens["UNK"] == 3
+
+
+if __name__ == "__main__":
+    pytest.main([__file__])

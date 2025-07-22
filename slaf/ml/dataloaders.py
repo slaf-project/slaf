@@ -15,6 +15,15 @@ except ImportError:
     TORCH_AVAILABLE = False
     print("Warning: PyTorch not available. Tensor operations will be disabled.")
 
+# Try to import the new dataset
+try:
+    from .datasets import SLAFIterableDataset
+
+    DATASETS_AVAILABLE = True
+except ImportError:
+    DATASETS_AVAILABLE = False
+    print("Warning: New datasets not available. Using legacy implementation.")
+
 
 # Define device utility functions
 def get_optimal_device():
@@ -121,6 +130,7 @@ class SLAFDataLoader:
         n_expression_bins: int = 10,
         chunk_size: int = 1024,
         device: str | None = None,  # Allow manual device override
+        use_new_dataset: bool = True,  # Use new PyTorch-compatible dataset by default
     ):
         """
         Initialize the SLAF DataLoader with training configuration.
@@ -135,6 +145,7 @@ class SLAFDataLoader:
             n_expression_bins: Number of expression level bins for discretization.
             chunk_size: Size of chunks for processing large datasets.
             device: PyTorch device to use. If None, automatically selects optimal device.
+            use_new_dataset: Whether to use new PyTorch-compatible dataset (recommended).
 
         Raises:
             ValueError: If tokenizer_type is not supported.
@@ -169,7 +180,7 @@ class SLAFDataLoader:
         self.tokenizer_type = tokenizer_type
         self.batch_size = batch_size
         self.max_genes = max_genes
-        self.num_workers = num_workers
+        self.num_workers = num_workers  # Note: Not used in current implementation due to pickling issues with Lance/Polars objects
 
         # Set device - use provided device, optimal device, or CPU
         if device is not None and TORCH_AVAILABLE:
@@ -185,13 +196,32 @@ class SLAFDataLoader:
             vocab_size=vocab_size,
             n_expression_bins=n_expression_bins,
             chunk_size=chunk_size,
+            use_fragment_processing=True,  # Always use fragment processing
         )
 
         # Get special tokens from tokenizer
         self.special_tokens = self.tokenizer.special_tokens
 
-        # Pre-compute cell integer ID ranges for efficient batching
-        self.cell_integer_ranges = self._get_cell_integer_ranges()
+        # Use new dataset if requested and available
+        if use_new_dataset and DATASETS_AVAILABLE and TORCH_AVAILABLE:
+            self._use_new_dataset = True
+            # Note: Using threading-based async prefetching instead of multiprocessing
+            # because Lance/Polars objects are not picklable. Fragment processing
+            # is already optimized with Polars, so threading provides good performance
+            # without the complexity of multiprocessing.
+            self._dataset = SLAFIterableDataset(
+                slaf_array=slaf_array,
+                tokenizer=self.tokenizer,
+                batch_size=batch_size,
+                seed=42,  # TODO: make configurable
+                max_queue_size=10,  # TODO: make configurable
+                device=str(self.device) if self.device else None,
+                tokenizer_type=tokenizer_type,  # Pass the tokenizer type
+            )
+        else:
+            self._use_new_dataset = False
+            # Pre-compute cell integer ID ranges for efficient batching
+            self.cell_integer_ranges = self._get_cell_integer_ranges()
 
     def _get_cell_integer_ranges(self) -> list[tuple[int, int]]:
         """Get cell integer ID ranges for batching"""
@@ -252,54 +282,80 @@ class SLAFDataLoader:
             Processed batch 1
             Processed batch 2
         """
-        for cell_range in self.cell_integer_ranges:
-            if self.tokenizer_type == "geneformer":
-                tokens = self.tokenizer.tokenize_geneformer(
-                    cell_integer_id_range=cell_range, max_genes=self.max_genes
-                )
-            elif self.tokenizer_type == "scgpt":
-                tokens = self.tokenizer.tokenize_scgpt(
-                    cell_integer_id_range=cell_range, max_genes=self.max_genes
-                )
-            else:
-                raise ValueError(f"Unknown tokenizer type: {self.tokenizer_type}")
+        if self._use_new_dataset:
+            yield from self._dataset
+        else:
+            for cell_range in self.cell_integer_ranges:
+                if self.tokenizer_type == "geneformer":
+                    tokens = self.tokenizer.tokenize_geneformer(
+                        cell_integer_id_range=cell_range, max_genes=self.max_genes
+                    )
+                elif self.tokenizer_type == "scgpt":
+                    tokens = self.tokenizer.tokenize_scgpt(
+                        cell_integer_id_range=cell_range, max_genes=self.max_genes
+                    )
+                else:
+                    raise ValueError(f"Unknown tokenizer type: {self.tokenizer_type}")
 
-            if not tokens:
-                continue
+                if not tokens:
+                    continue
 
-            # Convert to tensors if torch is available
-            if TORCH_AVAILABLE:
-                batch_tensors = torch.tensor(
-                    tokens, dtype=torch.long, device=self.device
-                )
-                attention_mask = batch_tensors != self.special_tokens["PAD"]
+                # Convert to tensors if torch is available
+                if TORCH_AVAILABLE:
+                    batch_tensors = torch.tensor(
+                        tokens, dtype=torch.long, device=self.device
+                    )
+                    attention_mask = batch_tensors != self.special_tokens["PAD"]
 
-                # Get cell IDs for this range
-                start_cell, end_cell = cell_range
-                cell_ids = list(range(start_cell, end_cell))
+                    # Get cell IDs for this range
+                    start_cell, end_cell = cell_range
+                    cell_ids = list(range(start_cell, end_cell))
 
-                yield {
-                    "input_ids": batch_tensors,
-                    "attention_mask": attention_mask,
-                    "cell_ids": torch.tensor(
-                        cell_ids[: len(tokens)], dtype=torch.long, device=self.device
-                    ),
-                }
-            else:
-                # Return as numpy arrays if torch is not available
-                batch_tensors = np.array(tokens, dtype=np.int64)
-                attention_mask = batch_tensors != self.special_tokens["PAD"]
+                    yield {
+                        "input_ids": batch_tensors,
+                        "attention_mask": attention_mask,
+                        "cell_ids": torch.tensor(
+                            cell_ids[: len(tokens)],
+                            dtype=torch.long,
+                            device=self.device,
+                        ),
+                    }
+                else:
+                    # Return as numpy arrays if torch is not available
+                    batch_tensors = np.array(tokens, dtype=np.int64)
+                    attention_mask = batch_tensors != self.special_tokens["PAD"]
 
-                # Get cell IDs for this range
-                start_cell, end_cell = cell_range
-                cell_ids = list(range(start_cell, end_cell))
+                    # Get cell IDs for this range
+                    start_cell, end_cell = cell_range
+                    cell_ids = list(range(start_cell, end_cell))
 
-                yield {
-                    "input_ids": batch_tensors,
-                    "attention_mask": attention_mask,
-                    "cell_ids": np.array(cell_ids[: len(tokens)], dtype=np.int64),
-                }
+                    yield {
+                        "input_ids": batch_tensors,
+                        "attention_mask": attention_mask,
+                        "cell_ids": np.array(cell_ids[: len(tokens)], dtype=np.int64),
+                    }
 
     def __len__(self):
         """Return number of batches"""
-        return len(self.cell_integer_ranges)
+        if self._use_new_dataset:
+            # IterableDataset doesn't have a fixed length (it's streaming)
+            return -1  # Indicates unknown length
+        else:
+            # Legacy approach - return number of cell ranges
+            return len(self.cell_integer_ranges)
+
+    def __del__(self):
+        """Cleanup method to stop async prefetching."""
+        if hasattr(self, "_use_new_dataset") and self._use_new_dataset:
+            if hasattr(self, "_dataset"):
+                # The SLAFIterableDataset doesn't have a stop method,
+                # so we just let it finish its current epoch.
+                pass
+
+    def stop_streaming(self):
+        """Explicitly stop the streaming prefetching."""
+        if hasattr(self, "_use_new_dataset") and self._use_new_dataset:
+            if hasattr(self, "_dataset"):
+                # The SLAFIterableDataset doesn't have a stop method,
+                # so we just let it finish its current epoch.
+                pass

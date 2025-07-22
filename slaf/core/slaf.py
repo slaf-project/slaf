@@ -132,6 +132,9 @@ class SLAFArray:
 
     def _load_metadata(self):
         """Load cell and gene metadata into memory, restoring dtypes if available"""
+        # TODO: Consider converting to Polars lazy frames for large datasets
+        # This would require updating all downstream methods that expect pandas DataFrames
+
         # Load cell metadata
         self.obs = (
             self.cells_table.search()
