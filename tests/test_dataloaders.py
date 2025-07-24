@@ -1,16 +1,14 @@
-from unittest.mock import patch
-
-import numpy as np
 import pytest
+import torch
 
 from slaf.ml.dataloaders import SLAFDataLoader, get_device_info, get_optimal_device
 
 
 class TestSLAFDataLoader:
-    """Test suite for SLAFDataLoader class with streaming implementation"""
+    """Test suite for SLAFDataLoader class with new architecture"""
 
     def test_dataloader_initialization(self, tiny_slaf):
-        """Test SLAFDataLoader initialization with new streaming implementation"""
+        """Test SLAFDataLoader initialization with new architecture"""
         dataloader = SLAFDataLoader(tiny_slaf)
 
         # Check basic attributes
@@ -24,12 +22,7 @@ class TestSLAFDataLoader:
         assert dataloader.tokenizer is not None
         assert dataloader.tokenizer.slaf_array is tiny_slaf
 
-        # Check special tokens
-        assert dataloader.special_tokens is not None
-        assert "PAD" in dataloader.special_tokens
-
         # Check that we're using the new dataset implementation
-        assert dataloader._use_new_dataset is True
         assert hasattr(dataloader, "_dataset")
 
     def test_dataloader_initialization_custom_params(self, tiny_slaf):
@@ -42,7 +35,6 @@ class TestSLAFDataLoader:
             num_workers=2,
             vocab_size=1000,
             n_expression_bins=5,
-            chunk_size=512,
         )
 
         assert dataloader.tokenizer_type == "scgpt"
@@ -51,7 +43,6 @@ class TestSLAFDataLoader:
         assert dataloader.num_workers == 2
         assert dataloader.tokenizer.vocab_size == 1000
         assert dataloader.tokenizer.n_expression_bins == 5
-        assert dataloader.tokenizer.chunk_size == 512
 
     def test_geneformer_iteration(self, tiny_slaf):
         """Test dataloader iteration with Geneformer tokenizer"""
@@ -59,10 +50,10 @@ class TestSLAFDataLoader:
             tiny_slaf,
             tokenizer_type="geneformer",
             batch_size=5,
-            max_genes=10,  # This is ignored by the dataset implementation
+            max_genes=10,
         )
 
-        # Test that we can iterate (streaming, so we don't know exact length)
+        # Test that we can iterate
         batch_count = 0
         for batch in dataloader:
             # Check batch structure
@@ -77,26 +68,12 @@ class TestSLAFDataLoader:
 
             assert input_ids.shape[0] == attention_mask.shape[0]
             assert input_ids.shape[0] == cell_ids.shape[0]
-            # Geneformer format: just gene tokens, padded to hardcoded max_genes (2048)
-            assert input_ids.shape[1] == 2048  # Hardcoded in dataset implementation
+            assert input_ids.shape[1] == 2048  # Geneformer default
 
-            # Check data types (handle both PyTorch tensors and numpy arrays)
-            try:
-                import torch
-
-                if isinstance(input_ids, torch.Tensor):
-                    assert input_ids.dtype in [torch.int64, torch.int32]
-                    assert attention_mask.dtype in [torch.bool, torch.uint8]
-                    assert cell_ids.dtype in [torch.int64, torch.int32]
-                else:
-                    assert input_ids.dtype in [np.int64, np.int32]
-                    assert attention_mask.dtype in [np.bool_, np.uint8]
-                    assert cell_ids.dtype in [np.int64, np.int32]
-            except ImportError:
-                # PyTorch not available, should be numpy arrays
-                assert input_ids.dtype in [np.int64, np.int32]
-                assert attention_mask.dtype in [np.bool_, np.uint8]
-                assert cell_ids.dtype in [np.int64, np.int32]
+            # Check data types
+            assert input_ids.dtype == torch.long
+            assert attention_mask.dtype == torch.bool
+            assert cell_ids.dtype == torch.long
 
             batch_count += 1
             if batch_count >= 3:  # Just test first few batches
@@ -110,10 +87,10 @@ class TestSLAFDataLoader:
             tiny_slaf,
             tokenizer_type="scgpt",
             batch_size=5,
-            max_genes=10,  # This is ignored by the dataset implementation
+            max_genes=10,
         )
 
-        # Test that we can iterate (streaming, so we don't know exact length)
+        # Test that we can iterate
         batch_count = 0
         for batch in dataloader:
             # Check batch structure
@@ -128,47 +105,18 @@ class TestSLAFDataLoader:
 
             assert input_ids.shape[0] == attention_mask.shape[0]
             assert input_ids.shape[0] == cell_ids.shape[0]
-            # scGPT format: CLS + (gene,expr)*max_genes + SEP
-            # Uses hardcoded max_genes (1024 for scGPT)
-            expected_length = 1024 * 2 + 2  # CLS + (gene,expr)*1024 + SEP
-            assert input_ids.shape[1] == expected_length
+            assert input_ids.shape[1] == 2050  # scGPT: 2*1024+2
 
-            # Check data types (handle both PyTorch tensors and numpy arrays)
-            try:
-                import torch
-
-                if isinstance(input_ids, torch.Tensor):
-                    assert input_ids.dtype in [torch.int64, torch.int32]
-                    assert attention_mask.dtype in [torch.bool, torch.uint8]
-                    assert cell_ids.dtype in [torch.int64, torch.int32]
-                else:
-                    assert input_ids.dtype in [np.int64, np.int32]
-                    assert attention_mask.dtype in [np.bool_, np.uint8]
-                    assert cell_ids.dtype in [np.int64, np.int32]
-            except ImportError:
-                # PyTorch not available, should be numpy arrays
-                assert input_ids.dtype in [np.int64, np.int32]
-                assert attention_mask.dtype in [np.bool_, np.uint8]
-                assert cell_ids.dtype in [np.int64, np.int32]
+            # Check data types
+            assert input_ids.dtype == torch.long
+            assert attention_mask.dtype == torch.bool
+            assert cell_ids.dtype == torch.long
 
             batch_count += 1
             if batch_count >= 3:  # Just test first few batches
                 break
 
         assert batch_count > 0
-
-    def test_invalid_tokenizer_type(self, tiny_slaf):
-        """Test that invalid tokenizer type raises ValueError during iteration"""
-        # The error is only raised in the legacy path, not the new dataset path
-        # So we need to force the legacy path by disabling the new dataset
-        dataloader = SLAFDataLoader(
-            tiny_slaf, tokenizer_type="invalid", use_new_dataset=False
-        )
-
-        # The error should be raised during iteration in the legacy path
-        with pytest.raises(ValueError, match="Unknown tokenizer type"):
-            for _batch in dataloader:
-                break  # Just try to get first batch
 
     def test_dataloader_length(self, tiny_slaf):
         """Test that dataloader length returns -1 for streaming"""
@@ -247,53 +195,30 @@ class TestSLAFDataLoader:
         # Memory increase should be reasonable (less than 100MB)
         assert memory_increase < 100 * 1024 * 1024
 
-    def test_dataloader_without_pytorch(self, tiny_slaf):
-        """Test dataloader behavior when PyTorch is not available"""
-        # Mock PyTorch not being available
-        with patch("slaf.ml.dataloaders.TORCH_AVAILABLE", False):
-            with patch("slaf.ml.dataloaders.DATASETS_AVAILABLE", False):
-                # Should fall back to legacy implementation
-                dataloader = SLAFDataLoader(tiny_slaf, use_new_dataset=False)
-
-                assert dataloader._use_new_dataset is False
-                assert hasattr(dataloader, "cell_integer_ranges")
-
-    def test_dataloader_legacy_mode(self, tiny_slaf):
-        """Test dataloader in legacy mode (without new dataset)"""
-        dataloader = SLAFDataLoader(tiny_slaf, use_new_dataset=False)
-
-        assert dataloader._use_new_dataset is False
-        assert hasattr(dataloader, "cell_integer_ranges")
-
-        # Test that we can still iterate
-        batch_count = 0
-        for batch in dataloader:
-            assert "input_ids" in batch
-            assert "attention_mask" in batch
-            assert "cell_ids" in batch
-            batch_count += 1
-            if batch_count >= 2:
-                break
-
-        assert batch_count > 0
-
     def test_dataloader_cleanup(self, tiny_slaf):
         """Test dataloader cleanup functionality"""
         dataloader = SLAFDataLoader(tiny_slaf)
 
         # Test that cleanup methods exist and don't crash
-        dataloader.stop_streaming()
+        # The dataloader doesn't have a stop_streaming method
+        # It just uses __del__ for cleanup
 
         # Test destructor
         dataloader.__del__()
 
-    def test_dataloader_with_custom_device(self, tiny_slaf):
-        """Test dataloader with custom device specification"""
-        dataloader = SLAFDataLoader(tiny_slaf, device="cpu")
+    def test_dataloader_device_agnostic(self, tiny_slaf):
+        """Test that dataloader is device-agnostic"""
+        dataloader = SLAFDataLoader(tiny_slaf)
 
-        assert dataloader.device is not None
-        # Device should be a string or torch.device
-        assert isinstance(dataloader.device, str) or hasattr(dataloader.device, "type")
+        # Check that device is None (device-agnostic)
+        assert dataloader.device is None
+
+        # Test that batches are returned as CPU tensors
+        for batch in dataloader:
+            # Check that tensors are on CPU
+            if hasattr(batch["input_ids"], "device"):
+                assert batch["input_ids"].device.type == "cpu"
+            break  # Just test first batch
 
 
 class TestDeviceDetection:

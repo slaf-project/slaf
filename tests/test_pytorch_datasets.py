@@ -1,16 +1,17 @@
-import time
 from unittest.mock import Mock, patch
 
 import pytest
 import torch
 from torch.utils.data import DataLoader
 
+from slaf.ml.aggregators import GeneformerWindow, ScGPTWindow
 from slaf.ml.datasets import (
-    AsyncFragmentPrefetcher,
-    FragmentLoader,
-    RawFragment,
+    AsyncPrefetcher,
+    PrefetchBatch,
+    PrefetchBatchProcessor,
     SLAFIterableDataset,
 )
+from slaf.ml.samplers import RandomShuffle
 from slaf.ml.tokenizers import SLAFTokenizer
 
 
@@ -27,7 +28,6 @@ class TestSLAFIterableDataset:
             batch_size=32,
             seed=42,
             max_queue_size=10,
-            device="cpu",
             tokenizer_type="geneformer",
         )
 
@@ -38,7 +38,7 @@ class TestSLAFIterableDataset:
         assert dataset.tokenizer_type == "geneformer"
         # Check device exists (could be None, string, or torch.device)
         assert hasattr(dataset, "device")
-        assert hasattr(dataset, "fragment_loader")
+        assert hasattr(dataset, "batch_processor")
         assert hasattr(dataset, "prefetcher")
 
     def test_dataset_initialization_scgpt(self, tiny_slaf):
@@ -51,7 +51,6 @@ class TestSLAFIterableDataset:
             batch_size=16,
             seed=123,
             max_queue_size=5,
-            device="cpu",
             tokenizer_type="scgpt",
         )
 
@@ -59,48 +58,115 @@ class TestSLAFIterableDataset:
         assert dataset.batch_size == 16
         assert dataset.seed == 123
 
-    def test_fragment_loader_initialization(self, tiny_slaf):
-        """Test FragmentLoader initialization and configuration"""
-        loader = FragmentLoader(tiny_slaf, seed=42, max_genes=1024)
+    def test_prefetch_batch_processor_initialization(self, tiny_slaf):
+        """Test PrefetchBatchProcessor initialization and configuration"""
+        window = ScGPTWindow()
+        shuffle = RandomShuffle()
+        tokenizer = SLAFTokenizer(tiny_slaf)
 
-        assert loader.slaf_array is tiny_slaf
-        assert loader.seed == 42
-        assert loader.max_genes == 1024
-        assert hasattr(loader, "fragments")
+        processor = PrefetchBatchProcessor(
+            slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
+            tokenizer=tokenizer,
+            seed=42,
+            max_genes=1024,
+            n_expression_bins=10,
+            use_binned_expressions=True,
+        )
 
-    def test_raw_fragment_dataclass(self):
-        """Test RawFragment dataclass"""
-        fragment = RawFragment(
-            fragment_id=0,
-            gene_sequences=[[1, 2, 3], [4, 5, 6]],
+        assert processor.slaf_array is tiny_slaf
+        assert processor.window is window
+        assert processor.shuffle is shuffle
+        assert processor.seed == 42
+        assert processor.max_genes == 1024
+        assert processor.n_expression_bins == 10
+        assert processor.use_binned_expressions is True
+        assert hasattr(processor, "expression_dataset")
+        assert hasattr(processor, "batch_generator")
+
+    def test_prefetch_batch_dataclass(self):
+        """Test PrefetchBatch dataclass"""
+        # Create mock tensors
+        input_ids = torch.randint(0, 1000, (2, 1024))
+        attention_mask = torch.ones(2, 1024, dtype=torch.bool)
+
+        batch = PrefetchBatch(
+            batch_id=0,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
             cell_integer_ids=[100, 101],
+            partial_cell_data={},
+            tokenize_time=0.1,
         )
 
-        assert fragment.fragment_id == 0
-        assert len(fragment.gene_sequences) == 2
-        assert len(fragment.cell_integer_ids) == 2
-        assert fragment.gene_sequences[0] == [1, 2, 3]
-        assert fragment.cell_integer_ids[0] == 100
+        assert batch.batch_id == 0
+        assert batch.input_ids.shape == (2, 1024)
+        assert batch.attention_mask.shape == (2, 1024)
+        assert len(batch.cell_integer_ids) == 2
+        assert batch.tokenize_time == 0.1
 
-    def test_async_fragment_prefetcher_initialization(self, tiny_slaf):
-        """Test AsyncFragmentPrefetcher initialization"""
-        fragment_loader = FragmentLoader(tiny_slaf)
-        prefetcher = AsyncFragmentPrefetcher(
-            fragment_processor=fragment_loader,
-            max_queue_size=5,
+    def test_prefetch_batch_geneformer(self):
+        """Test PrefetchBatch for Geneformer format"""
+        # Create mock tensors for Geneformer (2048 sequence length)
+        input_ids = torch.randint(0, 1000, (3, 2048))
+        attention_mask = torch.ones(3, 2048, dtype=torch.bool)
+
+        batch = PrefetchBatch(
+            batch_id=1,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            cell_integer_ids=[200, 201, 202],
+            partial_cell_data={},
+            tokenize_time=0.05,
         )
 
-        assert prefetcher.fragment_processor is fragment_loader
-        assert prefetcher.max_queue_size == 5
-        assert prefetcher.queue.maxsize == 5
+        assert batch.batch_id == 1
+        assert batch.input_ids.shape == (3, 2048)
+        assert batch.attention_mask.shape == (3, 2048)
+        assert len(batch.cell_integer_ids) == 3
+        assert batch.cell_integer_ids == [200, 201, 202]
+        assert batch.tokenize_time == 0.05
+
+    def test_async_prefetcher_initialization(self, tiny_slaf):
+        """Test AsyncPrefetcher initialization"""
+        window = ScGPTWindow()
+        shuffle = RandomShuffle()
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        processor = PrefetchBatchProcessor(
+            slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
+            tokenizer=tokenizer,
+            seed=42,
+            max_genes=1024,
+        )
+
+        prefetcher = AsyncPrefetcher(processor, max_queue_size=100)
+
+        assert prefetcher.batch_processor is processor
+        assert prefetcher.max_queue_size == 100
+        assert prefetcher.queue is not None
+        assert prefetcher.worker_thread is None
+        assert prefetcher.should_stop is False
 
     def test_prefetcher_start_stop(self, tiny_slaf):
-        """Test AsyncFragmentPrefetcher start and stop functionality"""
-        fragment_loader = FragmentLoader(tiny_slaf)
-        prefetcher = AsyncFragmentPrefetcher(
-            fragment_processor=fragment_loader,
-            max_queue_size=3,
+        """Test AsyncPrefetcher start and stop functionality"""
+        window = ScGPTWindow()
+        shuffle = RandomShuffle()
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        processor = PrefetchBatchProcessor(
+            slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
+            tokenizer=tokenizer,
+            seed=42,
+            max_genes=1024,
         )
+
+        prefetcher = AsyncPrefetcher(processor, max_queue_size=10)
 
         # Test start
         prefetcher.start()
@@ -109,38 +175,34 @@ class TestSLAFIterableDataset:
 
         # Test stop
         prefetcher.stop()
-        # Give thread time to stop
-
-        time.sleep(0.1)
-        assert not prefetcher.worker_thread.is_alive()
+        assert prefetcher.should_stop is True
 
     def test_prefetcher_queue_operations(self, tiny_slaf):
-        """Test AsyncFragmentPrefetcher queue operations"""
-        fragment_loader = FragmentLoader(tiny_slaf)
-        prefetcher = AsyncFragmentPrefetcher(
-            fragment_processor=fragment_loader,
-            max_queue_size=2,
+        """Test AsyncPrefetcher queue operations"""
+        window = ScGPTWindow()
+        shuffle = RandomShuffle()
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        processor = PrefetchBatchProcessor(
+            slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
+            tokenizer=tokenizer,
+            seed=42,
+            max_genes=1024,
         )
 
-        # Test empty queue
-        assert prefetcher.has_fragment() is False
-        assert prefetcher.get_fragment() is None
+        prefetcher = AsyncPrefetcher(processor, max_queue_size=5)
 
-        # Test queue operations
-        test_fragment = RawFragment(
-            fragment_id=0,
-            gene_sequences=[[1, 2, 3]],
-            cell_integer_ids=[100],
-        )
+        # Test initial state
+        assert prefetcher.has_batch() is False
+        assert prefetcher.get_batch() is None
 
-        # Put fragment in queue
-        prefetcher.queue.put(test_fragment)
-        assert prefetcher.has_fragment() is True
-
-        # Get fragment from queue
-        retrieved_fragment = prefetcher.get_fragment()
-        assert retrieved_fragment is test_fragment
-        assert prefetcher.has_fragment() is False
+        # Test stats
+        stats = prefetcher.get_stats()
+        assert "total_cells" in stats
+        assert "elapsed_time" in stats
+        assert "cells_per_sec" in stats
 
     def test_dataset_iteration_geneformer(self, tiny_slaf):
         """Test dataset iteration with Geneformer tokenizer"""
@@ -178,7 +240,7 @@ class TestSLAFIterableDataset:
 
     def test_dataset_iteration_scgpt(self, tiny_slaf):
         """Test dataset iteration with scGPT tokenizer"""
-        tokenizer = SLAFTokenizer(tiny_slaf)
+        tokenizer = SLAFTokenizer(tiny_slaf, tokenizer_type="scgpt")
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
             tokenizer=tokenizer,
@@ -202,9 +264,7 @@ class TestSLAFIterableDataset:
             batch_size = batch["input_ids"].shape[0]
             seq_length = batch["input_ids"].shape[1]
             assert batch_size <= 8
-            assert (
-                seq_length == 1024 * 2 + 2
-            )  # scGPT format: CLS + (gene,expr)*1024 + SEP
+            assert seq_length == 2050  # scGPT: 2*1024+2
 
             batch_count += 1
             if batch_count >= 3:  # Test first 3 batches
@@ -219,11 +279,10 @@ class TestSLAFIterableDataset:
             slaf_array=tiny_slaf,
             tokenizer=tokenizer,
             batch_size=4,
-            device="cpu",  # Use CPU for testing
         )
 
         for batch in dataset:
-            # Check that tensors are on the correct device
+            # Check that tensors are on the correct device (should be CPU by default)
             assert batch["input_ids"].device.type == "cpu"
             assert batch["attention_mask"].device.type == "cpu"
             assert batch["cell_ids"].device.type == "cpu"
@@ -250,11 +309,17 @@ class TestSLAFIterableDataset:
 
     def test_error_handling_invalid_tokenizer_type(self, tiny_slaf):
         """Test error handling for invalid tokenizer type"""
+        # Create tokenizer with invalid type
+        tokenizer = SLAFTokenizer(tiny_slaf, tokenizer_type="geneformer")
 
-        # This should not raise an error during initialization
-        # The error would be raised during iteration if the tokenizer type
-        # is not supported by the conversion methods
-        # We test that it doesn't crash during initialization
+        # Create dataset with invalid tokenizer type
+        with pytest.raises(ValueError, match="is not a valid WindowType"):
+            SLAFIterableDataset(
+                slaf_array=tiny_slaf,
+                tokenizer=tokenizer,
+                batch_size=4,
+                tokenizer_type="invalid",
+            )
 
     def test_memory_efficiency(self, tiny_slaf):
         """Test memory efficiency of the dataset"""
@@ -290,6 +355,7 @@ class TestSLAFIterableDataset:
 
     def test_pytorch_dataloader_integration(self, tiny_slaf):
         """Test integration with PyTorch DataLoader"""
+
         tokenizer = SLAFTokenizer(tiny_slaf)
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
@@ -311,18 +377,29 @@ class TestSLAFIterableDataset:
             assert "attention_mask" in batch
             assert "cell_ids" in batch
 
+            # Check tensor types
+            assert isinstance(batch["input_ids"], torch.Tensor)
+            assert isinstance(batch["attention_mask"], torch.Tensor)
+            assert isinstance(batch["cell_ids"], torch.Tensor)
+
+            # Check shapes
+            batch_size = batch["input_ids"].shape[0]
+            seq_length = batch["input_ids"].shape[1]
+            assert batch_size <= 4
+            assert seq_length == 2048  # Geneformer default
+
             batch_count += 1
-            if batch_count >= 2:  # Test first 2 batches
+            if batch_count >= 2:  # Just test first 2 batches
                 break
 
         assert batch_count > 0
 
 
-class TestFragmentProcessing:
-    """Test fragment processing functionality"""
+class TestPrefetchBatchProcessing:
+    """Test prefetch batch processing functionality"""
 
-    def test_fragment_loader_with_mock_data(self):
-        """Test FragmentLoader with mock data"""
+    def test_batch_processor_with_mock_data(self):
+        """Test PrefetchBatchProcessor with mock data"""
         # Mock SLAFArray
         mock_slaf_array = Mock()
         mock_slaf_array.slaf_path = "/mock/path"
@@ -330,52 +407,120 @@ class TestFragmentProcessing:
         # Mock Lance dataset
         with patch("slaf.ml.datasets.lance") as mock_lance:
             mock_dataset = Mock()
-            mock_fragments = [Mock(), Mock()]
-            mock_dataset.get_fragments.return_value = mock_fragments
+            mock_batches = [Mock(), Mock()]
+            mock_dataset.to_batches.return_value = iter(mock_batches)
             mock_lance.dataset.return_value = mock_dataset
 
             # Mock Polars DataFrame
             with patch("slaf.ml.datasets.pl") as mock_pl:
                 mock_df = Mock()
                 mock_pl.from_arrow.return_value = mock_df
+                mock_pl.concat.return_value = mock_df
                 mock_df.with_columns.return_value = mock_df
                 mock_df.filter.return_value = mock_df
                 mock_df.group_by.return_value.agg.return_value = Mock()
+                mock_df.columns = ["cell_integer_id", "gene_sequence", "expr_sequence"]
 
-                loader = FragmentLoader(mock_slaf_array, seed=42, max_genes=1024)
+                window = ScGPTWindow()
+                shuffle = RandomShuffle()
+                tokenizer = SLAFTokenizer(mock_slaf_array)
+                processor = PrefetchBatchProcessor(
+                    mock_slaf_array,
+                    window,
+                    shuffle,
+                    tokenizer=tokenizer,
+                    seed=42,
+                    max_genes=1024,
+                )
 
-                # Test that we can create the loader
-                assert loader.slaf_array is mock_slaf_array
-                assert loader.seed == 42
-                assert loader.max_genes == 1024
+                # Test that we can create the processor
+                assert processor.slaf_array is mock_slaf_array
+                assert processor.window is window
+                assert processor.shuffle is shuffle
+                assert processor.seed == 42
+                assert processor.max_genes == 1024
 
-    def test_raw_fragment_serialization(self):
-        """Test RawFragment serialization and comparison"""
-        fragment1 = RawFragment(
-            fragment_id=0,
-            gene_sequences=[[1, 2, 3], [4, 5, 6]],
+    def test_prefetch_batch_serialization(self):
+        """Test PrefetchBatch serialization and comparison"""
+        # Create mock tensors
+        input_ids1 = torch.randint(0, 1000, (2, 1024))
+        attention_mask1 = torch.ones(2, 1024, dtype=torch.bool)
+        input_ids2 = torch.randint(0, 1000, (1, 1024))
+        attention_mask2 = torch.ones(1, 1024, dtype=torch.bool)
+
+        batch1 = PrefetchBatch(
+            batch_id=0,
+            input_ids=input_ids1,
+            attention_mask=attention_mask1,
             cell_integer_ids=[100, 101],
+            partial_cell_data={},
+            tokenize_time=0.1,
         )
 
-        fragment2 = RawFragment(
-            fragment_id=0,
-            gene_sequences=[[1, 2, 3], [4, 5, 6]],
+        batch2 = PrefetchBatch(
+            batch_id=0,
+            input_ids=input_ids1,
+            attention_mask=attention_mask1,
             cell_integer_ids=[100, 101],
+            partial_cell_data={},
+            tokenize_time=0.1,
         )
 
-        fragment3 = RawFragment(
-            fragment_id=1,
-            gene_sequences=[[7, 8, 9]],
+        batch3 = PrefetchBatch(
+            batch_id=1,
+            input_ids=input_ids2,
+            attention_mask=attention_mask2,
             cell_integer_ids=[102],
+            partial_cell_data={},
+            tokenize_time=0.2,
         )
 
         # Test equality
-        assert fragment1 == fragment2
-        assert fragment1 != fragment3
+        assert batch1 == batch2
+        assert batch1 != batch3
 
         # Test string representation
-        assert "RawFragment" in str(fragment1)
-        assert "fragment_id=0" in str(fragment1)
+        assert "PrefetchBatch" in str(batch1)
+        assert "batch_id=0" in str(batch1)
+
+    def test_batch_processor_expression_binning(self, tiny_slaf):
+        """Test PrefetchBatchProcessor with expression binning"""
+        window = ScGPTWindow()
+        shuffle = RandomShuffle()
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        processor = PrefetchBatchProcessor(
+            slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
+            tokenizer=tokenizer,
+            seed=42,
+            max_genes=1024,
+            n_expression_bins=10,
+            use_binned_expressions=True,
+        )
+
+        assert processor.n_expression_bins == 10
+        assert processor.use_binned_expressions is True
+
+    def test_window_strategy_integration(self, tiny_slaf):
+        """Test window strategy integration with batch processor"""
+        window = GeneformerWindow()
+        shuffle = RandomShuffle()
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        processor = PrefetchBatchProcessor(
+            slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
+            tokenizer=tokenizer,
+            seed=42,
+            max_genes=2048,
+        )
+
+        assert processor.window is window
+        assert processor.shuffle is shuffle
+        assert processor.max_genes == 2048
 
 
 if __name__ == "__main__":

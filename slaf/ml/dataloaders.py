@@ -1,7 +1,5 @@
 from typing import Optional
 
-import numpy as np
-
 from slaf.core.slaf import SLAFArray
 
 from .tokenizers import SLAFTokenizer
@@ -22,7 +20,9 @@ try:
     DATASETS_AVAILABLE = True
 except ImportError:
     DATASETS_AVAILABLE = False
-    print("Warning: New datasets not available. Using legacy implementation.")
+    print(
+        "Warning: New datasets not available. DataLoader will not work without datasets module."
+    )
 
 
 # Define device utility functions
@@ -74,11 +74,11 @@ class SLAFDataLoader:
 
     SLAFDataLoader provides efficient batching and tokenization of single-cell data
     for machine learning applications. It supports multiple tokenization strategies
-    and automatic device optimization for PyTorch training.
+    and device-agnostic CPU tensor output for PyTorch training.
 
     Key Features:
         - Multiple tokenization strategies (GeneFormer, SCPGPT)
-        - Automatic device optimization (CUDA > MPS > CPU)
+        - Device-agnostic CPU tensor output
         - Efficient batching with integer ID ranges
         - PyTorch tensor output with attention masks
         - Memory-efficient lazy loading
@@ -128,9 +128,6 @@ class SLAFDataLoader:
         num_workers: int = 4,
         vocab_size: int = 50000,
         n_expression_bins: int = 10,
-        chunk_size: int = 1024,
-        device: str | None = None,  # Allow manual device override
-        use_new_dataset: bool = True,  # Use new PyTorch-compatible dataset by default
     ):
         """
         Initialize the SLAF DataLoader with training configuration.
@@ -143,16 +140,14 @@ class SLAFDataLoader:
             num_workers: Number of worker processes for data loading (unused in current implementation).
             vocab_size: Size of the tokenizer vocabulary.
             n_expression_bins: Number of expression level bins for discretization.
-            chunk_size: Size of chunks for processing large datasets.
-            device: PyTorch device to use. If None, automatically selects optimal device.
-            use_new_dataset: Whether to use new PyTorch-compatible dataset (recommended).
+
 
         Raises:
             ValueError: If tokenizer_type is not supported.
             RuntimeError: If PyTorch is not available and device is specified.
 
         Examples:
-            >>> # Basic initialization
+            >>> # Basic initialization with new architecture
             >>> slaf_array = SLAFArray("path/to/data.slaf")
             >>> dataloader = SLAFDataLoader(slaf_array)
             >>> print(f"Batch size: {dataloader.batch_size}")
@@ -167,14 +162,6 @@ class SLAFDataLoader:
             ... )
             >>> print(f"Tokenizer type: {dataloader.tokenizer_type}")
             Tokenizer type: scgpt
-
-            >>> # With custom device
-            >>> dataloader = SLAFDataLoader(
-            ...     slaf_array=slaf_array,
-            ...     device="cuda:0"
-            ... )
-            >>> print(f"Device: {dataloader.device}")
-            Device: cuda:0
         """
         self.slaf_array = slaf_array
         self.tokenizer_type = tokenizer_type
@@ -182,59 +169,35 @@ class SLAFDataLoader:
         self.max_genes = max_genes
         self.num_workers = num_workers  # Note: Not used in current implementation due to pickling issues with Lance/Polars objects
 
-        # Set device - use provided device, optimal device, or CPU
-        if device is not None and TORCH_AVAILABLE:
-            self.device = torch.device(device)
-        elif TORCH_AVAILABLE:
-            self.device = OPTIMAL_DEVICE
-        else:
-            self.device = None
+        # Device-agnostic: always return CPU tensors
+        self.device = None
+
+        # Check that required modules are available
+        if not DATASETS_AVAILABLE:
+            raise ImportError(
+                "SLAFIterableDataset is required but not available. Please install required dependencies."
+            )
 
         # Initialize tokenizer
         self.tokenizer = SLAFTokenizer(
             slaf_array=slaf_array,
+            tokenizer_type=tokenizer_type,
             vocab_size=vocab_size,
             n_expression_bins=n_expression_bins,
-            chunk_size=chunk_size,
-            use_fragment_processing=True,  # Always use fragment processing
         )
 
         # Get special tokens from tokenizer
         self.special_tokens = self.tokenizer.special_tokens
 
-        # Use new dataset if requested and available
-        if use_new_dataset and DATASETS_AVAILABLE and TORCH_AVAILABLE:
-            self._use_new_dataset = True
-            # Note: Using threading-based async prefetching instead of multiprocessing
-            # because Lance/Polars objects are not picklable. Fragment processing
-            # is already optimized with Polars, so threading provides good performance
-            # without the complexity of multiprocessing.
-            self._dataset = SLAFIterableDataset(
-                slaf_array=slaf_array,
-                tokenizer=self.tokenizer,
-                batch_size=batch_size,
-                seed=42,  # TODO: make configurable
-                max_queue_size=10,  # TODO: make configurable
-                device=str(self.device) if self.device else None,
-                tokenizer_type=tokenizer_type,  # Pass the tokenizer type
-            )
-        else:
-            self._use_new_dataset = False
-            # Pre-compute cell integer ID ranges for efficient batching
-            self.cell_integer_ranges = self._get_cell_integer_ranges()
-
-    def _get_cell_integer_ranges(self) -> list[tuple[int, int]]:
-        """Get cell integer ID ranges for batching"""
-        # Get the maximum cell integer ID from the obs DataFrame
-        max_cell_id = int(self.slaf_array.obs["cell_integer_id"].astype(int).max())
-
-        # Create ranges based on batch size
-        ranges = []
-        for start in range(0, max_cell_id + 1, self.batch_size):
-            end = min(start + self.batch_size, max_cell_id + 1)
-            ranges.append((start, end))
-
-        return ranges
+        # Use optimized IterableDataset with new architecture
+        self._dataset = SLAFIterableDataset(
+            slaf_array=slaf_array,
+            tokenizer=self.tokenizer,
+            batch_size=batch_size,
+            seed=42,  # TODO: make configurable
+            max_queue_size=500,
+            tokenizer_type=tokenizer_type,
+        )
 
     def __iter__(self):
         """
@@ -282,80 +245,16 @@ class SLAFDataLoader:
             Processed batch 1
             Processed batch 2
         """
-        if self._use_new_dataset:
-            yield from self._dataset
-        else:
-            for cell_range in self.cell_integer_ranges:
-                if self.tokenizer_type == "geneformer":
-                    tokens = self.tokenizer.tokenize_geneformer(
-                        cell_integer_id_range=cell_range, max_genes=self.max_genes
-                    )
-                elif self.tokenizer_type == "scgpt":
-                    tokens = self.tokenizer.tokenize_scgpt(
-                        cell_integer_id_range=cell_range, max_genes=self.max_genes
-                    )
-                else:
-                    raise ValueError(f"Unknown tokenizer type: {self.tokenizer_type}")
-
-                if not tokens:
-                    continue
-
-                # Convert to tensors if torch is available
-                if TORCH_AVAILABLE:
-                    batch_tensors = torch.tensor(
-                        tokens, dtype=torch.long, device=self.device
-                    )
-                    attention_mask = batch_tensors != self.special_tokens["PAD"]
-
-                    # Get cell IDs for this range
-                    start_cell, end_cell = cell_range
-                    cell_ids = list(range(start_cell, end_cell))
-
-                    yield {
-                        "input_ids": batch_tensors,
-                        "attention_mask": attention_mask,
-                        "cell_ids": torch.tensor(
-                            cell_ids[: len(tokens)],
-                            dtype=torch.long,
-                            device=self.device,
-                        ),
-                    }
-                else:
-                    # Return as numpy arrays if torch is not available
-                    batch_tensors = np.array(tokens, dtype=np.int64)
-                    attention_mask = batch_tensors != self.special_tokens["PAD"]
-
-                    # Get cell IDs for this range
-                    start_cell, end_cell = cell_range
-                    cell_ids = list(range(start_cell, end_cell))
-
-                    yield {
-                        "input_ids": batch_tensors,
-                        "attention_mask": attention_mask,
-                        "cell_ids": np.array(cell_ids[: len(tokens)], dtype=np.int64),
-                    }
+        yield from self._dataset
 
     def __len__(self):
         """Return number of batches"""
-        if self._use_new_dataset:
-            # IterableDataset doesn't have a fixed length (it's streaming)
-            return -1  # Indicates unknown length
-        else:
-            # Legacy approach - return number of cell ranges
-            return len(self.cell_integer_ranges)
+        # IterableDataset doesn't have a fixed length (it's streaming)
+        return -1  # Indicates unknown length
 
     def __del__(self):
         """Cleanup method to stop async prefetching."""
-        if hasattr(self, "_use_new_dataset") and self._use_new_dataset:
-            if hasattr(self, "_dataset"):
-                # The SLAFIterableDataset doesn't have a stop method,
-                # so we just let it finish its current epoch.
-                pass
-
-    def stop_streaming(self):
-        """Explicitly stop the streaming prefetching."""
-        if hasattr(self, "_use_new_dataset") and self._use_new_dataset:
-            if hasattr(self, "_dataset"):
-                # The SLAFIterableDataset doesn't have a stop method,
-                # so we just let it finish its current epoch.
-                pass
+        if hasattr(self, "_dataset"):
+            # The SLAFIterableDataset doesn't have a stop method,
+            # so we just let it finish its current epoch.
+            pass
