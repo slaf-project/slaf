@@ -13,7 +13,7 @@ except ImportError:
     TORCH_AVAILABLE = False
     print("Warning: PyTorch not available. Tensor operations will be disabled.")
 
-# Try to import the new dataset
+# Try to import the dataset
 try:
     from .datasets import SLAFIterableDataset
 
@@ -21,7 +21,7 @@ try:
 except ImportError:
     DATASETS_AVAILABLE = False
     print(
-        "Warning: New datasets not available. DataLoader will not work without datasets module."
+        "Warning: Datasets not available. DataLoader will not work without datasets module."
     )
 
 
@@ -72,16 +72,18 @@ class SLAFDataLoader:
     """
     High-performance DataLoader for SLAF data optimized for ML training.
 
-    SLAFDataLoader provides efficient batching and tokenization of single-cell data
-    for machine learning applications. It supports multiple tokenization strategies
-    and device-agnostic CPU tensor output for PyTorch training.
+    SLAFDataLoader provides efficient streaming of pre-tokenized single-cell data
+    for machine learning applications. It uses async batch processing and provides
+    device-agnostic CPU tensor output for maximum training flexibility.
 
     Key Features:
-        - Multiple tokenization strategies (GeneFormer, SCPGPT)
+        - Multiple tokenization strategies (GeneFormer, scGPT)
+        - Pre-tokenized sequences for maximum performance
         - Device-agnostic CPU tensor output
-        - Efficient batching with integer ID ranges
+        - Async batch processing with background prefetching
+        - Memory-efficient streaming
         - PyTorch tensor output with attention masks
-        - Memory-efficient lazy loading
+        - Comprehensive error handling and validation
 
     Examples:
         >>> # Basic usage with default settings
@@ -97,10 +99,9 @@ class SLAFDataLoader:
         >>> # Custom configuration for training
         >>> dataloader = SLAFDataLoader(
         ...     slaf_array=slaf_array,
-        ...     tokenizer_type="geneformer",
+        ...     tokenizer_type="scgpt",
         ...     batch_size=64,
-        ...     max_genes=1024,
-        ...     vocab_size=30000
+        ...     max_genes=1024
         ... )
         >>> print(f"Number of batches: {len(dataloader)}")
         Number of batches: 42
@@ -111,10 +112,17 @@ class SLAFDataLoader:
         ...     attention_mask = batch["attention_mask"]
         ...     cell_ids = batch["cell_ids"]
         ...     # Your training code here
-        ...     if batch_idx >= 2:  # Just show first few batches
+        ...     if batch_idx >= 2:  # Just test first few batches
         ...         break
         >>> print("Training loop completed")
         Training loop completed
+
+        >>> # Error handling for invalid tokenizer type
+        >>> try:
+        ...     dataloader = SLAFDataLoader(slaf_array, tokenizer_type="invalid")
+        ... except ValueError as e:
+        ...     print(f"Error: {e}")
+        Error: Unsupported tokenizer type: invalid
     """
 
     device: Optional["torch.device"]  # type: ignore
@@ -134,20 +142,31 @@ class SLAFDataLoader:
 
         Args:
             slaf_array: SLAFArray instance containing the single-cell data.
+                       Must be a valid SLAFArray with proper Lance dataset structure.
             tokenizer_type: Tokenization strategy to use. Options: "geneformer", "scgpt".
-            batch_size: Number of cells per batch. Larger batches use more memory.
+                          Geneformer uses ranked gene sequences, scGPT uses interleaved
+                          gene-expression pairs.
+            batch_size: Number of cells per batch. Larger batches use more memory
+                       but may improve training efficiency. Range: 1-512, default: 32.
             max_genes: Maximum number of genes to include in each cell's tokenization.
-            num_workers: Number of worker processes for data loading (unused in current implementation).
-            vocab_size: Size of the tokenizer vocabulary.
-            n_expression_bins: Number of expression level bins for discretization.
-
+                     For Geneformer: same as sequence length. For scGPT: number of
+                     gene-expression pairs (sequence length = 2*max_genes+2).
+            num_workers: Number of worker processes for data loading (unused in current
+                        implementation due to Lance/Polars pickling limitations).
+            vocab_size: Size of the tokenizer vocabulary. Higher values allow more
+                       genes but use more memory. Range: 1000-100000, default: 50000.
+            n_expression_bins: Number of expression level bins for scGPT discretization.
+                             Higher values provide finer expression resolution.
+                             Range: 1-1000, default: 10.
 
         Raises:
-            ValueError: If tokenizer_type is not supported.
-            RuntimeError: If PyTorch is not available and device is specified.
+            ValueError: If tokenizer_type is not supported or parameters are invalid.
+            RuntimeError: If PyTorch is not available or datasets module is missing.
+            TypeError: If slaf_array is not a valid SLAFArray instance.
+            ImportError: If required dependencies are not available.
 
         Examples:
-            >>> # Basic initialization with new architecture
+            >>> # Basic initialization
             >>> slaf_array = SLAFArray("path/to/data.slaf")
             >>> dataloader = SLAFDataLoader(slaf_array)
             >>> print(f"Batch size: {dataloader.batch_size}")
@@ -162,6 +181,20 @@ class SLAFDataLoader:
             ... )
             >>> print(f"Tokenizer type: {dataloader.tokenizer_type}")
             Tokenizer type: scgpt
+
+            >>> # Error handling for invalid tokenizer type
+            >>> try:
+            ...     dataloader = SLAFDataLoader(slaf_array, tokenizer_type="invalid")
+            ... except ValueError as e:
+            ...     print(f"Error: {e}")
+            Error: Unsupported tokenizer type: invalid
+
+            >>> # Error handling for invalid SLAF array
+            >>> try:
+            ...     dataloader = SLAFDataLoader(None)
+            ... except TypeError as e:
+            ...     print(f"Error: {e}")
+            Error: slaf_array must be a valid SLAFArray instance
         """
         self.slaf_array = slaf_array
         self.tokenizer_type = tokenizer_type
@@ -189,7 +222,7 @@ class SLAFDataLoader:
         # Get special tokens from tokenizer
         self.special_tokens = self.tokenizer.special_tokens
 
-        # Use optimized IterableDataset with new architecture
+        # Use IterableDataset
         self._dataset = SLAFIterableDataset(
             slaf_array=slaf_array,
             tokenizer=self.tokenizer,
@@ -201,21 +234,21 @@ class SLAFDataLoader:
 
     def __iter__(self):
         """
-        Iterate through batches of tokenized single-cell data.
+        Iterate through batches of pre-tokenized single-cell data.
 
-        Yields batches of tokenized data suitable for machine learning training.
+        Yields batches of pre-tokenized data suitable for machine learning training.
         Each batch contains input_ids, attention_mask, and cell_ids for the
-        cells in that batch.
+        cells in that batch. All tensors are returned on CPU for device-agnostic training.
 
         Yields:
             dict: Batch dictionary containing:
-                - input_ids: Tokenized gene expression data (torch.Tensor or np.ndarray)
-                - attention_mask: Boolean mask indicating valid tokens (torch.Tensor or np.ndarray)
-                - cell_ids: Integer IDs of cells in the batch (torch.Tensor or np.ndarray)
+                - input_ids: Pre-tokenized gene expression data (torch.Tensor)
+                - attention_mask: Boolean mask indicating valid tokens (torch.Tensor)
+                - cell_ids: Integer IDs of cells in the batch (torch.Tensor)
 
         Raises:
             ValueError: If the tokenizer type is not supported.
-            RuntimeError: If tokenization fails for a batch.
+            RuntimeError: If batch processing fails.
 
         Examples:
             >>> # Basic iteration

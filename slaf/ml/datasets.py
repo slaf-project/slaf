@@ -44,7 +44,12 @@ from slaf.ml.tokenizers import SLAFTokenizer
 
 @dataclass
 class PrefetchBatch:
-    """Container for a batch of tokenized sequences"""
+    """
+    Container for a batch of pre-tokenized sequences.
+
+    This dataclass holds the results of batch processing from Lance fragments,
+    including tokenized sequences, attention masks, and metadata for training.
+    """
 
     batch_id: int
     input_ids: torch.Tensor  # Tokenized sequences
@@ -57,7 +62,13 @@ class PrefetchBatch:
 
 
 class PrefetchBatchProcessor:
-    """Processes Lance fragments into prefetch batches using Window and Shuffle strategies"""
+    """
+    Processes Lance fragments into pre-tokenized batches using Window and Shuffle strategies.
+
+    This processor loads Lance fragments, applies window functions to rank and filter genes,
+    shuffles cells for training, and tokenizes the sequences. It handles the complete
+    pipeline from raw Lance data to training-ready tensors.
+    """
 
     def __init__(
         self,
@@ -71,6 +82,73 @@ class PrefetchBatchProcessor:
         n_expression_bins: int = 10,
         use_binned_expressions: bool = True,
     ):
+        """
+        Initialize the PrefetchBatchProcessor with processing configuration.
+
+        Args:
+            slaf_array: SLAFArray instance containing the single-cell data.
+                       Must have a valid Lance dataset at slaf_path/expression.lance.
+            window: Window function strategy for gene ranking and filtering.
+                   Determines how genes are selected and ordered within cells.
+            shuffle: Shuffle strategy for cell ordering within batches.
+                    Controls the randomization of cells for training.
+            tokenizer: SLAFTokenizer instance for sequence tokenization.
+                      Handles conversion of gene sequences to token IDs.
+            seed: Random seed for reproducible shuffling and processing.
+                  Used by both window and shuffle strategies.
+            max_genes: Maximum number of genes to include per cell.
+                      For Geneformer: same as sequence length.
+                      For scGPT: number of gene-expression pairs.
+            batches_per_chunk: Number of Lance batches to process together.
+                             Higher values improve throughput but use more memory.
+                             Range: 10-200, default: 50.
+            n_expression_bins: Number of expression bins for scGPT discretization.
+                             Only used when use_binned_expressions=True.
+                             Range: 1-1000, default: 10.
+            use_binned_expressions: Whether to use binned expression values for scGPT.
+                                   If False, raw expression values are used.
+                                   Only affects scGPT tokenization.
+
+        Raises:
+            ValueError: If parameters are invalid or SLAF array is malformed.
+            RuntimeError: If Lance dataset cannot be loaded.
+            TypeError: If slaf_array is not a valid SLAFArray instance.
+
+        Examples:
+            >>> # Basic initialization
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> window = ScGPTWindow()
+            >>> shuffle = RandomShuffle()
+            >>> tokenizer = SLAFTokenizer(slaf_array)
+            >>> processor = PrefetchBatchProcessor(
+            ...     slaf_array=slaf_array,
+            ...     window=window,
+            ...     shuffle=shuffle,
+            ...     tokenizer=tokenizer
+            ... )
+            >>> print(f"Max genes: {processor.max_genes}")
+            Max genes: 1024
+
+            >>> # Custom configuration
+            >>> processor = PrefetchBatchProcessor(
+            ...     slaf_array=slaf_array,
+            ...     window=window,
+            ...     shuffle=shuffle,
+            ...     tokenizer=tokenizer,
+            ...     max_genes=2048,
+            ...     batches_per_chunk=100,
+            ...     use_binned_expressions=False
+            ... )
+            >>> print(f"Batches per chunk: {processor.batches_per_chunk}")
+            Batches per chunk: 100
+
+            >>> # Error handling for invalid SLAF array
+            >>> try:
+            ...     processor = PrefetchBatchProcessor(None, window, shuffle, tokenizer)
+            ... except TypeError as e:
+            ...     print(f"Error: {e}")
+            Error: slaf_array must be a valid SLAFArray instance
+        """
         self.slaf_array = slaf_array
         self.window = window
         self.shuffle = shuffle
@@ -93,7 +171,19 @@ class PrefetchBatchProcessor:
         ] = {}  # Store partial cell data across chunks
 
     def load_prefetch_batch(self) -> PrefetchBatch:
-        """Load a chunk of batches and apply window functions with Polars"""
+        """
+        Load and process a chunk of Lance batches into pre-tokenized sequences.
+
+        This method loads multiple Lance batches, applies window functions to rank
+        and filter genes, shuffles cells for training, and tokenizes the sequences.
+        It handles cell boundary crossing and partial data management.
+
+        Returns:
+            PrefetchBatch: Container with tokenized sequences and metadata
+
+        Raises:
+            StopIteration: When no more batches are available
+        """
         start_time = time.time()
 
         # Load multiple batches
@@ -250,7 +340,13 @@ class PrefetchBatchProcessor:
 
 
 class AsyncPrefetcher:
-    """Async prefetcher for Lance batches"""
+    """
+    Asynchronous prefetcher for Lance batch processing.
+
+    This prefetcher runs batch processing in a background thread to minimize
+    GPU idle time during training. It maintains a queue of pre-processed batches
+    and provides monitoring statistics.
+    """
 
     def __init__(
         self, batch_processor: PrefetchBatchProcessor, max_queue_size: int = 500
@@ -356,10 +452,18 @@ class AsyncPrefetcher:
 
 class SLAFIterableDataset(IterableDataset):
     """
-    PyTorch IterableDataset for streaming SLAF data with async batch prefetching.
+    PyTorch IterableDataset for streaming pre-tokenized SLAF data with async prefetching.
 
-    This dataset provides efficient streaming of tokenized single-cell data
-    with background batch loading to minimize GPU idle time.
+    This dataset provides efficient streaming of pre-tokenized single-cell data
+    with background batch processing to minimize GPU idle time. It handles the
+    complete pipeline from Lance fragments to training-ready tensors.
+
+    Key Features:
+        - Pre-tokenized sequences for maximum performance
+        - Async batch processing with background prefetching
+        - Device-agnostic CPU tensor output
+        - Memory-efficient streaming
+        - Support for multiple tokenization strategies
     """
 
     def __init__(
@@ -444,13 +548,21 @@ class SLAFIterableDataset(IterableDataset):
 
     def __iter__(self) -> Iterator[dict]:
         """
-        Iterate through batches of tokenized data.
+        Iterate through batches of pre-tokenized data.
+
+        This method yields training-ready batches containing pre-tokenized sequences,
+        attention masks, and cell IDs. The data is processed asynchronously in the
+        background for optimal performance.
 
         Yields:
             dict: Batch containing:
-                - input_ids: Tokenized sequences (torch.Tensor)
+                - input_ids: Pre-tokenized sequences (torch.Tensor)
                 - attention_mask: Boolean mask for valid tokens (torch.Tensor)
                 - cell_ids: Cell integer IDs (torch.Tensor)
+
+        Note:
+            All tensors are returned on CPU for device-agnostic training.
+            The training loop should handle device transfer as needed.
         """
         start_time = time.time()
         batches_yielded = 0

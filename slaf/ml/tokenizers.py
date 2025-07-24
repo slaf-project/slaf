@@ -26,7 +26,7 @@ class SLAFTokenizer:
 
     SLAFTokenizer converts single-cell gene expression data into token sequences
     suitable for machine learning models. It supports multiple tokenization strategies
-    including GeneFormer and scGPT formats.
+    including GeneFormer and scGPT formats with optimized vectorized operations.
 
     Key Features:
         - Multiple tokenization strategies (GeneFormer, scGPT)
@@ -34,6 +34,7 @@ class SLAFTokenizer:
         - Expression binning for scGPT format
         - Device-agnostic CPU tensor output
         - Memory-efficient processing
+        - Comprehensive vocabulary management
 
     Examples:
         >>> # Basic usage with GeneFormer
@@ -52,7 +53,19 @@ class SLAFTokenizer:
         ...     gene_sequences, expr_sequences
         ... )
         >>> print(f"Input shape: {input_ids.shape}")
-        Input shape: torch.Size([2, 2048])
+        Input shape: torch.Size([2, 2050])
+
+        >>> # Error handling for invalid tokenizer type
+        >>> try:
+        ...     tokenizer = SLAFTokenizer(slaf_array, tokenizer_type="invalid")
+        ... except ValueError as e:
+        ...     print(f"Error: {e}")
+        Error: Unsupported tokenizer type: invalid. Supported types: ['geneformer', 'scgpt']
+
+        >>> # Vocabulary information
+        >>> vocab_info = tokenizer.get_vocab_info()
+        >>> print(f"Vocabulary size: {vocab_info['vocab_size']}")
+        Vocabulary size: 50000
     """
 
     def __init__(
@@ -68,15 +81,19 @@ class SLAFTokenizer:
         Args:
             slaf_array: Initialized SLAFArray instance containing the single-cell data.
                        Used to build the gene vocabulary and access expression data.
-            tokenizer_type: Type of tokenizer to use (Geneformer or scGPT)
+                       Must be a valid SLAFArray with proper var DataFrame.
+            tokenizer_type: Type of tokenizer to use. Options: "geneformer", "scgpt".
+                          Can be passed as string or TokenizerType enum.
             vocab_size: Maximum size of gene vocabulary. Genes beyond this limit
-                       are excluded from tokenization.
+                       are excluded from tokenization. Higher values use more memory.
             n_expression_bins: Number of expression bins for scGPT tokenization.
                              Higher values provide finer expression resolution.
+                             Range: 1-1000, default: 10.
 
         Raises:
-            ValueError: If tokenizer_type is not supported.
+            ValueError: If tokenizer_type is not supported or vocab_size is invalid.
             RuntimeError: If SLAF array is not properly initialized.
+            TypeError: If slaf_array is not a valid SLAFArray instance.
 
         Examples:
             >>> # Basic initialization
@@ -94,6 +111,20 @@ class SLAFTokenizer:
             ... )
             >>> print(f"Expression bins: {tokenizer.n_expression_bins}")
             Expression bins: 20
+
+            >>> # Error handling for invalid tokenizer type
+            >>> try:
+            ...     tokenizer = SLAFTokenizer(slaf_array, tokenizer_type="invalid")
+            ... except ValueError as e:
+            ...     print(f"Error: {e}")
+            Error: Unsupported tokenizer type: invalid. Supported types: ['geneformer', 'scgpt']
+
+            >>> # Error handling for invalid SLAF array
+            >>> try:
+            ...     tokenizer = SLAFTokenizer(None)
+            ... except TypeError as e:
+            ...     print(f"Error: {e}")
+            Error: slaf_array must be a valid SLAFArray instance
         """
         self.slaf_array = slaf_array
         self.vocab_size = vocab_size
@@ -262,10 +293,38 @@ class SLAFTokenizer:
         max_genes: int | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Fast tokenization optimized for performance.
+        Tokenize gene expression sequences into model-ready tensors.
 
-        This method uses numpy-based vectorized operations for maximum speed,
-        matching the performance of the original test implementation.
+        This method converts gene and expression sequences into tokenized tensors
+        suitable for machine learning models. It supports both GeneFormer and scGPT
+        tokenization strategies with optimized vectorized operations.
+
+        Args:
+            gene_sequences: List of gene ID sequences for each cell
+            expr_sequences: List of expression value sequences for each cell (required for scGPT)
+            max_genes: Maximum number of genes per cell (defaults based on tokenizer type)
+
+        Returns:
+            tuple: (input_ids, attention_mask) tensors
+                - input_ids: Tokenized sequences with padding
+                - attention_mask: Boolean mask indicating valid tokens
+
+        Raises:
+            ValueError: If gene_sequences is empty
+
+        Examples:
+            >>> # GeneFormer tokenization
+            >>> gene_sequences = [[1, 2, 3], [4, 5, 6]]
+            >>> input_ids, attention_mask = tokenizer.tokenize(gene_sequences)
+            >>> print(f"Shape: {input_ids.shape}")
+            Shape: torch.Size([2, 2048])
+
+            >>> # scGPT tokenization
+            >>> gene_sequences = [[1, 2, 3], [4, 5, 6]]
+            >>> expr_sequences = [[0.5, 0.8, 0.2], [0.9, 0.1, 0.7]]
+            >>> input_ids, attention_mask = tokenizer.tokenize(gene_sequences, expr_sequences)
+            >>> print(f"Shape: {input_ids.shape}")
+            Shape: torch.Size([2, 2050])
         """
         if not gene_sequences:
             raise ValueError("Gene sequences cannot be empty")
