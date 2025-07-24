@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.14.10"
+__generated_with = "0.14.0"
 app = marimo.App(width="medium")
 
 
@@ -26,27 +26,18 @@ def _(mo):
 
     This notebook demonstrates how to build complete ML training pipelines with SLAF, including:
 
-    - Custom tokenizer configuration
-
-    - Different tokenization strategies (scGPT, Geneformer)
-
-    - DataLoader integration with PyTorch
-
+    - Streaming DataLoader with async prefetching
+    - PyTorch-compatible datasets
     - Performance optimization techniques
-
     - Custom training loop examples
 
     **Key Benefits for ML Training:**
 
-    🚀 **Fast Tokenization**: SQL-level performance for token generation
+    💾 **Memory Efficient**: Stream data in chunks without loading everything into memory
 
-    💾 **Memory Efficient**: Stream data without loading everything into memory
+    🔄 **Flexible**: Support for different tokenization strategies (scGPT, Geneformer)
 
-    🔄 **Flexible**: Support for different tokenization strategies and model architectures
-
-    🧬 **Production Ready**: Built for large-scale training with proper splits and error handling
-
-    ⚡ **Optimized**: SQL binning, percentile filtering, and other performance optimizations
+    🧬 **High Throughput**: Load and tokenize cells at 10k cells / sec: fast enough to never let a 8 x H100 GPU node stay idle
     """
     )
     return
@@ -67,9 +58,10 @@ def _(SLAFArray):
 def _(mo):
     mo.md(
         """
-    ## 1. Understanding SLAF Tokenization
+    ## 2. Tokenization Strategies
 
-    SLAF provides efficient tokenization for single-cell data, supporting multiple strategies:
+    SLAF supports different tokenization strategies for different model architectures.
+    Each strategy has its own format and vocabulary structure:
     """
     )
     return
@@ -77,43 +69,168 @@ def _(mo):
 
 @app.cell
 def _(mo):
-    mo.md(r"""### Tokenizer Configuration""")
+    mo.md(
+        """
+    ### GeneFormer vs scGPT Tokenization
+
+    **GeneFormer**: Simple gene sequences sorted by expression
+    - Format: `[CLS, gene1, gene2, gene3, ..., SEP]`
+    - Vocabulary: Gene tokens only
+    - Use case: Models that only need gene identity
+
+    **scGPT**: Gene-expression pairs with special tokens
+    - Format: `[CLS, gene1, expr1, gene2, expr2, ..., SEP]`
+    - Vocabulary: Gene tokens + expression bin tokens
+    - Use case: Models that need both gene identity and expression levels
+    """
+    )
     return
 
 
 @app.cell
 def _(SLAFTokenizer, slaf):
-    # Create tokenizer with custom settings
-    tokenizer = SLAFTokenizer(
-        slaf_array=slaf,
-        vocab_size=5000,  # Smaller vocab for demo
-        n_expression_bins=20,  # More expression bins
-        chunk_size=512,  # Smaller chunks for memory efficiency
-    )
+    def create_tokenizer():
+        # Create tokenizer with custom settings
+        tokenizer = SLAFTokenizer(
+            slaf_array=slaf,
+            vocab_size=2000,  # Dataset has <2000 genes
+            n_expression_bins=20,  # More expression bins
+        )
 
-    # Get vocabulary information
-    vocab_info = tokenizer.get_vocab_info()
-    print("✅ Tokenizer initialized:")
-    print(f"   Total vocabulary size: {vocab_info['total_vocab_size']:,}")
-    print(f"   Special tokens: {vocab_info['special_tokens']}")
-    print(f"   Expression bins: {vocab_info['n_expression_bins']}")
-    print(f"   Gene vocabulary size: {vocab_info['vocab_size']:,}")
+        # Get vocabulary information
+        vocab_info = tokenizer.get_vocab_info()
+        print("✅ Tokenizer initialized:")
+        print(f"   Total vocabulary size: {vocab_info['vocab_size']:,}")
+        print(f"   Special tokens: {vocab_info['special_tokens']}")
+        print(f"   Expression bins: {vocab_info['n_expression_bins']}")
+        print(f"   Gene vocabulary size: {vocab_info['gene_vocab_size']:,}")
 
-    # Show special tokens
-    print("\nSpecial tokens:")
-    for token_name, token_id in tokenizer.special_tokens.items():
-        print(f"   {token_name}: {token_id}")
+        # Show special tokens
+        print("\nSpecial tokens:")
+        for token_name, token_id in tokenizer.special_tokens.items():
+            print(f"   {token_name}: {token_id}")
 
+        return tokenizer
+
+    tokenizer = create_tokenizer()
     return (tokenizer,)
 
 
 @app.cell
+def _(SLAFTokenizer, slaf):
+    def demonstrate_geneformer():
+        print("🧬 GeneFormer Tokenization & Decoding")
+        print("=" * 40)
+
+        # Create GeneFormer tokenizer
+        tokenizer = SLAFTokenizer(
+            slaf_array=slaf,
+            tokenizer_type="geneformer",
+            vocab_size=2000,  # Dataset has <2000 genes
+            n_expression_bins=20,
+        )
+
+        # Show vocabulary info
+        vocab_info = tokenizer.get_vocab_info()
+        print(
+            f"✅ Vocabulary: {vocab_info['vocab_size']} total tokens, {vocab_info['gene_vocab_size']} genes"
+        )
+        print(f"   Special tokens: {vocab_info['special_tokens']}")
+
+        # Create sample gene sequences
+        gene_sequences = [[0, 1, 2, 3, 4], [1, 2, 3, 4, 5], [0, 2, 4, 6, 8]]
+
+        # Tokenize
+        input_ids, attention_mask = tokenizer.tokenize(
+            gene_sequences=gene_sequences,
+            max_genes=50,
+        )
+
+        print("\n📊 Tokenization Results:")
+        print(f"   Input shape: {input_ids.shape}")
+        print(f"   Attention mask shape: {attention_mask.shape}")
+        print(f"   First sequence tokens: {input_ids[0].tolist()[:10]}...")
+        print(f"   First sequence attention: {attention_mask[0].tolist()[:10]}...")
+
+        # Decode first sequence
+        print("\n🔍 Decoding Results:")
+        decoded = tokenizer.decode_tokens(input_ids[0].tolist())
+        print(f"   Sequence length: {len(input_ids[0])}")
+        print(f"   Genes: {len(decoded['genes'])} genes")
+        print(f"   First few genes: {decoded['genes'][:5]}")
+
+        return tokenizer, input_ids, attention_mask
+
+    geneformer_tokenizer, geneformer_input_ids, geneformer_attention_mask = (
+        demonstrate_geneformer()
+    )
+    return geneformer_tokenizer, geneformer_input_ids, geneformer_attention_mask
+
+
+@app.cell
+def _(SLAFTokenizer, slaf):
+    def demonstrate_scgpt():
+        print("🧬 scGPT Tokenization & Decoding")
+        print("=" * 40)
+
+        # Create scGPT tokenizer
+        tokenizer = SLAFTokenizer(
+            slaf_array=slaf,
+            tokenizer_type="scgpt",
+            vocab_size=2000,  # Dataset has <2000 genes
+            n_expression_bins=20,
+        )
+
+        # Show vocabulary info
+        vocab_info = tokenizer.get_vocab_info()
+        print(
+            f"✅ Vocabulary: {vocab_info['vocab_size']} total tokens, {vocab_info['gene_vocab_size']} genes"
+        )
+        print(f"   Special tokens: {vocab_info['special_tokens']}")
+        print(
+            f"   Expression bins: {vocab_info['n_expression_bins']} bins (start at token {tokenizer.expr_bin_start})"
+        )
+
+        # Create sample gene and expression sequences
+        gene_sequences = [[0, 1, 2], [1, 2, 3]]
+        expr_sequences = [[0.5, 0.8, 0.2], [0.9, 0.1, 0.7]]
+
+        # Tokenize
+        input_ids, attention_mask = tokenizer.tokenize(
+            gene_sequences=gene_sequences,
+            expr_sequences=expr_sequences,
+            max_genes=25,
+        )
+
+        print("\n📊 Tokenization Results:")
+        print(f"   Input shape: {input_ids.shape}")
+        print(f"   Attention mask shape: {attention_mask.shape}")
+        print("   Expected length: 1 + 2*25 + 1 = 52 (CLS + 25*(gene+expr) + SEP)")
+        print(f"   First sequence tokens: {input_ids[0].tolist()[:10]}...")
+        print(f"   First sequence attention: {attention_mask[0].tolist()[:10]}...")
+
+        # Decode first sequence
+        print("\n🔍 Decoding Results:")
+        decoded = tokenizer.decode_tokens(input_ids[0].tolist())
+        print(f"   Sequence length: {len(input_ids[0])}")
+        print(f"   Genes: {len(decoded['genes'])} genes")
+        print(f"   Expressions: {len(decoded['expressions'])} expressions")
+        print(f"   First few genes: {decoded['genes'][:3]}")
+        print(f"   First few expressions: {decoded['expressions'][:3]}")
+
+        return tokenizer, input_ids, attention_mask
+
+    scgpt_tokenizer, scgpt_input_ids, scgpt_attention_mask = demonstrate_scgpt()
+    return scgpt_tokenizer, scgpt_input_ids, scgpt_attention_mask
+
+
+@app.cell
 def _(mo):
     mo.md(
         """
-    ## 2. Tokenization Strategies
+    ## 3. SLAF DataLoader - Production-Ready Training
 
-    SLAF supports different tokenization strategies for different model architectures:
+    SLAF provides a high-performance DataLoader with streaming and async prefetching:
     """
     )
     return
@@ -121,230 +238,65 @@ def _(mo):
 
 @app.cell
 def _(mo):
-    mo.md(r"""### Geneformer and scGPT style tokenization""")
-    return
-
-
-@app.cell
-def _(tokenizer):
-    # Tokenize a small batch of cells for demonstration
-
-    # 1. Geneformer tokenization
-    print("\n1. Geneformer Tokenization:")
-    print("   Format: [gene1, gene2, gene3, ...] (sorted by expression)")
-
-    geneformer_tokens = tokenizer.tokenize_geneformer(
-        cell_integer_id_range=(0, 10),  # Limit for demo
-        max_genes=50,  # Limit for demo
-        min_percentile=10,  # Filter low-expression genes
-    )
-
-    print(
-        f"   Generated {len(geneformer_tokens)} sequences of length {len(geneformer_tokens[0])}"
-    )
-
-    # 2. scGPT tokenization
-    print("\n2. scGPT Tokenization:")
-    print("   Format: [CLS] gene1 expr1 gene2 expr2 ... [SEP]")
-
-    scgpt_tokens = tokenizer.tokenize_scgpt(
-        cell_integer_id_range=(0, 10),  # Limit for demo (scGPT sequences are longer)
-        max_genes=25,  # Limit for demo (scGPT sequences are longer)
-        use_sql_binning=True,  # Use SQL for better performance
-    )
-
-    print(
-        f"   Generated {len(scgpt_tokens)} sequences of length {len(scgpt_tokens[0])}"
-    )
-
-    return geneformer_tokens, scgpt_tokens
-
-
-@app.cell
-def _(mo):
-    mo.md(r"""### Token decoding examples""")
-    return
-
-
-@app.cell
-def _(geneformer_tokens, scgpt_tokens, tokenizer):
-    # Demonstrate token decoding
-    if geneformer_tokens:
-        print("1. Geneformer sequence decoding:")
-        decoded_geneformer = tokenizer.decode_tokens(geneformer_tokens[0])
-        print(f"   Sequence length: {len(geneformer_tokens[0])}")
-        print(f"   Genes: {len(decoded_geneformer['genes'])} genes")
-        if decoded_geneformer["genes"]:
-            print(f"   First few genes: {decoded_geneformer['genes'][:3]}")
-
-    if scgpt_tokens:
-        print("\n2. scGPT sequence decoding:")
-        decoded_scgpt = tokenizer.decode_tokens(scgpt_tokens[0])
-        print(f"   Sequence length: {len(scgpt_tokens[0])}")
-        print(f"   Special tokens: {decoded_scgpt['special_tokens']}")
-        print(f"   Genes: {len(decoded_scgpt['genes'])} genes")
-        print(f"   Expression bins: {len(decoded_scgpt['expression_bins'])} bins")
-        if decoded_scgpt["genes"]:
-            print(f"   First few genes: {decoded_scgpt['genes'][:3]}")
-            print(
-                f"   First few expression bins: {decoded_scgpt['expression_bins'][:3]}"
-            )
-
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md(
-        """
-    ## 3. Performance Comparison - Different Tokenization Approaches
-
-    Let's compare the performance of different tokenization strategies:
-    """
-    )
-    return
-
-
-@app.cell
-def _(time):
-    class Timer:
-        def __init__(self, name=None):
-            self.name = name
-            self.elapsed = 0.0
-            self._start_time = None
-
-        def __enter__(self):
-            self._start_time = (
-                time.perf_counter()
-            )  # Use perf_counter for more accurate timing
-            return self
-
-        def __exit__(self, exc_type, exc_val, exc_tb):
-            if self._start_time is not None:
-                end_time = time.perf_counter()
-                self.elapsed = end_time - self._start_time
-
-    # Usage
-    with Timer("My Task") as t:
-        # Code to be timed
-        time.sleep(2)  # Simulate some work
-        print("Task completed")
-
-    print(f"Elapsed time captured from context manager object: {t.elapsed:.4f} seconds")
-
-    return (Timer,)
-
-
-@app.cell
-def _(Timer, tokenizer):
-    # Performance comparison
-    print("⚡ Tokenization Performance Comparison")
-    print("=" * 45)
-
-    def demo_tokenizer_performance():
-        # Test Geneformer with 100 cells
-        print("\n1. Geneformer Performance:")
-
-        # Standard Geneformer
-        with Timer("geneformer_standard") as standard_time:
-            geneformer_standard = tokenizer.tokenize_geneformer(
-                (0, 100), max_genes=100, min_percentile=None
-            )
-
-        print(f"    Geneformer [standard]: {standard_time.elapsed:.4f}s")
-        # Geneformer with percentile filtering
-        with Timer("geneformer_percentile") as percentile_time:
-            _ = tokenizer.tokenize_geneformer(
-                (0, 100), max_genes=100, min_percentile=10
-            )
-        print(f"   Geneformer [percentile]: {percentile_time.elapsed:.4f}s")
-        print(f"   Speedup: {standard_time.elapsed / percentile_time.elapsed:.2f}x")
-
-        # Test scGPT with different settings
-        print("\n2. scGPT Performance:")
-
-        # scGPT with Python binning
-        with Timer("scgpt_python") as python_time:
-            _ = tokenizer.tokenize_scgpt((0, 100), max_genes=50, use_sql_binning=False)
-        print(f"   scGPT [Python]: {python_time.elapsed:.4f}s")
-
-        # scGPT with SQL binning
-        with Timer("scgpt_sql") as sql_time:
-            scgpt_sql = tokenizer.tokenize_scgpt(
-                (0, 100), max_genes=50, use_sql_binning=True
-            )
-        print(f"   scGPT [SQL]: {sql_time.elapsed:.4f}s")
-        print(f"   Speedup: {python_time.elapsed / sql_time.elapsed:.2f}x")
-
-        # Calculate tokens per second
-        total_tokens_geneformer = sum(len(seq) for seq in geneformer_standard)
-        total_tokens_scgpt = sum(len(seq) for seq in scgpt_sql)
-
-        print("\n3. Throughput:")
-        print(
-            f"   Geneformer [standard]: {total_tokens_geneformer / standard_time.elapsed:,.0f} tokens/sec"
-        )
-        print(
-            f"   Geneformer [percentile]: {total_tokens_geneformer / percentile_time.elapsed:,.0f} tokens/sec"
-        )
-        print(
-            f"   scGPT [Python]: {total_tokens_scgpt / python_time.elapsed:,.0f} tokens/sec"
-        )
-        print(
-            f"   scGPT [SQL]: {total_tokens_scgpt / sql_time.elapsed:,.0f} tokens/sec"
-        )
-
-    demo_tokenizer_performance()
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md(
-        """
-    ## 4. SLAF DataLoader - Production-Ready Training
-
-    SLAF provides a high-performance DataLoader for training:
-    """
-    )
+    mo.md(r"""### DataLoader Configuration""")
     return
 
 
 @app.cell
 def _(SLAFDataLoader, slaf):
-    # Initialize DataLoader
-    print("📦 SLAF DataLoader Configuration")
-    print("=" * 40)
+    def create_dataloader():
+        # Initialize DataLoader
+        print("📦 SLAF DataLoader Configuration")
+        print("=" * 40)
 
-    # Create DataLoader with custom settings
-    dataloader = SLAFDataLoader(
-        slaf_array=slaf,
-        tokenizer_type="geneformer",  # or "scgpt"
-        batch_size=16,  # Small batch for demo
-        max_genes=100,
-        num_workers=2,  # Number of worker processes
-        vocab_size=5000,
-        n_expression_bins=20,
-        chunk_size=512,
-    )
+        # Create DataLoader with custom settings
+        dataloader = SLAFDataLoader(
+            slaf_array=slaf,
+            tokenizer_type="geneformer",  # or "scgpt"
+            batch_size=16,  # Small batch for demo
+            max_genes=100,
+            vocab_size=2000,  # Dataset has <2000 genes
+            n_expression_bins=20,
+            n_epochs=1,  # Number of epochs
+        )
 
-    print("✅ DataLoader initialized:")
-    print(f"   Tokenizer type: {dataloader.tokenizer_type}")
-    print(f"   Batch size: {dataloader.batch_size}")
-    print(f"   Max genes: {dataloader.max_genes}")
-    print(f"   Number of batches: {len(dataloader)}")
-    print(f"   Special tokens: {dataloader.special_tokens}")
+        print("✅ DataLoader initialized:")
+        print(f"   Tokenizer type: {dataloader.tokenizer_type}")
+        print(f"   Batch size: {dataloader.batch_size}")
+        print(f"   Max genes: {dataloader.max_genes}")
+        print(f"   Special tokens: {dataloader.special_tokens}")
+        print(f"   Number of epochs: {dataloader.n_epochs}")
 
-    return (dataloader,)
+        return dataloader
+
+    create_dataloader()
+    return
 
 
 @app.cell
-def _(dataloader):
-    # Demonstrate DataLoader iteration
-    print("🔄 DataLoader Iteration")
-    print("=" * 25)
+def _(mo):
+    mo.md(r"""### DataLoader Iteration""")
+    return
 
-    def demo_dataloader_iteration(dataloader):
+
+@app.cell
+def _(SLAFDataLoader, slaf):
+    def demonstrate_dataloader_iteration():
+        # Demonstrate DataLoader iteration
+        print("🔄 DataLoader Iteration")
+        print("=" * 25)
+
+        # Create dataloader
+        dataloader = SLAFDataLoader(
+            slaf_array=slaf,
+            tokenizer_type="geneformer",  # or "scgpt"
+            batch_size=16,  # Small batch for demo
+            max_genes=100,
+            vocab_size=2000,  # Dataset has <2000 genes
+            n_expression_bins=20,
+            n_epochs=1,  # Number of epochs
+        )
+
         # Get first batch
         print("1. First batch structure:")
         batch = next(iter(dataloader))
@@ -372,23 +324,41 @@ def _(dataloader):
         print(f"   First 10 tokens: {first_seq[:10].tolist()}")
         print(f"   Sequence length: {len(first_seq)}")
 
-    demo_dataloader_iteration(dataloader)
+    demonstrate_dataloader_iteration()
     return
 
 
 @app.cell
-def _(Timer, dataloader):
-    # Performance testing of DataLoader
-    print("⚡ DataLoader Performance")
-    print("=" * 30)
+def _(mo):
+    mo.md(r"""### Performance Testing""")
+    return
 
-    # Test iteration speed
-    print("1. Iteration performance:")
 
-    def demo_dataloader_iteration_performance():
+@app.cell
+def _(SLAFDataLoader, slaf, time):
+    def test_dataloader_performance():
+        # Performance testing of DataLoader
+        print("⚡ DataLoader Performance")
+        print("=" * 30)
+
+        # Create dataloader
+        dataloader = SLAFDataLoader(
+            slaf_array=slaf,
+            tokenizer_type="geneformer",  # or "scgpt"
+            batch_size=16,  # Small batch for demo
+            max_genes=100,
+            vocab_size=2000,  # Dataset has <2000 genes
+            n_expression_bins=20,
+            n_epochs=1,  # Number of epochs
+        )
+
+        # Test iteration speed
+        print("1. Iteration performance:")
+
         batch_count = 0
         total_tokens = 0
 
+        start_time = time.time()
         for batch in dataloader:
             batch_count += 1
             total_tokens += batch["input_ids"].shape[0] * batch["input_ids"].shape[1]
@@ -396,16 +366,15 @@ def _(Timer, dataloader):
             # Only process first few batches for demo
             if batch_count >= 5:
                 break
-        return batch_count, total_tokens
 
-    with Timer("dataloader_iteration") as iteration_time:
-        batch_count, total_tokens = demo_dataloader_iteration_performance()
+        elapsed_time = time.time() - start_time
 
-    print(f"   Processed {batch_count} batches in {iteration_time.elapsed:.4f}s")
-    print(f"   Total tokens: {total_tokens:,}")
-    print(f"   Tokens per second: {total_tokens / iteration_time.elapsed:,.0f}")
-    print(f"   Batches per second: {batch_count / iteration_time.elapsed:.2f}")
+        print(f"   Processed {batch_count} batches in {elapsed_time:.4f}s")
+        print(f"   Total tokens: {total_tokens:,}")
+        print(f"   Tokens per second: {total_tokens / elapsed_time:,.0f}")
+        print(f"   Batches per second: {batch_count / elapsed_time:.2f}")
 
+    test_dataloader_performance()
     return
 
 
@@ -422,12 +391,23 @@ def _(mo):
 
 
 @app.cell
-def _(dataloader):
-    # Demonstrate PyTorch integration
-    print("🔥 PyTorch Training Loop Integration")
-    print("=" * 45)
+def _(SLAFDataLoader, slaf):
+    def demonstrate_pytorch_integration():
+        # Demonstrate PyTorch integration
+        print("🔥 PyTorch Training Loop Integration")
+        print("=" * 45)
 
-    def demo_training_loop(dataloader):
+        # Reinitialize DataLoader since the previous one was exhausted
+        dataloader = SLAFDataLoader(
+            slaf_array=slaf,
+            tokenizer_type="geneformer",
+            batch_size=16,
+            max_genes=100,
+            vocab_size=2000,  # Dataset has <2000 genes
+            n_expression_bins=20,
+            n_epochs=1,
+        )
+
         # Check if PyTorch is available
         try:
             import torch
@@ -479,7 +459,7 @@ def _(dataloader):
             from slaf.ml.dataloaders import get_optimal_device
 
             device = get_optimal_device()
-            model = YourModel(vocab_size=tokenizer.get_vocab_info()['total_vocab_size'])
+            model = YourModel(vocab_size=tokenizer.get_vocab_info()['vocab_size'])
             model = model.to(device)  # Move model to optimal device
             optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
 
@@ -512,7 +492,7 @@ def _(dataloader):
             )
             print(f"   Cell IDs: {batch['cell_ids'].shape}, {batch['cell_ids'].dtype}")
 
-    demo_training_loop(dataloader)
+    demonstrate_pytorch_integration()
     return
 
 
@@ -520,103 +500,100 @@ def _(dataloader):
 def _(mo):
     mo.md(
         """
-    ## 6. Custom DataLoader Implementation
+    ## 6. Streaming Dataset Features
 
-    Learn how to create custom DataLoaders for specific use cases:
+    Learn about the new streaming dataset capabilities:
     """
     )
     return
 
 
 @app.cell
-def _(SLAFTokenizer, np, slaf):
-    # Custom DataLoader implementation
-    print("🔧 Custom DataLoader Implementation")
-    print("=" * 40)
+def _(mo):
+    mo.md(r"""### Async Prefetching""")
+    return
 
-    class CustomSLAFDataLoader:
-        """Custom DataLoader with specific functionality"""
 
-        def __init__(
-            self,
-            slaf_array,
-            batch_size=32,
-            max_genes=100,
+@app.cell
+def _(SLAFDataLoader, slaf):
+    def demonstrate_streaming_features():
+        print("🔄 Streaming Dataset Features")
+        print("=" * 35)
+
+        # Create dataloader with streaming features
+        dataloader = SLAFDataLoader(
+            slaf_array=slaf,
             tokenizer_type="geneformer",
-            **tokenizer_kwargs,
-        ):
-            self.slaf_array = slaf_array
-            self.batch_size = batch_size
-            self.max_genes = max_genes
-            self.tokenizer_type = tokenizer_type
+            batch_size=8,
+            max_genes=50,
+            n_epochs=1,  # Single epoch for demo
+        )
 
-            # Initialize tokenizer
-            self.tokenizer = SLAFTokenizer(slaf_array, **tokenizer_kwargs)
+        print("✅ Streaming features:")
+        print("   - Async fragment prefetching")
+        print("   - Background fragment loading")
+        print("   - Memory-efficient streaming")
+        print("   - PyTorch IterableDataset compatibility")
 
-            # Get cell ranges for batching
-            self.cell_ranges = self._get_cell_ranges()
+        # Test streaming iteration
+        print("\n🔄 Testing streaming iteration:")
+        batch_count = 0
+        for batch in dataloader:
+            batch_count += 1
+            print(f"   Batch {batch_count}: {batch['input_ids'].shape}")
+            if batch_count >= 3:
+                break
 
-        def _get_cell_ranges(self):
-            """Get cell integer ID ranges for batching"""
-            max_cell_id = int(self.slaf_array.obs["cell_integer_id"].astype(int).max())
-            ranges = []
-            for start in range(0, max_cell_id + 1, self.batch_size):
-                end = min(start + self.batch_size, max_cell_id + 1)
-                ranges.append((start, end))
-            return ranges
+        print(f"   Successfully streamed {batch_count} batches")
 
-        def __iter__(self):
-            """Iterate through batches"""
-            for cell_range in self.cell_ranges:
-                # Tokenize based on type
-                if self.tokenizer_type == "geneformer":
-                    tokens = self.tokenizer.tokenize_geneformer(
-                        cell_integer_id_range=cell_range, max_genes=self.max_genes
-                    )
-                elif self.tokenizer_type == "scgpt":
-                    tokens = self.tokenizer.tokenize_scgpt(
-                        cell_integer_id_range=cell_range, max_genes=self.max_genes
-                    )
-                else:
-                    raise ValueError(f"Unknown tokenizer type: {self.tokenizer_type}")
+    demonstrate_streaming_features()
+    return
 
-                if not tokens:
-                    continue
 
-                # Convert to numpy arrays
-                batch_tensors = np.array(tokens, dtype=np.int64)
-                attention_mask = batch_tensors != self.tokenizer.special_tokens["PAD"]
+@app.cell
+def _(mo):
+    mo.md(r"""### Device Optimization""")
+    return
 
-                # Get cell IDs for this range
-                start_cell, end_cell = cell_range
-                cell_ids = list(range(start_cell, end_cell))
 
-                yield {
-                    "input_ids": batch_tensors,
-                    "attention_mask": attention_mask,
-                    "cell_ids": np.array(cell_ids[: len(tokens)], dtype=np.int64),
-                }
+@app.cell
+def _(SLAFDataLoader, slaf):
+    def demonstrate_device_optimization():
+        print("⚡ Device Optimization")
+        print("=" * 25)
 
-        def __len__(self):
-            return len(self.cell_ranges)
+        from slaf.ml.dataloaders import get_device_info, get_optimal_device
 
-    # Test custom DataLoader
-    print("✅ Custom DataLoader created")
+        # Get device information
+        device_info = get_device_info()
+        optimal_device = get_optimal_device()
 
-    custom_dataloader = CustomSLAFDataLoader(
-        slaf_array=slaf,
-        batch_size=8,
-        max_genes=50,
-        tokenizer_type="geneformer",
-        vocab_size=1000,
-    )
+        print("✅ Device detection:")
+        print(f"   PyTorch available: {device_info['torch_available']}")
+        print(f"   CUDA available: {device_info['cuda_available']}")
+        print(f"   MPS available: {device_info['mps_available']}")
+        print(f"   Optimal device: {optimal_device}")
 
-    print(f"   Number of batches: {len(custom_dataloader)}")
+        # Create dataloader with device optimization
+        dataloader = SLAFDataLoader(
+            slaf_array=slaf,
+            tokenizer_type="geneformer",
+            batch_size=8,
+            max_genes=50,
+            n_epochs=1,
+        )
 
-    # Test iteration
-    batch = next(iter(custom_dataloader))
-    print(f"   First batch shape: {batch['input_ids'].shape}")
+        print("\n✅ Device optimization:")
+        print("   - Automatic device detection")
+        print("   - Tensor transfer to optimal device")
+        print("   - Memory-efficient device handling")
 
+        # Test device transfer
+        batch = next(iter(dataloader))
+        if hasattr(batch["input_ids"], "device"):
+            print(f"   Batch device: {batch['input_ids'].device}")
+
+    demonstrate_device_optimization()
     return
 
 
@@ -633,42 +610,60 @@ def _(mo):
 
 
 @app.cell
-def _(np, time, tokenizer):
-    # Advanced tokenization features
-    print("🚀 Advanced Tokenization Features")
-    print("=" * 40)
+def _(SLAFTokenizer, np, time, tokenizer):
+    def demonstrate_advanced_features():
+        # Advanced tokenization features
+        print("🚀 Advanced Tokenization Features")
+        print("=" * 40)
 
-    def demo_advanced_tokenization():
         print("1. Different max_genes settings:")
+        gene_sequences = [[i, i + 1, i + 2] for i in range(20)]
+
         for max_genes in [25, 50, 100]:
-            tokens = tokenizer.tokenize_geneformer((0, 20), max_genes=max_genes)
-            avg_length = np.mean([len(seq) for seq in tokens])
+            input_ids, attention_mask = tokenizer.tokenize(
+                gene_sequences=gene_sequences,
+                max_genes=max_genes,
+            )
+            avg_length = np.mean([len(seq) for seq in input_ids])
             print(f"   max_genes={max_genes}: avg_length={avg_length:.1f}")
 
-        print("\n2. Different percentile filtering:")
-        for percentile in [None, 5, 10, 20]:
-            tokens = tokenizer.tokenize_geneformer(
-                (0, 20), max_genes=50, min_percentile=percentile
+        print("\n2. Different vocabulary sizes:")
+        for vocab_size in [1000, 5000, 10000]:
+            # Create a new tokenizer with different vocab size
+            test_tokenizer = SLAFTokenizer(
+                slaf_array=tokenizer.slaf_array,
+                vocab_size=vocab_size,
+                n_expression_bins=10,
             )
-            avg_length = np.mean([len(seq) for seq in tokens])
-            print(f"   min_percentile={percentile}: avg_length={avg_length:.1f}")
+            vocab_info = test_tokenizer.get_vocab_info()
+            print(
+                f"   vocab_size={vocab_size}: actual_vocab={vocab_info['vocab_size']}"
+            )
 
-        print("\n3. SQL vs Python binning for scGPT:")
-        # SQL binning
-        start_time = time.time()
-        _ = tokenizer.tokenize_scgpt((0, 20), max_genes=25, use_sql_binning=True)
-        sql_time = time.time() - start_time
+        print("\n3. Expression binning for scGPT:")
+        # Test scGPT with different expression bins
+        gene_sequences = [[1, 2, 3], [2, 3, 4]]
+        expr_sequences = [[0.5, 0.8, 0.2], [0.9, 0.1, 0.7]]
 
-        # Python binning
-        start_time = time.time()
-        _ = tokenizer.tokenize_scgpt((0, 20), max_genes=25, use_sql_binning=False)
-        python_time = time.time() - start_time
+        for n_bins in [5, 10, 20]:
+            scgpt_tokenizer = SLAFTokenizer(
+                slaf_array=tokenizer.slaf_array,
+                tokenizer_type="scgpt",
+                vocab_size=2000,  # Dataset has <2000 genes
+                n_expression_bins=n_bins,
+            )
 
-        print(f"   SQL binning: {sql_time:.4f}s")
-        print(f"   Python binning: {python_time:.4f}s")
-        print(f"   Speedup: {python_time / sql_time:.2f}x")
+            start_time = time.time()
+            input_ids, attention_mask = scgpt_tokenizer.tokenize(
+                gene_sequences=gene_sequences,
+                expr_sequences=expr_sequences,
+                max_genes=25,
+            )
+            elapsed_time = time.time() - start_time
 
-    demo_advanced_tokenization()
+            print(f"   n_expression_bins={n_bins}: {elapsed_time:.4f}s")
+
+    demonstrate_advanced_features()
     return
 
 
@@ -686,20 +681,20 @@ def _(mo):
 
 @app.cell
 def _(SLAFDataLoader, slaf, time):
-    # Memory and performance optimization
-    print("💾 Memory and Performance Optimization")
-    print("=" * 45)
+    def demonstrate_memory_optimization():
+        # Memory and performance optimization
+        print("💾 Memory and Performance Optimization")
+        print("=" * 45)
 
-    import gc
+        import gc
 
-    import psutil
+        import psutil
 
-    def get_memory_usage():
-        """Get current memory usage in MB"""
-        process = psutil.Process()
-        return process.memory_info().rss / 1024 / 1024
+        def get_memory_usage():
+            """Get current memory usage in MB"""
+            process = psutil.Process()
+            return process.memory_info().rss / 1024 / 1024
 
-    def demo_memory_and_performance_optimization():
         print("1. Memory usage comparison:")
 
         # Baseline memory
@@ -713,7 +708,11 @@ def _(SLAFDataLoader, slaf, time):
             start_memory = get_memory_usage()
 
             dataloader = SLAFDataLoader(
-                slaf_array=slaf, batch_size=batch_size, max_genes=100, vocab_size=1000
+                slaf_array=slaf,
+                batch_size=batch_size,
+                max_genes=100,
+                vocab_size=2000,  # Dataset has <2000 genes
+                n_epochs=1,
             )
 
             # Process one batch
@@ -737,6 +736,7 @@ def _(SLAFDataLoader, slaf, time):
             dataloader = SLAFDataLoader(
                 slaf_array=slaf,
                 **{k: v for k, v in config.items() if k != "description"},
+                n_epochs=1,
             )
 
             start_time = time.time()
@@ -751,7 +751,7 @@ def _(SLAFDataLoader, slaf, time):
                 f"   {config['description']}: {elapsed_time:.4f}s for {batch_count} batches"
             )
 
-    demo_memory_and_performance_optimization()
+    demonstrate_memory_optimization()
     return
 
 
@@ -769,73 +769,61 @@ def _(mo):
 
 @app.cell
 def _(SLAFDataLoader, SLAFTokenizer, slaf):
-    # Production training workflow
-    print("🏭 Production Training Workflow")
-    print("=" * 40)
-
-    def create_production_dataloaders(
-        slaf_array, train_ratio=0.8, val_ratio=0.1, test_ratio=0.1
-    ):
-        """Create train/val/test dataloaders"""
-
-        # Get total number of cells
-        total_cells = len(slaf_array.obs)
-        _ = int(total_cells * train_ratio)  # train_size
-        _ = int(total_cells * val_ratio)  # val_size
+    def create_production_workflow():
+        # Production training workflow
+        print("🏭 Production Training Workflow")
+        print("=" * 40)
 
         # Create tokenizer
         tokenizer = SLAFTokenizer(
-            slaf_array=slaf_array,
-            vocab_size=10000,
+            slaf_array=slaf,
+            vocab_size=2000,  # Dataset has <2000 genes
             n_expression_bins=50,
-            chunk_size=1024,
         )
 
         print(
-            f"✅ Created tokenizer with {tokenizer.get_vocab_info()['total_vocab_size']} total tokens"
+            f"✅ Created tokenizer with {tokenizer.get_vocab_info()['vocab_size']} total tokens"
         )
 
         # Create dataloaders (in production, you'd use proper splits)
         train_dataloader = SLAFDataLoader(
-            slaf_array=slaf_array,
+            slaf_array=slaf,
             tokenizer_type="geneformer",
             batch_size=32,
             max_genes=512,
-            vocab_size=10000,
+            vocab_size=2000,  # Dataset has <2000 genes
             n_expression_bins=50,
+            n_epochs=1,
         )
 
         val_dataloader = SLAFDataLoader(
-            slaf_array=slaf_array,
+            slaf_array=slaf,
             tokenizer_type="geneformer",
             batch_size=32,
             max_genes=512,
-            vocab_size=10000,
+            vocab_size=2000,  # Dataset has <2000 genes
             n_expression_bins=50,
+            n_epochs=1,
         )
+
+        print("\n📊 Production Setup:")
+        print(f"   Batch size: {train_dataloader.batch_size}")
+        print(f"   Max genes: {train_dataloader.max_genes}")
+
+        # Test production workflow
+        print("\n🧪 Testing production workflow:")
+
+        # Test training batch
+        train_batch = next(iter(train_dataloader))
+        print(f"   Training batch shape: {train_batch['input_ids'].shape}")
+
+        # Test validation batch
+        val_batch = next(iter(val_dataloader))
+        print(f"   Validation batch shape: {val_batch['input_ids'].shape}")
 
         return train_dataloader, val_dataloader, tokenizer
 
-    # Create production dataloaders
-    train_dl, val_dl, prod_tokenizer = create_production_dataloaders(slaf)
-
-    print("\n📊 Production Setup:")
-    print(f"   Train batches: {len(train_dl)}")
-    print(f"   Validation batches: {len(val_dl)}")
-    print(f"   Batch size: {train_dl.batch_size}")
-    print(f"   Max genes: {train_dl.max_genes}")
-
-    # Test production workflow
-    print("\n🧪 Testing production workflow:")
-
-    # Test training batch
-    train_batch = next(iter(train_dl))
-    print(f"   Training batch shape: {train_batch['input_ids'].shape}")
-
-    # Test validation batch
-    val_batch = next(iter(val_dl))
-    print(f"   Validation batch shape: {val_batch['input_ids'].shape}")
-
+    create_production_workflow()
     return
 
 
@@ -853,36 +841,40 @@ def _(mo):
 
 @app.cell
 def _():
-    # Best practices for ML training
-    print("💡 Best Practices for ML Training")
-    print("=" * 40)
+    def show_best_practices():
+        # Best practices for ML training
+        print("💡 Best Practices for ML Training")
+        print("=" * 40)
 
-    print("1. Tokenizer Configuration:")
-    print("   ✅ Choose appropriate vocab_size based on your dataset")
-    print("   ✅ Use n_expression_bins=50 for fine-grained expression modeling")
-    print("   ✅ Set chunk_size based on available memory")
+        print("1. Tokenizer Configuration:")
+        print("   ✅ Choose appropriate vocab_size based on your dataset")
+        print("   ✅ Use n_expression_bins=50 for fine-grained expression modeling")
+        print("   ✅ Use the correct tokenizer_type for your model architecture")
 
-    print("\n2. DataLoader Configuration:")
-    print("   ✅ Start with small batch_size and increase gradually")
-    print("   ✅ Use max_genes appropriate for your model architecture")
-    print("   ✅ Set num_workers based on CPU cores")
+        print("\n2. DataLoader Configuration:")
+        print("   ✅ Start with small batch_size and increase gradually")
+        print("   ✅ Use max_genes appropriate for your model architecture")
+        print("   ✅ Set n_epochs for multi-epoch training on small datasets")
 
-    print("\n3. Performance Optimization:")
-    print("   ✅ Use SQL binning for scGPT tokenization")
-    print("   ✅ Leverage percentile filtering for Geneformer")
-    print("   ✅ Monitor memory usage during training")
+        print("\n3. Performance Optimization:")
+        print("   ✅ Fragment-based processing is much faster than SQL")
+        print("   ✅ Use async prefetching to minimize GPU idle time")
+        print("   ✅ Leverage device optimization for automatic tensor transfer")
+        print("   ✅ Monitor memory usage during training")
 
-    print("\n4. Training Workflow:")
-    print("   ✅ Create separate train/val/test splits")
-    print("   ✅ Use consistent tokenizer across splits")
-    print("   ✅ Implement proper error handling")
+        print("\n4. Training Workflow:")
+        print("   ✅ Create separate train/val/test splits")
+        print("   ✅ Use consistent tokenizer across splits")
+        print("   ✅ Implement proper error handling")
+        print("   ✅ Use streaming datasets for large datasets")
 
-    print("\n5. Production Considerations:")
-    print("   ✅ Use appropriate batch sizes for your hardware")
-    print("   ✅ Implement checkpointing for long training runs")
-    print("   ✅ Monitor tokenization throughput")
-    print("   ✅ Consider distributed training for large datasets")
+        print("\n5. Production Considerations:")
+        print("   ✅ Use appropriate batch sizes for your hardware")
+        print("   ✅ Implement checkpointing for long training runs")
+        print("   ✅ Monitor tokenization throughput")
+        print("   ✅ Consider distributed training for large datasets")
 
+    show_best_practices()
     return
 
 
@@ -894,13 +886,17 @@ def _(mo):
 
     **What you've learned about SLAF ML Training:**
 
-    1. **Tokenizer Configuration**: Customize vocabulary size, expression bins, and chunking
-    2. **Tokenization Strategies**: Geneformer and scGPT formats with different performance characteristics
-    3. **DataLoader Integration**: High-performance data loading with PyTorch compatibility
-    4. **Performance Optimization**: SQL-level performance with memory efficiency
-    5. **Custom Implementation**: How to build custom DataLoaders for specific needs
-    6. **Production Workflow**: Complete training pipeline setup
-    7. **Best Practices**: Guidelines for optimal ML training performance
+    1. **Streaming DataLoader**: Async prefetching with PyTorch compatibility
+    2. **Tokenization Strategies**: Geneformer and scGPT formats with optimized processing
+    3. **Memory Efficiency**: Streaming datasets for large-scale training
+    4. **Production Workflow**: Complete training pipeline setup
+    5. **Best Practices**: Guidelines for optimal ML training performance
+
+    **Key Performance Improvements:**
+    - Fragment processing for high throughput
+    - Streaming datasets with async prefetching
+    - Automatic device optimization
+    - Memory-efficient processing for large datasets
     """
     )
     return
