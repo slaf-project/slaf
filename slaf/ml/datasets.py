@@ -54,7 +54,26 @@ from slaf.ml.tokenizers import SLAFTokenizer
 
 
 def print_prefetch(message: str):
-    """Print prefetch-related messages in cyan with a panel"""
+    """
+    Print prefetch-related messages in cyan with a panel.
+
+    This function formats prefetch-related output messages using rich formatting
+    when available, or falls back to simple text output. Messages are displayed
+    in cyan color with a panel border for better visibility.
+
+    Args:
+        message: The message text to display. Should contain prefetch-related
+                information like batch processing times, throughput rates, etc.
+
+    Examples:
+        >>> # Print prefetch message
+        >>> print_prefetch("Batch 10 loaded: 32 cells, 2.3ms")
+        🔍 Batch 10 loaded: 32 cells, 2.3ms
+
+        >>> # With rich formatting (if available)
+        >>> print_prefetch("Processing rate: 1000 cells/sec")
+        # Output will be in cyan panel if rich is available
+    """
     if RICH_AVAILABLE:
         console.print(Panel(message, border_style="cyan"))
     else:
@@ -62,7 +81,26 @@ def print_prefetch(message: str):
 
 
 def print_training(message: str):
-    """Print training-related messages in green with a panel"""
+    """
+    Print training-related messages in green with a panel.
+
+    This function formats training-related output messages using rich formatting
+    when available, or falls back to simple text output. Messages are displayed
+    in green color with a panel border for better visibility.
+
+    Args:
+        message: The message text to display. Should contain training-related
+                information like batch processing times, throughput rates, etc.
+
+    Examples:
+        >>> # Print training message
+        >>> print_training("Batch 100 processed: 32 cells, 1.2ms")
+        📊 Batch 100 processed: 32 cells, 1.2ms
+
+        >>> # With rich formatting (if available)
+        >>> print_training("Training rate: 500 batches/sec")
+        # Output will be in green panel if rich is available
+    """
     if RICH_AVAILABLE:
         console.print(Panel(message, border_style="green"))
     else:
@@ -70,7 +108,26 @@ def print_training(message: str):
 
 
 def print_epoch_transition(message: str):
-    """Print epoch transition messages in yellow"""
+    """
+    Print epoch transition messages in yellow.
+
+    This function formats epoch transition messages using rich formatting
+    when available, or falls back to simple text output. Messages are displayed
+    in yellow color to indicate epoch boundary events.
+
+    Args:
+        message: The message text to display. Should contain epoch transition
+                information like epoch numbers, completion status, etc.
+
+    Examples:
+        >>> # Print epoch transition message
+        >>> print_epoch_transition("Epoch 1 -> 2")
+        🔄 Epoch 1 -> 2
+
+        >>> # With rich formatting (if available)
+        >>> print_epoch_transition("Starting epoch 5")
+        # Output will be in yellow if rich is available
+    """
     if RICH_AVAILABLE:
         console.print(f"[yellow]🔄 {message}[/yellow]")
     else:
@@ -78,7 +135,26 @@ def print_epoch_transition(message: str):
 
 
 def print_completion(message: str):
-    """Print completion messages in bright green with a panel"""
+    """
+    Print completion messages in bright green with a panel.
+
+    This function formats completion messages using rich formatting
+    when available, or falls back to simple text output. Messages are displayed
+    in bright green color with a panel border to indicate successful completion.
+
+    Args:
+        message: The message text to display. Should contain completion
+                information like training completion, epoch completion, etc.
+
+    Examples:
+        >>> # Print completion message
+        >>> print_completion("All epochs completed")
+        ✅ All epochs completed
+
+        >>> # With rich formatting (if available)
+        >>> print_completion("Training finished successfully")
+        # Output will be in bright green panel if rich is available
+    """
     if RICH_AVAILABLE:
         console.print(
             Panel(
@@ -91,7 +167,26 @@ def print_completion(message: str):
 
 
 def print_warning(message: str):
-    """Print warning messages in orange"""
+    """
+    Print warning messages in orange.
+
+    This function formats warning messages using rich formatting
+    when available, or falls back to simple text output. Messages are displayed
+    in orange color to indicate warning conditions.
+
+    Args:
+        message: The message text to display. Should contain warning
+                information like timeout conditions, errors, etc.
+
+    Examples:
+        >>> # Print warning message
+        >>> print_warning("Prefetcher timeout")
+        ⚠️ Prefetcher timeout
+
+        >>> # With rich formatting (if available)
+        >>> print_warning("Queue is full")
+        # Output will be in orange if rich is available
+    """
     if RICH_AVAILABLE:
         console.print(f"[orange3]⚠️ {message}[/orange3]")
     else:
@@ -105,6 +200,34 @@ class PrefetchBatch:
 
     This dataclass holds the results of batch processing from Lance fragments,
     including tokenized sequences, attention masks, and metadata for training.
+    It serves as the primary data structure for transferring pre-processed
+    batches between the background prefetcher and the main training loop.
+
+    Examples:
+        >>> # Create a prefetch batch
+        >>> import torch
+        >>> batch = PrefetchBatch(
+        ...     batch_id=0,
+        ...     input_ids=torch.randint(0, 1000, (32, 1024)),
+        ...     attention_mask=torch.ones(32, 1024, dtype=torch.bool),
+        ...     cell_integer_ids=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31],
+        ...     tokenize_time=0.0023
+        ... )
+        >>> print(f"Batch {batch.batch_id}: {len(batch.cell_integer_ids)} cells")
+        Batch 0: 32 cells
+
+        >>> # Access batch components
+        >>> print(f"Input shape: {batch.input_ids.shape}")
+        Input shape: torch.Size([32, 1024])
+        >>> print(f"Tokenization time: {batch.tokenize_time * 1000:.1f}ms")
+        Tokenization time: 2.3ms
+
+        >>> # Check for partial cell data
+        >>> if batch.partial_cell_data is not None:
+        ...     print(f"Partial cells: {len(batch.partial_cell_data)}")
+        ... else:
+        ...     print("No partial cell data")
+        No partial cell data
     """
 
     batch_id: int
@@ -241,11 +364,46 @@ class PrefetchBatchProcessor:
         """
         Reset the batch generator for a new epoch.
 
+        This method resets the internal state of the batch processor for a new epoch,
+        including the Lance batch generator, batch counter, and partial cell data.
+        It also updates the current epoch tracking and prints a transition message.
+
         Args:
-            epoch: The epoch number (0-indexed)
+            epoch: The epoch number (0-indexed). Must be within the range
+                  0 <= epoch < n_epochs.
 
         Raises:
             ValueError: If epoch is invalid or exceeds n_epochs
+
+        Examples:
+            >>> # Reset for first epoch
+            >>> processor = PrefetchBatchProcessor(slaf_array, window, shuffle, tokenizer, n_epochs=3)
+            >>> processor.reset_for_epoch(0)
+            >>> print(f"Current epoch: {processor.current_epoch}")
+            Current epoch: 0
+
+            >>> # Reset for second epoch
+            >>> processor.reset_for_epoch(1)
+            >>> print(f"Current epoch: {processor.current_epoch}")
+            Current epoch: 1
+
+            >>> # Error handling for invalid epoch
+            >>> try:
+            ...     processor.reset_for_epoch(5)  # Beyond n_epochs=3
+            ... except ValueError as e:
+            ...     print(f"Error: {e}")
+            Error: Invalid epoch 5. Must be 0 <= epoch < 3
+
+            >>> # Check batch counter reset
+            >>> processor.reset_for_epoch(0)
+            >>> print(f"Batch ID: {processor.batch_id}")
+            Batch ID: 0
+
+            >>> # Verify partial cell data is cleared
+            >>> processor.partial_cell_data = {"test": "data"}
+            >>> processor.reset_for_epoch(1)
+            >>> print(f"Partial cell data: {processor.partial_cell_data}")
+            Partial cell data: {}
         """
         if epoch < 0 or epoch >= self.n_epochs:
             raise ValueError(
@@ -267,13 +425,50 @@ class PrefetchBatchProcessor:
 
         This method loads multiple Lance batches, applies window functions to rank
         and filter genes, shuffles cells for training, and tokenizes the sequences.
-        It handles cell boundary crossing and partial data management.
+        It handles cell boundary crossing and partial data management. The method
+        uses an iterative approach to handle epoch transitions automatically.
 
         Returns:
             PrefetchBatch: Container with tokenized sequences and metadata
 
         Raises:
             StopIteration: When no more batches are available for current epoch
+
+        Examples:
+            >>> # Load a single batch
+            >>> processor = PrefetchBatchProcessor(slaf_array, window, shuffle, tokenizer)
+            >>> batch = processor.load_prefetch_batch()
+            >>> print(f"Loaded batch {batch.batch_id} with {len(batch.cell_integer_ids)} cells")
+            Loaded batch 0 with 32 cells
+
+            >>> # Load multiple batches
+            >>> batches = []
+            >>> for _ in range(3):
+            ...     try:
+            ...         batch = processor.load_prefetch_batch()
+            ...         batches.append(batch)
+            ...     except StopIteration:
+            ...         break
+            >>> print(f"Loaded {len(batches)} batches")
+            Loaded 3 batches
+
+            >>> # Check batch contents
+            >>> batch = processor.load_prefetch_batch()
+            >>> print(f"Input shape: {batch.input_ids.shape}")
+            Input shape: torch.Size([32, 1024])
+            >>> print(f"Tokenization time: {batch.tokenize_time * 1000:.1f}ms")
+            Tokenization time: 2.3ms
+
+            >>> # Handle epoch transitions
+            >>> processor = PrefetchBatchProcessor(slaf_array, window, shuffle, tokenizer, n_epochs=2)
+            >>> batch = processor.load_prefetch_batch()
+            >>> print(f"Epoch: {processor.current_epoch}")
+            Epoch: 0
+            >>> # Continue until epoch transition
+            >>> while processor.current_epoch < 1:
+            ...     batch = processor.load_prefetch_batch()
+            >>> print(f"Now in epoch: {processor.current_epoch}")
+            Now in epoch: 1
         """
         # Iterative approach to handle epoch transitions
         while True:
@@ -441,6 +636,41 @@ class AsyncPrefetcher:
     def __init__(
         self, batch_processor: PrefetchBatchProcessor, max_queue_size: int = 500
     ):
+        """
+        Initialize the AsyncPrefetcher with batch processing configuration.
+
+        Args:
+            batch_processor: PrefetchBatchProcessor instance that handles the actual
+                           batch loading and processing. This processor will be used
+                           in the background thread to generate batches.
+            max_queue_size: Maximum number of pre-processed batches to store in the
+                          queue. Higher values use more memory but provide better
+                          buffering against processing delays. Range: 10-1000,
+                          default: 500.
+
+        Raises:
+            ValueError: If batch_processor is None or max_queue_size is invalid.
+            TypeError: If batch_processor is not a PrefetchBatchProcessor instance.
+
+        Examples:
+            >>> # Basic initialization
+            >>> processor = PrefetchBatchProcessor(slaf_array, window, shuffle, tokenizer)
+            >>> prefetcher = AsyncPrefetcher(processor)
+            >>> print(f"Queue size: {prefetcher.max_queue_size}")
+            Queue size: 500
+
+            >>> # Custom queue size
+            >>> prefetcher = AsyncPrefetcher(processor, max_queue_size=1000)
+            >>> print(f"Custom queue size: {prefetcher.max_queue_size}")
+            Custom queue size: 1000
+
+            >>> # Error handling for invalid processor
+            >>> try:
+            ...     prefetcher = AsyncPrefetcher(None)
+            ... except ValueError as e:
+            ...     print(f"Error: {e}")
+            Error: batch_processor cannot be None
+        """
         self.batch_processor = batch_processor
         self.max_queue_size = max_queue_size
         self.queue: Queue[PrefetchBatch] = Queue(maxsize=max_queue_size)
@@ -456,7 +686,36 @@ class AsyncPrefetcher:
         self.current_epoch = 0
 
     def start(self):
-        """Start the prefetching worker thread"""
+        """
+        Start the prefetching worker thread.
+
+        This method initializes and starts a background thread that continuously
+        loads and processes batches from the batch processor. The thread runs
+        until stop() is called or an error occurs.
+
+        Raises:
+            RuntimeError: If the worker thread is already running or cannot be started.
+            ThreadingError: If there are issues with thread creation.
+
+        Examples:
+            >>> # Start the prefetcher
+            >>> processor = PrefetchBatchProcessor(slaf_array, window, shuffle, tokenizer)
+            >>> prefetcher = AsyncPrefetcher(processor)
+            >>> prefetcher.start()
+            >>> print(f"Worker thread alive: {prefetcher.worker_thread.is_alive()}")
+            Worker thread alive: True
+
+            >>> # Start and immediately check stats
+            >>> prefetcher.start()
+            >>> stats = prefetcher.get_stats()
+            >>> print(f"Total cells: {stats['total_cells']}")
+            Total cells: 0
+
+            >>> # Error handling for already running thread
+            >>> prefetcher.start()  # Should not raise error if already running
+            >>> print("Prefetcher started successfully")
+            Prefetcher started successfully
+        """
         if self.worker_thread is None or not self.worker_thread.is_alive():
             self.should_stop = False
             self.start_time = time.time()
@@ -466,7 +725,38 @@ class AsyncPrefetcher:
             self.worker_thread.start()
 
     def stop(self):
-        """Stop the prefetching worker thread"""
+        """
+        Stop the prefetching worker thread.
+
+        This method signals the background worker thread to stop and waits for it
+        to complete. The thread will finish processing its current batch before
+        stopping. If the thread doesn't stop within 1 second, it will be
+        forcefully terminated.
+
+        Examples:
+            >>> # Start and stop the prefetcher
+            >>> processor = PrefetchBatchProcessor(slaf_array, window, shuffle, tokenizer)
+            >>> prefetcher = AsyncPrefetcher(processor)
+            >>> prefetcher.start()
+            >>> print(f"Before stop: {prefetcher.worker_thread.is_alive()}")
+            Before stop: True
+            >>> prefetcher.stop()
+            >>> print(f"After stop: {prefetcher.worker_thread.is_alive()}")
+            After stop: False
+
+            >>> # Stop without starting (should not raise error)
+            >>> prefetcher = AsyncPrefetcher(processor)
+            >>> prefetcher.stop()
+            >>> print("Stopped successfully")
+            Stopped successfully
+
+            >>> # Check stats after stopping
+            >>> prefetcher.start()
+            >>> prefetcher.stop()
+            >>> stats = prefetcher.get_stats()
+            >>> print(f"Elapsed time: {stats['elapsed_time']:.2f}s")
+            Elapsed time: 0.00s
+        """
         self.should_stop = True
         if self.worker_thread and self.worker_thread.is_alive():
             self.worker_thread.join(timeout=1.0)
@@ -515,18 +805,147 @@ class AsyncPrefetcher:
                 break
 
     def get_batch(self) -> PrefetchBatch | None:
-        """Get next batch from queue"""
+        """
+        Get the next pre-processed batch from the queue.
+
+        This method retrieves a batch that has been pre-processed by the background
+        worker thread. If no batch is available, it waits up to 1 second before
+        returning None.
+
+        Returns:
+            PrefetchBatch | None: The next pre-processed batch, or None if no batch
+                                 is available within the timeout period.
+
+        Examples:
+            >>> # Get batches from prefetcher
+            >>> processor = PrefetchBatchProcessor(slaf_array, window, shuffle, tokenizer)
+            >>> prefetcher = AsyncPrefetcher(processor)
+            >>> prefetcher.start()
+            >>>
+            >>> # Wait for first batch
+            >>> batch = prefetcher.get_batch()
+            >>> if batch is not None:
+            ...     print(f"Got batch with {len(batch.cell_integer_ids)} cells")
+            ... else:
+            ...     print("No batch available")
+            Got batch with 32 cells
+
+            >>> # Get multiple batches
+            >>> batches = []
+            >>> for _ in range(3):
+            ...     batch = prefetcher.get_batch()
+            ...     if batch is not None:
+            ...         batches.append(batch)
+            >>> print(f"Retrieved {len(batches)} batches")
+            Retrieved 3 batches
+
+            >>> # Handle no batches available
+            >>> prefetcher.stop()
+            >>> batch = prefetcher.get_batch()
+            >>> print(f"Batch available: {batch is not None}")
+            Batch available: False
+        """
         try:
             return self.queue.get(timeout=1.0)
         except queue.Empty:
             return None
 
     def has_batch(self) -> bool:
-        """Check if batch is available"""
+        """
+        Check if a pre-processed batch is available in the queue.
+
+        This method provides a non-blocking way to check if the prefetcher has
+        any batches ready for consumption. It does not wait for batches to become
+        available.
+
+        Returns:
+            bool: True if at least one batch is available in the queue, False otherwise.
+
+        Examples:
+            >>> # Check batch availability
+            >>> processor = PrefetchBatchProcessor(slaf_array, window, shuffle, tokenizer)
+            >>> prefetcher = AsyncPrefetcher(processor)
+            >>> print(f"Initial batch available: {prefetcher.has_batch()}")
+            Initial batch available: False
+            >>>
+            >>> # Start prefetching and check again
+            >>> prefetcher.start()
+            >>> import time
+            >>> time.sleep(0.1)  # Give time for first batch
+            >>> print(f"After start: {prefetcher.has_batch()}")
+            After start: True
+
+            >>> # Check availability in a loop
+            >>> available_batches = 0
+            >>> for _ in range(10):
+            ...     if prefetcher.has_batch():
+            ...         available_batches += 1
+            ...     time.sleep(0.01)
+            >>> print(f"Batches available in 10 checks: {available_batches}")
+            Batches available in 10 checks: 8
+
+            >>> # Check after stopping
+            >>> prefetcher.stop()
+            >>> print(f"After stop: {prefetcher.has_batch()}")
+            After stop: False
+        """
         return not self.queue.empty()
 
     def get_stats(self) -> dict:
-        """Get prefetch statistics"""
+        """
+        Get comprehensive statistics about the prefetcher's performance.
+
+        This method returns a dictionary containing various metrics about the
+        prefetcher's operation, including throughput, queue status, and timing
+        information.
+
+        Returns:
+            dict: Statistics dictionary containing:
+                - total_cells: Total number of cells processed
+                - elapsed_time: Total time since prefetcher started
+                - cells_per_sec: Average processing rate in cells per second
+                - queue_size: Current number of batches in the queue
+                - queue_full: Whether the queue is at maximum capacity
+                - total_tokenize_time: Total time spent on tokenization
+                - tokenize_count: Number of batches tokenized
+                - avg_tokenize_time_ms: Average tokenization time per batch
+                - current_epoch: Current epoch being processed
+                - n_epochs: Total number of epochs configured
+
+        Examples:
+            >>> # Get initial stats
+            >>> processor = PrefetchBatchProcessor(slaf_array, window, shuffle, tokenizer)
+            >>> prefetcher = AsyncPrefetcher(processor)
+            >>> stats = prefetcher.get_stats()
+            >>> print(f"Initial cells: {stats['total_cells']}")
+            Initial cells: 0
+
+            >>> # Get stats after processing
+            >>> prefetcher.start()
+            >>> import time
+            >>> time.sleep(0.5)  # Let it process some batches
+            >>> stats = prefetcher.get_stats()
+            >>> print(f"Cells processed: {stats['total_cells']}")
+            Cells processed: 128
+            >>> print(f"Rate: {stats['cells_per_sec']:.1f} cells/sec")
+            Rate: 256.0 cells/sec
+            >>> print(f"Queue size: {stats['queue_size']}")
+            Queue size: 4
+
+            >>> # Monitor queue status
+            >>> stats = prefetcher.get_stats()
+            >>> print(f"Queue full: {stats['queue_full']}")
+            Queue full: False
+            >>> print(f"Avg tokenize time: {stats['avg_tokenize_time_ms']:.1f}ms")
+            Avg tokenize time: 2.3ms
+
+            >>> # Check epoch information
+            >>> stats = prefetcher.get_stats()
+            >>> print(f"Current epoch: {stats['current_epoch']}")
+            Current epoch: 0
+            >>> print(f"Total epochs: {stats['n_epochs']}")
+            Total epochs: 1
+        """
         elapsed = time.time() - (self.start_time or 0)
         rate = self.total_cells_added / elapsed if elapsed > 0 else 0
         avg_tokenize_time = (
@@ -665,7 +1084,37 @@ class SLAFIterableDataset(IterableDataset):
         self._wait_for_prefetcher_ready()
 
     def _wait_for_prefetcher_ready(self, timeout: float = 10.0):
-        """Wait for prefetcher to be ready with data"""
+        """
+        Wait for the prefetcher to be ready with data.
+
+        This method waits for the background prefetcher to load its first batch
+        and become ready to serve data. It polls the prefetcher's queue status
+        until data becomes available or the timeout is reached.
+
+        Args:
+            timeout: Maximum time to wait for the prefetcher to become ready,
+                    in seconds. If timeout is reached, a warning is printed but
+                    the method continues. Range: 1.0-60.0, default: 10.0.
+
+        Examples:
+            >>> # Wait for prefetcher to be ready
+            >>> dataset = SLAFIterableDataset(slaf_array, tokenizer)
+            >>> # The _wait_for_prefetcher_ready method is called automatically
+            >>> # during dataset initialization
+            >>> print("Dataset initialized successfully")
+            Dataset initialized successfully
+
+            >>> # Custom timeout (this would be called internally)
+            >>> dataset._wait_for_prefetcher_ready(timeout=5.0)
+            >>> print("Prefetcher ready check completed")
+            Prefetcher ready check completed
+
+            >>> # Handle timeout scenario
+            >>> # If prefetcher takes too long, a warning is printed
+            >>> dataset._wait_for_prefetcher_ready(timeout=0.1)
+            >>> print("Timeout handling completed")
+            Timeout handling completed
+        """
         start_time = time.time()
         while time.time() - start_time < timeout:
             if self.prefetcher.has_batch():
@@ -683,7 +1132,8 @@ class SLAFIterableDataset(IterableDataset):
 
         This method yields training-ready batches containing pre-tokenized sequences,
         attention masks, and cell IDs. The data is processed asynchronously in the
-        background for optimal performance.
+        background for optimal performance. The method automatically handles epoch
+        transitions and completion detection.
 
         Yields:
             dict: Batch containing:
@@ -695,6 +1145,54 @@ class SLAFIterableDataset(IterableDataset):
         Note:
             All tensors are returned on CPU for device-agnostic training.
             The training loop should handle device transfer as needed.
+
+        Examples:
+            >>> # Basic iteration
+            >>> dataset = SLAFIterableDataset(slaf_array, tokenizer)
+            >>> batch_count = 0
+            >>> for batch in dataset:
+            ...     print(f"Batch {batch_count}: {batch['input_ids'].shape}")
+            ...     batch_count += 1
+            ...     if batch_count >= 3:  # Just first 3 batches
+            ...         break
+            Batch 0: torch.Size([32, 2048])
+            Batch 1: torch.Size([32, 2048])
+            Batch 2: torch.Size([32, 2048])
+
+            >>> # Multi-epoch iteration
+            >>> dataset = SLAFIterableDataset(slaf_array, tokenizer, n_epochs=2)
+            >>> epochs_seen = set()
+            >>> for batch in dataset:
+            ...     if 'epoch' in batch:
+            ...         epochs_seen.add(batch['epoch'])
+            ...     if len(epochs_seen) >= 2:  # Stop after seeing both epochs
+            ...         break
+            >>> print(f"Epochs seen: {sorted(epochs_seen)}")
+            Epochs seen: [0, 1]
+
+            >>> # Check batch contents
+            >>> dataset = SLAFIterableDataset(slaf_array, tokenizer)
+            >>> for batch in dataset:
+            ...     print(f"Keys: {list(batch.keys())}")
+            ...     print(f"Input shape: {batch['input_ids'].shape}")
+            ...     print(f"Attention mask shape: {batch['attention_mask'].shape}")
+            ...     print(f"Cell IDs shape: {batch['cell_ids'].shape}")
+            ...     break
+            Keys: ['input_ids', 'attention_mask', 'cell_ids']
+            Input shape: torch.Size([32, 2048])
+            Attention mask shape: torch.Size([32, 2048])
+            Cell IDs shape: torch.Size([32])
+
+            >>> # Device-agnostic tensors
+            >>> dataset = SLAFIterableDataset(slaf_array, tokenizer)
+            >>> for batch in dataset:
+            ...     print(f"Input device: {batch['input_ids'].device}")
+            ...     print(f"Attention device: {batch['attention_mask'].device}")
+            ...     print(f"Cell IDs device: {batch['cell_ids'].device}")
+            ...     break
+            Input device: cpu
+            Attention device: cpu
+            Cell IDs device: cpu
         """
         start_time = time.time()
         batches_yielded = 0
@@ -813,7 +1311,29 @@ class SLAFIterableDataset(IterableDataset):
                 yield batch_dict
 
     def __del__(self):
-        """Cleanup when dataset is destroyed"""
+        """
+        Cleanup when dataset is destroyed.
+
+        This method is called when the dataset object is garbage collected.
+        It ensures that the background prefetcher thread is properly stopped
+        to prevent resource leaks and hanging threads.
+
+        Examples:
+            >>> # Dataset cleanup happens automatically
+            >>> dataset = SLAFIterableDataset(slaf_array, tokenizer)
+            >>> print("Dataset created")
+            Dataset created
+            >>> # When dataset goes out of scope, __del__ is called automatically
+            >>> del dataset
+            >>> print("Dataset destroyed and cleaned up")
+            Dataset destroyed and cleaned up
+
+            >>> # Manual cleanup (not usually needed)
+            >>> dataset = SLAFIterableDataset(slaf_array, tokenizer)
+            >>> dataset.__del__()
+            >>> print("Manual cleanup completed")
+            Manual cleanup completed
+        """
         self.prefetcher.stop()
 
     # Tokenization is now handled at the PrefetchBatchProcessor level

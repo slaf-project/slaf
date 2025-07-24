@@ -27,7 +27,44 @@ except ImportError:
 
 # Define device utility functions
 def get_optimal_device():
-    """Get the optimal device for PyTorch operations (CUDA > MPS > CPU)"""
+    """
+    Get the optimal device for PyTorch operations (CUDA > MPS > CPU).
+
+    This function determines the best available device for PyTorch operations
+    by checking for CUDA first, then MPS (Apple Silicon), and falling back
+    to CPU if neither is available.
+
+    Returns:
+        torch.device | None: The optimal device, or None if PyTorch is not available.
+
+    Examples:
+        >>> # Check optimal device
+        >>> device = get_optimal_device()
+        >>> print(f"Optimal device: {device}")
+        Optimal device: cuda
+
+        >>> # Device priority (CUDA > MPS > CPU)
+        >>> # If CUDA is available: cuda
+        >>> # If MPS is available but not CUDA: mps
+        >>> # If neither: cpu
+        >>> device = get_optimal_device()
+        >>> if device.type == "cuda":
+        ...     print("Using CUDA GPU")
+        ... elif device.type == "mps":
+        ...     print("Using Apple Silicon GPU")
+        ... else:
+        ...     print("Using CPU")
+        Using CUDA GPU
+
+        >>> # Handle PyTorch not available
+        >>> # This would return None if PyTorch is not installed
+        >>> device = get_optimal_device()
+        >>> if device is None:
+        ...     print("PyTorch not available")
+        ... else:
+        ...     print(f"Device available: {device}")
+        Device available: cuda
+    """
     if not TORCH_AVAILABLE:
         return None
 
@@ -40,7 +77,56 @@ def get_optimal_device():
 
 
 def get_device_info():
-    """Get comprehensive device information for debugging"""
+    """
+    Get comprehensive device information for debugging.
+
+    This function returns detailed information about the available PyTorch devices,
+    including CUDA and MPS availability, device counts, and capabilities.
+    Useful for debugging device-related issues and understanding the system
+    configuration.
+
+    Returns:
+        dict: Device information dictionary containing:
+            - torch_available: Whether PyTorch is available
+            - cuda_available: Whether CUDA is available
+            - mps_available: Whether MPS (Apple Silicon) is available
+            - optimal_device: String representation of the optimal device
+            - cuda_device_count: Number of CUDA devices (if CUDA available)
+            - cuda_device_name: Name of the first CUDA device (if available)
+            - cuda_device_capability: Compute capability of first CUDA device
+
+    Examples:
+        >>> # Get device information
+        >>> info = get_device_info()
+        >>> print(f"PyTorch available: {info['torch_available']}")
+        PyTorch available: True
+        >>> print(f"CUDA available: {info['cuda_available']}")
+        CUDA available: True
+        >>> print(f"Optimal device: {info['optimal_device']}")
+        Optimal device: cuda
+
+        >>> # Check CUDA details
+        >>> if info['cuda_available']:
+        ...     print(f"CUDA devices: {info['cuda_device_count']}")
+        ...     print(f"Device name: {info['cuda_device_name']}")
+        ...     print(f"Capability: {info['cuda_device_capability']}")
+        CUDA devices: 1
+        Device name: NVIDIA GeForce RTX 3080
+        Capability: (8, 6)
+
+        >>> # Check MPS availability
+        >>> print(f"MPS available: {info['mps_available']}")
+        MPS available: False
+
+        >>> # Handle PyTorch not available
+        >>> # This would show torch_available: False if PyTorch is not installed
+        >>> info = get_device_info()
+        >>> if not info['torch_available']:
+        ...     print("PyTorch not available")
+        ... else:
+        ...     print("PyTorch is available")
+        PyTorch is available
+    """
     if not TORCH_AVAILABLE:
         return {
             "torch_available": False,
@@ -253,12 +339,14 @@ class SLAFDataLoader:
         Yields batches of pre-tokenized data suitable for machine learning training.
         Each batch contains input_ids, attention_mask, and cell_ids for the
         cells in that batch. All tensors are returned on CPU for device-agnostic training.
+        The method automatically handles multi-epoch training when n_epochs > 1.
 
         Yields:
             dict: Batch dictionary containing:
                 - input_ids: Pre-tokenized gene expression data (torch.Tensor)
                 - attention_mask: Boolean mask indicating valid tokens (torch.Tensor)
                 - cell_ids: Integer IDs of cells in the batch (torch.Tensor)
+                - epoch: Current epoch number (int, only if n_epochs > 1)
 
         Raises:
             ValueError: If the tokenizer type is not supported.
@@ -277,6 +365,17 @@ class SLAFDataLoader:
             Input shape: (16, 2048)
             Cell IDs: tensor([0, 1, 2, ..., 13, 14, 15])
 
+            >>> # Multi-epoch training
+            >>> dataloader = SLAFDataLoader(slaf_array, n_epochs=3)
+            >>> epochs_seen = set()
+            >>> for batch in dataloader:
+            ...     if 'epoch' in batch:
+            ...         epochs_seen.add(batch['epoch'])
+            ...     if len(epochs_seen) >= 3:  # Stop after seeing all epochs
+            ...         break
+            >>> print(f"Epochs completed: {sorted(epochs_seen)}")
+            Epochs completed: [0, 1, 2]
+
             >>> # Training loop with error handling
             >>> for batch_idx, batch in enumerate(dataloader):
             ...     try:
@@ -288,19 +387,86 @@ class SLAFDataLoader:
             ...     except Exception as e:
             ...         print(f"Error in batch {batch_idx}: {e}")
             ...         continue
+            ...     if batch_idx >= 2:  # Just first few batches
+            ...         break
             Processed batch 0
             Processed batch 1
             Processed batch 2
+
+            >>> # Different tokenizer types
+            >>> dataloader_geneformer = SLAFDataLoader(slaf_array, tokenizer_type="geneformer")
+            >>> dataloader_scgpt = SLAFDataLoader(slaf_array, tokenizer_type="scgpt")
+            >>>
+            >>> # Compare batch shapes
+            >>> for batch in dataloader_geneformer:
+            ...     print(f"Geneformer input shape: {batch['input_ids'].shape}")
+            ...     break
+            Geneformer input shape: (32, 2048)
+            >>> for batch in dataloader_scgpt:
+            ...     print(f"scGPT input shape: {batch['input_ids'].shape}")
+            ...     break
+            scGPT input shape: (32, 1024)
         """
         yield from self._dataset
 
     def __len__(self):
-        """Return number of batches"""
-        # IterableDataset doesn't have a fixed length (it's streaming)
+        """
+        Return the number of batches in the dataset.
+
+        Note: Since SLAFDataLoader uses an IterableDataset that streams data,
+        the exact number of batches is not known in advance. This method
+        returns -1 to indicate an unknown length.
+
+        Returns:
+            int: Always returns -1 to indicate unknown length for streaming datasets.
+
+        Examples:
+            >>> # Check dataset length
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> dataloader = SLAFDataLoader(slaf_array)
+            >>> print(f"Dataset length: {len(dataloader)}")
+            Dataset length: -1
+
+            >>> # IterableDataset behavior
+            >>> batch_count = 0
+            >>> for batch in dataloader:
+            ...     batch_count += 1
+            ...     if batch_count >= 5:  # Just count first 5 batches
+            ...         break
+            >>> print(f"Actually processed {batch_count} batches")
+            Actually processed 5 batches
+
+            >>> # Length is consistent
+            >>> print(f"Length check: {len(dataloader)}")
+            Length check: -1
+        """
         return -1  # Indicates unknown length
 
     def __del__(self):
-        """Cleanup method to stop async prefetching."""
+        """
+        Cleanup method to stop async prefetching.
+
+        This method is called when the DataLoader object is garbage collected.
+        It ensures that the underlying dataset's prefetcher is properly cleaned up
+        to prevent resource leaks.
+
+        Examples:
+            >>> # DataLoader cleanup happens automatically
+            >>> slaf_array = SLAFArray("path/to/data.slaf")
+            >>> dataloader = SLAFDataLoader(slaf_array)
+            >>> print("DataLoader created")
+            DataLoader created
+            >>> # When dataloader goes out of scope, __del__ is called automatically
+            >>> del dataloader
+            >>> print("DataLoader destroyed and cleaned up")
+            DataLoader destroyed and cleaned up
+
+            >>> # Manual cleanup (not usually needed)
+            >>> dataloader = SLAFDataLoader(slaf_array)
+            >>> dataloader.__del__()
+            >>> print("Manual cleanup completed")
+            Manual cleanup completed
+        """
         if hasattr(self, "_dataset"):
             # The SLAFIterableDataset doesn't have a stop method,
             # so we just let it finish its current epoch.
