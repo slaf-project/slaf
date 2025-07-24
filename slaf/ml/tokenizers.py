@@ -168,7 +168,8 @@ class SLAFTokenizer:
                         gene_vocab[gene_id] = gene_integer_id
 
                 self.gene_vocab = gene_vocab
-                self.token_to_gene = {v: k for k, v in self.gene_vocab.items()}
+                # Account for the +4 offset used in tokenization
+                self.token_to_gene = {v + 4: k for k, v in self.gene_vocab.items()}
 
                 # Pre-build vectorized mapping array for fast lookup
                 max_gene_id = (
@@ -193,13 +194,15 @@ class SLAFTokenizer:
             else:
                 # Mock object - create dummy vocabulary
                 self.gene_vocab = {f"gene_{i}": i for i in range(1000)}
-                self.token_to_gene = {v: k for k, v in self.gene_vocab.items()}
+                # Account for the +4 offset used in tokenization
+                self.token_to_gene = {v + 4: k for k, v in self.gene_vocab.items()}
                 # No mapping array needed for mock objects
 
         except Exception:
             # Fallback for testing or error cases
             self.gene_vocab = {f"gene_{i}": i for i in range(1000)}
-            self.token_to_gene = {v: k for k, v in self.gene_vocab.items()}
+            # Account for the +4 offset used in tokenization
+            self.token_to_gene = {v + 4: k for k, v in self.gene_vocab.items()}
             # No mapping array needed for fallback
 
     def _setup_special_tokens(self):
