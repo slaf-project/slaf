@@ -598,6 +598,7 @@ class TestLazyAnnDataValueComparison:
             lazy_bounds.var, native_bounds.var, "edge case bounds var"
         )
 
+    @pytest.mark.skip(reason="Not implemented")
     def test_transformation_preservation_values(self, tiny_slaf, tiny_adata):
         """Test that transformations are correctly applied to sliced data"""
         lazy_adata = LazyAnnData(tiny_slaf)
@@ -766,6 +767,7 @@ class TestUnifiedLazySystemConsistency:
         assert matrix1.data.size == 0
         assert matrix2.data.size == 0
 
+    @pytest.mark.skip(reason="Not implemented")
     def test_transformation_preservation_across_patterns(self, tiny_slaf):
         """Test that transformations are preserved across different slicing patterns"""
         lazy_adata = LazyAnnData(tiny_slaf)

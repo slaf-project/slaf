@@ -218,13 +218,13 @@ class LazyPreprocessing:
         conditions = []
 
         if min_counts is not None:
-            conditions.append(f"total_counts >= {min_counts}")
+            conditions.append(f"cell_stats.total_counts >= {min_counts}")
         if max_counts is not None:
-            conditions.append(f"total_counts <= {max_counts}")
+            conditions.append(f"cell_stats.total_counts <= {max_counts}")
         if min_genes is not None:
-            conditions.append(f"n_genes_by_counts >= {min_genes}")
+            conditions.append(f"cell_stats.n_genes_by_counts >= {min_genes}")
         if max_genes is not None:
-            conditions.append(f"n_genes_by_counts <= {max_genes}")
+            conditions.append(f"cell_stats.n_genes_by_counts <= {max_genes}")
 
         if not conditions:
             return adata if not inplace else None
@@ -332,13 +332,13 @@ class LazyPreprocessing:
         conditions = []
 
         if min_counts is not None:
-            conditions.append(f"total_counts >= {min_counts}")
+            conditions.append(f"gene_stats.total_counts >= {min_counts}")
         if max_counts is not None:
-            conditions.append(f"total_counts <= {max_counts}")
+            conditions.append(f"gene_stats.total_counts <= {max_counts}")
         if min_cells is not None:
-            conditions.append(f"n_cells_by_counts >= {min_cells}")
+            conditions.append(f"gene_stats.n_cells_by_counts >= {min_cells}")
         if max_cells is not None:
-            conditions.append(f"n_cells_by_counts <= {max_cells}")
+            conditions.append(f"gene_stats.n_cells_by_counts <= {max_cells}")
 
         if not conditions:
             return adata if not inplace else None

@@ -285,7 +285,7 @@ def tiny_slaf(temp_dir):
     # Convert to SLAF format
     from slaf.data import SLAFConverter
 
-    converter = SLAFConverter(use_optimized_dtypes=False)
+    converter = SLAFConverter(use_optimized_dtypes=False, compact_after_write=False)
     slaf_path = Path(temp_dir) / "tiny_test_dataset.slaf"
     converter.convert_anndata(adata, str(slaf_path))
 
@@ -355,7 +355,7 @@ def tiny_slaf_path(temp_dir):
     # Convert to SLAF format
     from slaf.data import SLAFConverter
 
-    converter = SLAFConverter(use_optimized_dtypes=False)
+    converter = SLAFConverter(use_optimized_dtypes=False, compact_after_write=False)
     slaf_path = Path(temp_dir) / "tiny_test_dataset.slaf"
     converter.convert_anndata(adata, str(slaf_path))
 
