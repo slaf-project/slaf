@@ -1,19 +1,18 @@
 import marimo
 
-__generated_with = "0.14.6"
+__generated_with = "0.14.0"
 app = marimo.App(width="medium")
 
 
 @app.cell
 def _():
     import marimo as mo
-    import numpy as np
 
     from slaf import SLAFArray
     from slaf.integrations import scanpy as slaf_scanpy
     from slaf.integrations.anndata import read_slaf
 
-    return SLAFArray, mo, np, read_slaf, slaf_scanpy
+    return SLAFArray, mo, read_slaf, slaf_scanpy
 
 
 @app.cell
@@ -465,46 +464,52 @@ def _(slaf):
 def _(mo):
     mo.md(
         """
-    ## 8. Quick Tokenization Example
+    ## 8. Quick ML Training Example
 
-    SLAF provides efficient tokenization for ML training:
+    SLAF provides efficient tokenization and DataLoader for ML training:
     """
     )
     return
 
 
 @app.cell
-def _(np, slaf):
-    # Quick tokenization example
-    from slaf.ml.tokenizers import SLAFTokenizer
+def _(slaf):
+    def demonstrate_ml_training():
+        from slaf.ml.dataloaders import SLAFDataLoader
+        from slaf.ml.tokenizers import SLAFTokenizer
 
-    print("🎯 Quick Tokenization Example")
-    print("=" * 35)
+        print("🎯 Quick ML Training Example")
+        print("=" * 35)
 
-    # Initialize tokenizer
-    tokenizer = SLAFTokenizer(slaf, vocab_size=1000, n_expression_bins=10)
-    print(
-        f"✅ Tokenizer initialized with {tokenizer.get_vocab_info()['total_vocab_size']} total tokens"
-    )
+        # Initialize tokenizer
+        tokenizer = SLAFTokenizer(
+            slaf_array=slaf,
+            tokenizer_type="geneformer",
+            vocab_size=2000,  # Dataset has <2000 genes
+            n_expression_bins=20,
+        )
+        vocab_info = tokenizer.get_vocab_info()
+        print(f"✅ Tokenizer: {vocab_info['vocab_size']} vocabulary size")
 
-    # Get a small batch of cells
+        # Create DataLoader
+        dataloader = SLAFDataLoader(
+            slaf_array=slaf,
+            tokenizer_type="geneformer",
+            batch_size=16,
+            max_genes=100,
+            vocab_size=2000,  # Dataset has <2000 genes
+            n_expression_bins=20,
+            n_epochs=1,
+        )
 
-    # Tokenize for Geneformer
-    print("\n1. Geneformer tokenization:")
-    geneformer_tokens = tokenizer.tokenize_geneformer((0, 32), max_genes=100)
-    print(f"   Generated {len(geneformer_tokens)} token sequences")
-    print(
-        f"   Average sequence length: {int(np.mean([len(seq) for seq in geneformer_tokens])):d}"
-    )
+        # Get first batch
+        batch = next(iter(dataloader))
+        print(f"✅ DataLoader: {batch['input_ids'].shape} tensors")
+        print(f"   Cell IDs: {len(batch['cell_ids'])} cells")
 
-    # Tokenize for scGPT
-    print("\n2. scGPT tokenization:")
-    scgpt_tokens = tokenizer.tokenize_scgpt((0, 32), max_genes=100)
-    print(f"   Generated {len(scgpt_tokens)} token sequences")
-    print(
-        f"   Average sequence length: {int(np.mean([len(seq) for seq in scgpt_tokens])):d}"
-    )
+        return tokenizer, dataloader
 
+    tokenizer, dataloader = demonstrate_ml_training()
     return
 
 
@@ -514,7 +519,7 @@ def _(mo):
         """
     ## Summary
 
-        **What you've learned:**
+    **What you've learned:**
 
     1. **SQL Schema**: SLAF stores data in 3 tables (cells, genes, expression) that you can query directly
     2. **SQL Power**: Direct SQL access for complex queries and aggregations
@@ -523,13 +528,12 @@ def _(mo):
     5. **Lazy Preprocessing**: scanpy functions that work lazily
     6. **Performance**: SQL-level performance for data operations
     7. **Explicit Computation**: Use `.compute()` to convert lazy objects to native Python objects
-    8. **Tokenization**: Ready for ML training with efficient tokenization
+    8. **ML Training**: Ready for ML training with efficient tokenization and DataLoader
 
     **Next Steps:**
 
     - **02-lazy-processing.py**: Deep dive into lazy evaluation capabilities
-
-    - **03-ml-training-pipeline.py**: Complete ML training workflows
+    - **03-ml-training-pipeline.py**: Complete ML training workflows with streaming DataLoader
     """
     )
     return
