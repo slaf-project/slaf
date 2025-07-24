@@ -153,10 +153,6 @@ class TestScGPTWindow:
         gene_seq = result["gene_sequence"][0]
         expr_seq = result["expr_sequence"][0]
 
-        # Debug: print the actual ranking
-        print(f"Gene sequence: {gene_seq}")
-        print(f"Expression sequence: {expr_seq}")
-
         # Check that genes are ranked by expression (5.0 > 3.0 > 1.0)
         # The ranking should be: [30, 10] (genes with values [5.0, 3.0])
         assert len(gene_seq) == 2  # max_genes=2

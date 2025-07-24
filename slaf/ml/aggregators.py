@@ -70,7 +70,9 @@ class ScGPTWindow(Window):
             DataFrame with gene sequences and expression sequences (raw or binned) for scGPT format
         """
         n_expression_bins = kwargs.get("n_expression_bins", 10)
-        use_binned_expressions = kwargs.get("use_binned_expressions", False)
+        use_binned_expressions = kwargs.get(
+            "use_binned_expressions", True
+        )  # Default to True for scGPT
 
         if use_binned_expressions:
             # Optimized version - single with_columns chain with early filtering
@@ -87,25 +89,18 @@ class ScGPTWindow(Window):
                 # Now compute everything else on the reduced dataset
                 .with_columns(
                     [
-                        # Log transform
+                        # Log transform for binning
                         pl.col("value").log1p().alias("log_value"),
-                        # Since log1p is monotonic, gene_rank can be reused for log_rank
-                        # But we need ascending order for the binning logic, so invert it
-                        (
-                            pl.col("gene_rank").max().over("cell_integer_id")
-                            - pl.col("gene_rank")
-                            + 1
-                        ).alias("log_rank_ascending"),
                     ]
                 )
                 .with_columns(
-                    # Expression binning - using the inverted gene_rank
+                    # Expression binning based on actual log values
                     pl.when(pl.col("log_value") > 0)
                     .then(
                         (
-                            (pl.col("log_rank_ascending") - 1)
+                            pl.col("log_value")
                             * n_expression_bins
-                            / pl.col("log_rank_ascending").max().over("cell_integer_id")
+                            / pl.col("log_value").max().over("cell_integer_id")
                         )
                         .floor()
                         .clip(0, n_expression_bins - 1)
