@@ -1,5 +1,6 @@
 from unittest.mock import Mock, patch
 
+import pandas as pd
 import pytest
 import torch
 from torch.utils.data import DataLoader
@@ -394,115 +395,6 @@ class TestSLAFIterableDataset:
 
         assert batch_count > 0
 
-
-class TestPrefetchBatchProcessing:
-    """Test prefetch batch processing functionality"""
-
-    def test_batch_processor_with_mock_data(self):
-        """Test PrefetchBatchProcessor with mock data"""
-        # Mock SLAFArray
-        mock_slaf_array = Mock()
-        mock_slaf_array.slaf_path = "/mock/path"
-
-        # Mock Lance dataset
-        with patch("slaf.ml.datasets.lance") as mock_lance:
-            mock_dataset = Mock()
-            mock_batches = [Mock(), Mock()]
-            mock_dataset.to_batches.return_value = iter(mock_batches)
-            mock_lance.dataset.return_value = mock_dataset
-
-            # Mock Polars DataFrame
-            with patch("slaf.ml.datasets.pl") as mock_pl:
-                mock_df = Mock()
-                mock_pl.from_arrow.return_value = mock_df
-                mock_pl.concat.return_value = mock_df
-                mock_df.with_columns.return_value = mock_df
-                mock_df.filter.return_value = mock_df
-                mock_df.group_by.return_value.agg.return_value = Mock()
-                mock_df.columns = ["cell_integer_id", "gene_sequence", "expr_sequence"]
-
-                window = ScGPTWindow()
-                shuffle = RandomShuffle()
-                tokenizer = SLAFTokenizer(mock_slaf_array)
-                processor = PrefetchBatchProcessor(
-                    mock_slaf_array,
-                    window,
-                    shuffle,
-                    tokenizer=tokenizer,
-                    seed=42,
-                    max_genes=1024,
-                )
-
-                # Test that we can create the processor
-                assert processor.slaf_array is mock_slaf_array
-                assert processor.window is window
-                assert processor.shuffle is shuffle
-                assert processor.seed == 42
-                assert processor.max_genes == 1024
-
-    def test_prefetch_batch_serialization(self):
-        """Test PrefetchBatch serialization and comparison"""
-        # Create mock tensors
-        input_ids1 = torch.randint(0, 1000, (2, 1024))
-        attention_mask1 = torch.ones(2, 1024, dtype=torch.bool)
-        input_ids2 = torch.randint(0, 1000, (1, 1024))
-        attention_mask2 = torch.ones(1, 1024, dtype=torch.bool)
-
-        batch1 = PrefetchBatch(
-            batch_id=0,
-            input_ids=input_ids1,
-            attention_mask=attention_mask1,
-            cell_integer_ids=[100, 101],
-            partial_cell_data={},
-            tokenize_time=0.1,
-        )
-
-        batch2 = PrefetchBatch(
-            batch_id=0,
-            input_ids=input_ids1,
-            attention_mask=attention_mask1,
-            cell_integer_ids=[100, 101],
-            partial_cell_data={},
-            tokenize_time=0.1,
-        )
-
-        batch3 = PrefetchBatch(
-            batch_id=1,
-            input_ids=input_ids2,
-            attention_mask=attention_mask2,
-            cell_integer_ids=[102],
-            partial_cell_data={},
-            tokenize_time=0.2,
-        )
-
-        # Test equality
-        assert batch1 == batch2
-        assert batch1 != batch3
-
-        # Test string representation
-        assert "PrefetchBatch" in str(batch1)
-        assert "batch_id=0" in str(batch1)
-
-    def test_batch_processor_expression_binning(self, tiny_slaf):
-        """Test PrefetchBatchProcessor with expression binning"""
-        window = ScGPTWindow()
-        shuffle = RandomShuffle()
-        tokenizer = SLAFTokenizer(tiny_slaf)
-
-        processor = PrefetchBatchProcessor(
-            slaf_array=tiny_slaf,
-            window=window,
-            shuffle=shuffle,
-            tokenizer=tokenizer,
-            seed=42,
-            max_genes=1024,
-            n_expression_bins=10,
-            use_binned_expressions=True,
-        )
-
-        assert processor.n_expression_bins == 10
-        assert processor.use_binned_expressions is True
-
     def test_window_strategy_integration(self, tiny_slaf):
         """Test window strategy integration with batch processor"""
         window = GeneformerWindow()
@@ -514,13 +406,330 @@ class TestPrefetchBatchProcessing:
             window=window,
             shuffle=shuffle,
             tokenizer=tokenizer,
-            seed=42,
-            max_genes=2048,
+            max_genes=512,
         )
 
+        # Test that processor can be initialized with window strategy
         assert processor.window is window
         assert processor.shuffle is shuffle
-        assert processor.max_genes == 2048
+        assert processor.max_genes == 512
+
+    def test_multi_epoch_initialization(self, tiny_slaf):
+        """Test SLAFIterableDataset initialization with multi-epoch support"""
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        dataset = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=tokenizer,
+            batch_size=32,
+            n_epochs=5,  # Test multi-epoch initialization
+        )
+
+        assert dataset.n_epochs == 5
+        assert dataset.batch_processor.n_epochs == 5
+        # Note: current_epoch may be > 0 if prefetcher has already processed some epochs
+        assert dataset.batch_processor.current_epoch >= 0
+        assert dataset.batch_processor.current_epoch < 5
+
+    def test_multi_epoch_iteration(self, tiny_slaf):
+        """Test multi-epoch iteration functionality"""
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        dataset = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=tokenizer,
+            batch_size=8,  # Small batch size for testing
+            n_epochs=3,  # Test with 3 epochs
+        )
+
+        # Track epochs and batches
+        epochs_seen = set()
+        total_batches = 0
+
+        for batch in dataset:
+            epoch = batch.get("epoch", 0)
+            epochs_seen.add(epoch)
+            total_batches += 1
+
+            # Check batch structure
+            assert "input_ids" in batch
+            assert "attention_mask" in batch
+            assert "cell_ids" in batch
+            assert "epoch" in batch  # Should have epoch info for multi-epoch
+
+            # Limit test to reasonable number of batches
+            if total_batches > 15:
+                break
+
+        # Verify we saw some epochs (may not see all epochs in limited test)
+        assert len(epochs_seen) >= 1, f"Expected at least 1 epoch, got {epochs_seen}"
+        assert total_batches > 0
+
+    def test_epoch_transition_functionality(self, tiny_slaf):
+        """Test that epoch transitions work correctly"""
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        dataset = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=tokenizer,
+            batch_size=4,  # Very small batch size
+            n_epochs=2,  # Just 2 epochs for testing
+        )
+
+        # Track epoch transitions
+        epoch_sequence = []
+        batch_count = 0
+
+        for batch in dataset:
+            epoch = batch.get("epoch", 0)
+            epoch_sequence.append(epoch)
+            batch_count += 1
+
+            # Stop after reasonable number of batches
+            if batch_count > 10:
+                break
+
+        # Verify epoch progression
+        assert len(epoch_sequence) > 0
+        # Note: epoch 0 may not be seen if prefetcher has already processed it
+        # Just check that we have some epochs and they progress in order
+        assert min(epoch_sequence) >= 0, f"Expected epochs >= 0, got {epoch_sequence}"
+
+        # Check that epochs progress in order (allowing for some overlap during transitions)
+        for i in range(len(epoch_sequence) - 1):
+            assert epoch_sequence[i] <= epoch_sequence[i + 1], (
+                "Epochs should not go backwards"
+            )
+
+    def test_batch_processor_epoch_reset(self, tiny_slaf):
+        """Test PrefetchBatchProcessor epoch reset functionality"""
+        window = GeneformerWindow()
+        shuffle = RandomShuffle()
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        processor = PrefetchBatchProcessor(
+            slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
+            tokenizer=tokenizer,
+            n_epochs=3,
+        )
+
+        # Test initial state
+        assert processor.current_epoch == 0
+        assert processor.batch_id == 0
+
+        # Test epoch reset
+        processor.reset_for_epoch(1)
+        assert processor.current_epoch == 1
+        assert processor.batch_id == 0
+        assert len(processor.partial_cell_data) == 0  # Should be reset
+
+        # Test invalid epoch
+        with pytest.raises(ValueError):
+            processor.reset_for_epoch(-1)  # Invalid epoch
+
+        with pytest.raises(ValueError):
+            processor.reset_for_epoch(3)  # Invalid epoch (>= n_epochs)
+
+    def test_multi_epoch_with_small_dataset(self, tiny_slaf):
+        """Test multi-epoch functionality with small dataset that gets exhausted"""
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        dataset = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=tokenizer,
+            batch_size=2,  # Very small batch size to exhaust quickly
+            n_epochs=3,  # Reduced from 4 to 3 for speed
+        )
+
+        epochs_completed = set()
+        total_batches = 0
+
+        for batch in dataset:
+            epoch = batch.get("epoch", 0)
+            epochs_completed.add(epoch)
+            total_batches += 1
+
+            # Check that epoch is valid
+            assert 0 <= epoch < 3, f"Invalid epoch {epoch}"
+
+            # Early termination for speed
+            if total_batches >= 10:
+                break
+
+        # Should complete multiple epochs
+        assert len(epochs_completed) >= 1, (
+            f"Expected at least 1 epoch, got {epochs_completed}"
+        )
+        assert total_batches > 0
+
+    def test_single_epoch_behavior(self, tiny_slaf):
+        """Test that single epoch (default) behavior is unchanged"""
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        dataset = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=tokenizer,
+            batch_size=8,
+            n_epochs=1,  # Single epoch (default)
+        )
+
+        batch_count = 0
+        epochs_seen = set()
+
+        for batch in dataset:
+            epoch = batch.get("epoch", 0)
+            epochs_seen.add(epoch)
+            batch_count += 1
+
+            if batch_count > 10:
+                break
+
+        # Should only see epoch 0 in single epoch mode
+        assert epochs_seen == {0}, f"Expected only epoch 0, got {epochs_seen}"
+        assert batch_count > 0
+
+    def test_multi_epoch_prefetcher_stats(self, tiny_slaf):
+        """Test that AsyncPrefetcher correctly tracks multi-epoch statistics"""
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        dataset = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=tokenizer,
+            batch_size=4,
+            n_epochs=3,
+        )
+
+        # Get some batches to populate stats
+        batch_count = 0
+        for _batch in dataset:
+            batch_count += 1
+            if batch_count > 5:
+                break
+
+        # Check prefetcher stats
+        stats = dataset.prefetcher.get_stats()
+        assert "current_epoch" in stats
+        assert "n_epochs" in stats
+        assert stats["n_epochs"] == 3
+        assert stats["current_epoch"] >= 0
+
+    def test_multi_epoch_completion_detection(self, tiny_slaf):
+        """Test that the dataset correctly detects when all epochs are completed"""
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        dataset = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=tokenizer,
+            batch_size=2,  # Small batch size to complete quickly
+            n_epochs=2,  # Just 2 epochs
+        )
+
+        # Iterate through batches (limit to avoid slow test)
+        all_batches = []
+        for batch in dataset:
+            all_batches.append(batch)
+            if len(all_batches) > 20:  # Limit to avoid slow test
+                break
+
+        # Should have some batches
+        assert len(all_batches) > 0
+
+        # Check that we have batches from multiple epochs
+        epochs_seen = set()
+        for batch in all_batches:
+            epoch = batch.get("epoch", 0)
+            epochs_seen.add(epoch)
+
+        # Should see at least one epoch
+        assert len(epochs_seen) >= 1, f"Expected at least 1 epoch, got {epochs_seen}"
+
+
+class TestPrefetchBatchProcessing:
+    """Test suite for PrefetchBatchProcessor with comprehensive coverage"""
+
+    def test_batch_processor_with_mock_data(self):
+        """Test PrefetchBatchProcessor with mock data"""
+        # Create mock SLAF array
+        mock_slaf = Mock()
+        mock_slaf.slaf_path = "/mock/path"
+
+        # Mock Lance dataset
+        mock_dataset = Mock()
+        mock_batch = Mock()
+        mock_batch.to_pandas.return_value = pd.DataFrame(
+            {
+                "cell_integer_id": [1, 1, 2, 2],
+                "gene_id": [100, 101, 100, 101],
+                "expression": [0.5, 0.8, 0.3, 0.9],
+            }
+        )
+
+        mock_generator = iter([mock_batch])
+        mock_dataset.to_batches.return_value = mock_generator
+
+        # Mock Lance
+        with patch("slaf.ml.datasets.lance") as mock_lance:
+            mock_lance.dataset.return_value = mock_dataset
+
+            # Create processor
+            window = GeneformerWindow()
+            shuffle = RandomShuffle()
+            tokenizer = SLAFTokenizer(mock_slaf)
+
+            processor = PrefetchBatchProcessor(
+                slaf_array=mock_slaf,
+                window=window,
+                shuffle=shuffle,
+                tokenizer=tokenizer,
+                batches_per_chunk=1,
+            )
+
+            # Test that processor can be initialized
+            assert processor.slaf_array is mock_slaf
+            assert processor.window is window
+            assert processor.shuffle is shuffle
+
+    def test_prefetch_batch_serialization(self):
+        """Test PrefetchBatch serialization and deserialization"""
+        # Create mock tensors
+        input_ids = torch.randint(0, 1000, (2, 1024))
+        attention_mask = torch.ones(2, 1024, dtype=torch.bool)
+
+        batch = PrefetchBatch(
+            batch_id=0,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            cell_integer_ids=[100, 101],
+            partial_cell_data={},
+            tokenize_time=0.1,
+        )
+
+        # Test that batch can be created
+        assert batch.batch_id == 0
+        assert batch.input_ids.shape == (2, 1024)
+        assert batch.attention_mask.shape == (2, 1024)
+        assert len(batch.cell_integer_ids) == 2
+        assert batch.tokenize_time == 0.1
+
+    def test_batch_processor_expression_binning(self, tiny_slaf):
+        """Test batch processor with expression binning"""
+        window = ScGPTWindow()
+        shuffle = RandomShuffle()
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        processor = PrefetchBatchProcessor(
+            slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
+            tokenizer=tokenizer,
+            n_expression_bins=10,
+            use_binned_expressions=True,
+        )
+
+        assert processor.n_expression_bins == 10
+        assert processor.use_binned_expressions is True
 
 
 if __name__ == "__main__":

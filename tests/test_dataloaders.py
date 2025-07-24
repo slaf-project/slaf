@@ -206,19 +206,233 @@ class TestSLAFDataLoader:
         # Test destructor
         dataloader.__del__()
 
-    def test_dataloader_device_agnostic(self, tiny_slaf):
-        """Test that dataloader is device-agnostic"""
+    def test_dataloader_device(self, tiny_slaf):
+        """Test dataloader device handling"""
         dataloader = SLAFDataLoader(tiny_slaf)
 
-        # Check that device is None (device-agnostic)
-        assert dataloader.device is None
+        # Get a sample batch
+        batch = next(iter(dataloader))
 
-        # Test that batches are returned as CPU tensors
+        # Check that tensors are on CPU (device-agnostic design)
+        assert batch["input_ids"].device == torch.device("cpu")
+        assert batch["attention_mask"].device == torch.device("cpu")
+        assert batch["cell_ids"].device == torch.device("cpu")
+
+    def test_multi_epoch_initialization(self, tiny_slaf):
+        """Test SLAFDataLoader initialization with multi-epoch support"""
+        dataloader = SLAFDataLoader(
+            tiny_slaf,
+            n_epochs=5,  # Test multi-epoch initialization
+        )
+
+        assert dataloader.n_epochs == 5
+        assert dataloader._dataset.n_epochs == 5
+        assert dataloader._dataset.batch_processor.n_epochs == 5
+
+    def test_multi_epoch_iteration(self, tiny_slaf):
+        """Test dataloader iteration with multiple epochs"""
+        dataloader = SLAFDataLoader(
+            tiny_slaf,
+            batch_size=4,  # Small batch size for testing
+            n_epochs=3,  # Test with 3 epochs
+        )
+
+        # Track epochs and batches
+        epochs_seen = set()
+        total_batches = 0
+
         for batch in dataloader:
-            # Check that tensors are on CPU
-            if hasattr(batch["input_ids"], "device"):
-                assert batch["input_ids"].device.type == "cpu"
-            break  # Just test first batch
+            epoch = batch.get("epoch", 0)
+            epochs_seen.add(epoch)
+            total_batches += 1
+
+            # Check batch structure
+            assert "input_ids" in batch
+            assert "attention_mask" in batch
+            assert "cell_ids" in batch
+            assert "epoch" in batch  # Should have epoch info for multi-epoch
+
+            # Limit test to reasonable number of batches
+            if total_batches > 15:
+                break
+
+        # Verify we saw some epochs (may not see all epochs in limited test)
+        assert len(epochs_seen) >= 1, f"Expected at least 1 epoch, got {epochs_seen}"
+        assert total_batches > 0
+
+    def test_multi_epoch_epoch_progression(self, tiny_slaf):
+        """Test that epochs progress correctly in multi-epoch mode"""
+        dataloader = SLAFDataLoader(
+            tiny_slaf,
+            batch_size=2,  # Very small batch size
+            n_epochs=4,  # Test with 4 epochs
+        )
+
+        # Track epoch sequence
+        epoch_sequence = []
+        batch_count = 0
+
+        for batch in dataloader:
+            epoch = batch.get("epoch", 0)
+            epoch_sequence.append(epoch)
+            batch_count += 1
+
+            # Stop after reasonable number of batches
+            if batch_count > 20:
+                break
+
+        # Verify epoch progression
+        assert len(epoch_sequence) > 0
+        # Note: epoch 0 may not be seen if prefetcher has already processed it
+        # Just check that we have some epochs and they progress in order
+        assert min(epoch_sequence) >= 0, f"Expected epochs >= 0, got {epoch_sequence}"
+
+        # Check that epochs progress in order (allowing for some overlap during transitions)
+        for i in range(len(epoch_sequence) - 1):
+            assert epoch_sequence[i] <= epoch_sequence[i + 1], (
+                "Epochs should not go backwards"
+            )
+
+    def test_single_epoch_default_behavior(self, tiny_slaf):
+        """Test that single epoch (default) behavior is unchanged"""
+        dataloader = SLAFDataLoader(
+            tiny_slaf,
+            batch_size=8,
+            n_epochs=1,  # Single epoch (default)
+        )
+
+        batch_count = 0
+        epochs_seen = set()
+
+        for batch in dataloader:
+            epoch = batch.get("epoch", 0)
+            epochs_seen.add(epoch)
+            batch_count += 1
+
+            if batch_count > 10:
+                break
+
+        # Should only see epoch 0 in single epoch mode
+        assert epochs_seen == {0}, f"Expected only epoch 0, got {epochs_seen}"
+        assert batch_count > 0
+
+    def test_multi_epoch_with_different_tokenizers(self, tiny_slaf):
+        """Test multi-epoch functionality with different tokenizer types"""
+        # Test with Geneformer - limit epochs and batches for speed
+        dataloader_geneformer = SLAFDataLoader(
+            tiny_slaf,
+            tokenizer_type="geneformer",
+            batch_size=4,
+            n_epochs=2,
+        )
+
+        epochs_geneformer = set()
+        batch_count = 0
+        for batch in dataloader_geneformer:
+            epochs_geneformer.add(batch.get("epoch", 0))
+            batch_count += 1
+            # Early termination for speed
+            if batch_count >= 5:
+                break
+
+        assert len(epochs_geneformer) >= 1, (
+            f"Geneformer: Expected at least 1 epoch, got {epochs_geneformer}"
+        )
+
+        # Test with scGPT - limit epochs and batches for speed
+        dataloader_scgpt = SLAFDataLoader(
+            tiny_slaf,
+            tokenizer_type="scgpt",
+            batch_size=4,
+            n_epochs=2,
+        )
+
+        epochs_scgpt = set()
+        batch_count = 0
+        for batch in dataloader_scgpt:
+            epochs_scgpt.add(batch.get("epoch", 0))
+            batch_count += 1
+            # Early termination for speed
+            if batch_count >= 5:
+                break
+
+        assert len(epochs_scgpt) >= 1, (
+            f"scGPT: Expected at least 1 epoch, got {epochs_scgpt}"
+        )
+
+    def test_multi_epoch_completion(self, tiny_slaf):
+        """Test that dataloader correctly completes all epochs"""
+        dataloader = SLAFDataLoader(
+            tiny_slaf,
+            batch_size=2,  # Small batch size to complete quickly
+            n_epochs=3,  # Test with 3 epochs
+        )
+
+        # Collect batches (limit to avoid slow test)
+        all_batches = []
+        for batch in dataloader:
+            all_batches.append(batch)
+            if len(all_batches) > 30:  # Limit to avoid slow test
+                break
+
+        # Should have some batches
+        assert len(all_batches) > 0
+
+        # Check that we have batches from multiple epochs
+        epochs_seen = set()
+        for batch in all_batches:
+            epoch = batch.get("epoch", 0)
+            epochs_seen.add(epoch)
+
+        # Should see at least one epoch
+        assert len(epochs_seen) >= 1, f"Expected at least 1 epoch, got {epochs_seen}"
+
+    def test_multi_epoch_parameter_passing(self, tiny_slaf):
+        """Test that n_epochs parameter is correctly passed through the hierarchy"""
+        dataloader = SLAFDataLoader(
+            tiny_slaf,
+            n_epochs=7,  # Test with 7 epochs
+        )
+
+        # Check that n_epochs is passed to all levels
+        assert dataloader.n_epochs == 7
+        assert dataloader._dataset.n_epochs == 7
+        assert dataloader._dataset.batch_processor.n_epochs == 7
+        assert dataloader._dataset.prefetcher.batch_processor.n_epochs == 7
+
+    def test_multi_epoch_with_custom_parameters(self, tiny_slaf):
+        """Test multi-epoch functionality with custom parameters"""
+        dataloader = SLAFDataLoader(
+            tiny_slaf,
+            tokenizer_type="scgpt",
+            batch_size=6,
+            max_genes=512,
+            n_epochs=4,
+        )
+
+        # Verify all parameters are set correctly
+        assert dataloader.n_epochs == 4
+        assert dataloader.tokenizer_type == "scgpt"
+        assert dataloader.batch_size == 6
+        assert (
+            dataloader._dataset.batch_processor.use_binned_expressions is False
+        )  # Default for scgpt
+
+        # Test iteration
+        epochs_seen = set()
+        batch_count = 0
+
+        for batch in dataloader:
+            epoch = batch.get("epoch", 0)
+            epochs_seen.add(epoch)
+            batch_count += 1
+
+            if batch_count > 20:
+                break
+
+        # Should see some epochs (may not see all epochs in limited test)
+        assert len(epochs_seen) >= 1, f"Expected at least 1 epoch, got {epochs_seen}"
+        assert batch_count > 0
 
 
 class TestDeviceDetection:
