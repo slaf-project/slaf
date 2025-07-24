@@ -136,6 +136,7 @@ class SLAFDataLoader:
         num_workers: int = 4,
         vocab_size: int = 50000,
         n_expression_bins: int = 10,
+        n_epochs: int = 1,  # Add n_epochs parameter
     ):
         """
         Initialize the SLAF DataLoader with training configuration.
@@ -158,6 +159,9 @@ class SLAFDataLoader:
             n_expression_bins: Number of expression level bins for scGPT discretization.
                              Higher values provide finer expression resolution.
                              Range: 1-1000, default: 10.
+            n_epochs: Number of epochs to run. The generator will automatically reset
+                     after each epoch, enabling multi-epoch training on small datasets.
+                     Default: 1.
 
         Raises:
             ValueError: If tokenizer_type is not supported or parameters are invalid.
@@ -182,6 +186,14 @@ class SLAFDataLoader:
             >>> print(f"Tokenizer type: {dataloader.tokenizer_type}")
             Tokenizer type: scgpt
 
+            >>> # Multi-epoch training
+            >>> dataloader = SLAFDataLoader(
+            ...     slaf_array=slaf_array,
+            ...     n_epochs=5
+            ... )
+            >>> print(f"Number of epochs: {dataloader.n_epochs}")
+            Number of epochs: 5
+
             >>> # Error handling for invalid tokenizer type
             >>> try:
             ...     dataloader = SLAFDataLoader(slaf_array, tokenizer_type="invalid")
@@ -201,6 +213,7 @@ class SLAFDataLoader:
         self.batch_size = batch_size
         self.max_genes = max_genes
         self.num_workers = num_workers  # Note: Not used in current implementation due to pickling issues with Lance/Polars objects
+        self.n_epochs = n_epochs
 
         # Device-agnostic: always return CPU tensors
         self.device = None
@@ -230,6 +243,7 @@ class SLAFDataLoader:
             seed=42,  # TODO: make configurable
             max_queue_size=500,
             tokenizer_type=tokenizer_type,
+            n_epochs=n_epochs,  # Pass n_epochs to dataset
         )
 
     def __iter__(self):
