@@ -28,17 +28,17 @@ class Shuffle(ABC):
     """
 
     @abstractmethod
-    def apply(self, cell_integer_ids: list[int], seed: int, **kwargs: Any) -> list[int]:
+    def apply(self, df: pl.DataFrame, seed: int, **kwargs: Any) -> pl.DataFrame:
         """
-        Apply shuffling strategy to cell integer IDs.
+        Apply shuffling strategy to a Polars DataFrame.
 
         Args:
-            cell_integer_ids: List of cell integer IDs to shuffle
+            df: Polars DataFrame to shuffle
             seed: Random seed for reproducible shuffling
             **kwargs: Additional strategy-specific parameters
 
         Returns:
-            Shuffled list of cell integer IDs
+            Shuffled Polars DataFrame
         """
         raise NotImplementedError
 
@@ -51,34 +51,52 @@ class RandomShuffle(Shuffle):
     useful for training to avoid bias from data ordering.
     """
 
-    def apply(self, cell_integer_ids: list[int], seed: int, **kwargs: Any) -> list[int]:
+    def apply(self, df: pl.DataFrame, seed: int, **kwargs: Any) -> pl.DataFrame:
         """
         Apply random shuffling using Polars operations for performance.
 
         Args:
-            cell_integer_ids: List of cell integer IDs to shuffle
+            df: Polars DataFrame to shuffle
             seed: Random seed for reproducible shuffling
             **kwargs: Additional parameters (unused)
 
         Returns:
-            Randomly shuffled list of cell integer IDs
+            Randomly shuffled Polars DataFrame
         """
         import random
+
+        # Handle empty DataFrame
+        if len(df) == 0:
+            return df
 
         # Set seed for reproducible shuffling
         random.seed(seed)
 
-        # Create shuffle keys (same as original test)
-        shuffle_keys = [random.random() for _ in range(len(cell_integer_ids))]
+        # Since cell_integer_ids are contiguous, we can compute count more efficiently
+        min_cell_id = df["cell_integer_id"][0]
+        max_cell_id = df["cell_integer_id"][-1]
+        num_unique_cells = max_cell_id - min_cell_id + 1
 
-        # Create DataFrame with cell IDs and shuffle keys
-        shuffle_df = pl.DataFrame(
-            {"cell_integer_id": cell_integer_ids, "shuffle_key": shuffle_keys}
+        # Create shuffle keys for unique cell IDs
+        shuffle_keys = [random.random() for _ in range(num_unique_cells)]
+
+        # Create a mapping from cell_integer_id to shuffle_key
+        cell_to_shuffle_key = dict(
+            zip(range(min_cell_id, max_cell_id + 1), shuffle_keys, strict=False)
         )
 
-        # Sort by shuffle key and return cell IDs
-        shuffled_df = shuffle_df.sort("shuffle_key")
-        return shuffled_df["cell_integer_id"].to_list()
+        # Map shuffle keys to each row based on cell_integer_id
+        df_with_keys = df.with_columns(
+            pl.col("cell_integer_id")
+            .replace_strict(cell_to_shuffle_key)
+            .alias("shuffle_key")
+        )
+
+        # Sort by shuffle key and drop the key column
+        sorted_df = df_with_keys.sort("shuffle_key")
+        result = sorted_df.drop("shuffle_key")
+
+        return result
 
 
 class StratifiedShuffle(Shuffle):
@@ -89,58 +107,64 @@ class StratifiedShuffle(Shuffle):
     within each batch. Requires cell type information.
     """
 
-    def apply(self, cell_integer_ids: list[int], seed: int, **kwargs: Any) -> list[int]:
+    def apply(self, df: pl.DataFrame, seed: int, **kwargs: Any) -> pl.DataFrame:
         """
         Apply stratified shuffling.
 
         Args:
-            cell_integer_ids: List of cell integer IDs to shuffle
+            df: Polars DataFrame to shuffle
             seed: Random seed for reproducible shuffling
             **kwargs: Additional parameters:
-                - cell_types: List of cell types corresponding to cell_integer_ids
+                - cell_type_column: Column name containing cell types
                 - n_strata: Number of strata to maintain balance
 
         Returns:
-            Stratified shuffled list of cell integer IDs
+            Stratified shuffled Polars DataFrame
         """
         import random
 
-        cell_types = kwargs.get("cell_types", None)
+        # Handle empty DataFrame
+        if len(df) == 0:
+            return df
+
+        cell_type_column = kwargs.get("cell_type_column", "cell_type")
         # n_strata = kwargs.get("n_strata", 10)  # Unused variable
 
-        if cell_types is None or len(cell_types) != len(cell_integer_ids):
-            # Fall back to random shuffling if cell types not provided
-            return RandomShuffle().apply(cell_integer_ids, seed, **kwargs)
+        if cell_type_column not in df.columns:
+            # Fall back to random shuffling if cell type column not found
+            return RandomShuffle().apply(df, seed, **kwargs)
 
         # Set seed for reproducible shuffling
         random.seed(seed)
 
-        # Group cells by type
-        cell_type_groups: dict[Any, list[int]] = {}
-        for cell_id, cell_type in zip(cell_integer_ids, cell_types, strict=False):
-            if cell_type not in cell_type_groups:
-                cell_type_groups[cell_type] = []
-            cell_type_groups[cell_type].append(cell_id)
+        # Group by cell type and shuffle within each group
+        shuffled_groups = []
 
-        # Shuffle within each cell type group
-        for cell_type in cell_type_groups:
-            random.shuffle(cell_type_groups[cell_type])
+        for cell_type in df[cell_type_column].unique():
+            group_df = df.filter(pl.col(cell_type_column) == cell_type)
+            if len(group_df) > 0:
+                # Shuffle this group
+                shuffle_keys = [random.random() for _ in range(len(group_df))]
+                shuffled_group = (
+                    group_df.with_columns(pl.lit(shuffle_keys).alias("shuffle_key"))
+                    .sort("shuffle_key")
+                    .drop("shuffle_key")
+                )
+                shuffled_groups.append(shuffled_group)
 
-        # Interleave cells from different types to maintain balance
-        shuffled_ids: list[int] = []
+        # Interleave groups to maintain balance
+        if not shuffled_groups:
+            return df
 
-        # Handle empty cell type groups
-        if not cell_type_groups:
-            return shuffled_ids
+        max_rows = max(len(group) for group in shuffled_groups)
+        interleaved_rows = []
 
-        max_cells_per_type = max(len(cells) for cells in cell_type_groups.values())
+        for i in range(max_rows):
+            for group in shuffled_groups:
+                if i < len(group):
+                    interleaved_rows.append(group.row(i, named=True))
 
-        for i in range(max_cells_per_type):
-            for cell_type in cell_type_groups:
-                if i < len(cell_type_groups[cell_type]):
-                    shuffled_ids.append(cell_type_groups[cell_type][i])
-
-        return shuffled_ids
+        return pl.DataFrame(interleaved_rows)
 
 
 # Factory function for creating shuffle strategies
