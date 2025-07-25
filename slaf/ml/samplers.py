@@ -28,17 +28,25 @@ class Shuffle(ABC):
     """
 
     @abstractmethod
-    def apply(self, df: pl.DataFrame, seed: int, **kwargs: Any) -> pl.DataFrame:
+    def apply(
+        self,
+        df: pl.DataFrame,
+        seed: int,
+        batch_size: int | None = None,
+        **kwargs: Any,
+    ) -> pl.DataFrame | list[pl.DataFrame]:
         """
         Apply shuffling strategy to a Polars DataFrame.
 
         Args:
             df: Polars DataFrame to shuffle
             seed: Random seed for reproducible shuffling
+            batch_size: If provided, return list of chunked DataFrames. If None, return single DataFrame.
             **kwargs: Additional strategy-specific parameters
 
         Returns:
-            Shuffled Polars DataFrame
+            If batch_size is provided: List of pre-chunked Polars DataFrames
+            If batch_size is None: Single shuffled Polars DataFrame
         """
         raise NotImplementedError
 
@@ -51,52 +59,51 @@ class RandomShuffle(Shuffle):
     useful for training to avoid bias from data ordering.
     """
 
-    def apply(self, df: pl.DataFrame, seed: int, **kwargs: Any) -> pl.DataFrame:
+    def apply(
+        self,
+        df: pl.DataFrame,
+        seed: int,
+        batch_size: int | None = None,
+        **kwargs: Any,
+    ) -> pl.DataFrame | list[pl.DataFrame]:
         """
         Apply random shuffling using Polars operations for performance.
 
         Args:
             df: Polars DataFrame to shuffle
             seed: Random seed for reproducible shuffling
+            batch_size: If provided, return list of chunked DataFrames. If None, return single DataFrame.
             **kwargs: Additional parameters (unused)
 
         Returns:
-            Randomly shuffled Polars DataFrame
+            If batch_size is provided: List of pre-chunked Polars DataFrames
+            If batch_size is None: Single shuffled Polars DataFrame
         """
         import random
 
         # Handle empty DataFrame
         if len(df) == 0:
-            return df
+            return [] if batch_size is not None else df
 
         # Set seed for reproducible shuffling
         random.seed(seed)
 
-        # Since cell_integer_ids are contiguous, we can compute count more efficiently
-        min_cell_id = df["cell_integer_id"][0]
-        max_cell_id = df["cell_integer_id"][-1]
-        num_unique_cells = max_cell_id - min_cell_id + 1
+        # Efficient block shuffling for pre-sorted data
+        # Partition by cell_integer_id (fast since data is pre-sorted)
+        chunks = df.partition_by("cell_integer_id", as_dict=False)
 
-        # Create shuffle keys for unique cell IDs
-        shuffle_keys = [random.random() for _ in range(num_unique_cells)]
+        # Shuffle the list of chunks
+        random.shuffle(chunks)
 
-        # Create a mapping from cell_integer_id to shuffle_key
-        cell_to_shuffle_key = dict(
-            zip(range(min_cell_id, max_cell_id + 1), shuffle_keys, strict=False)
-        )
-
-        # Map shuffle keys to each row based on cell_integer_id
-        df_with_keys = df.with_columns(
-            pl.col("cell_integer_id")
-            .replace_strict(cell_to_shuffle_key)
-            .alias("shuffle_key")
-        )
-
-        # Sort by shuffle key and drop the key column
-        sorted_df = df_with_keys.sort("shuffle_key")
-        result = sorted_df.drop("shuffle_key")
-
-        return result
+        if batch_size is not None:
+            # Chunked mode: return list of DataFrames
+            return [
+                pl.concat(chunks[i : i + batch_size])
+                for i in range(0, len(chunks), batch_size)
+            ]
+        else:
+            # Single DataFrame mode: concatenate all chunks
+            return pl.concat(chunks)
 
 
 class StratifiedShuffle(Shuffle):
@@ -107,32 +114,38 @@ class StratifiedShuffle(Shuffle):
     within each batch. Requires cell type information.
     """
 
-    def apply(self, df: pl.DataFrame, seed: int, **kwargs: Any) -> pl.DataFrame:
+    def apply(
+        self,
+        df: pl.DataFrame,
+        seed: int,
+        batch_size: int | None = None,
+        **kwargs: Any,
+    ) -> pl.DataFrame | list[pl.DataFrame]:
         """
         Apply stratified shuffling.
 
         Args:
             df: Polars DataFrame to shuffle
             seed: Random seed for reproducible shuffling
+            batch_size: If provided, return list of chunked DataFrames. If None, return single DataFrame.
             **kwargs: Additional parameters:
                 - cell_type_column: Column name containing cell types
-                - n_strata: Number of strata to maintain balance
 
         Returns:
-            Stratified shuffled Polars DataFrame
+            If batch_size is provided: List of pre-chunked Polars DataFrames
+            If batch_size is None: Single stratified shuffled Polars DataFrame
         """
         import random
 
         # Handle empty DataFrame
         if len(df) == 0:
-            return df
+            return [] if batch_size is not None else df
 
         cell_type_column = kwargs.get("cell_type_column", "cell_type")
-        # n_strata = kwargs.get("n_strata", 10)  # Unused variable
 
         if cell_type_column not in df.columns:
             # Fall back to random shuffling if cell type column not found
-            return RandomShuffle().apply(df, seed, **kwargs)
+            return RandomShuffle().apply(df, seed, batch_size, **kwargs)
 
         # Set seed for reproducible shuffling
         random.seed(seed)
@@ -154,7 +167,7 @@ class StratifiedShuffle(Shuffle):
 
         # Interleave groups to maintain balance
         if not shuffled_groups:
-            return df
+            return [] if batch_size is not None else df
 
         max_rows = max(len(group) for group in shuffled_groups)
         interleaved_rows = []
@@ -164,7 +177,18 @@ class StratifiedShuffle(Shuffle):
                 if i < len(group):
                     interleaved_rows.append(group.row(i, named=True))
 
-        return pl.DataFrame(interleaved_rows)
+        result_df = pl.DataFrame(interleaved_rows)
+
+        if batch_size is not None:
+            # Chunked mode: partition by cell_integer_id and return list of DataFrames
+            chunks = result_df.partition_by("cell_integer_id", as_dict=False)
+            return [
+                pl.concat(chunks[i : i + batch_size])
+                for i in range(0, len(chunks), batch_size)
+            ]
+        else:
+            # Single DataFrame mode: return the interleaved DataFrame
+            return result_df
 
 
 # Factory function for creating shuffle strategies

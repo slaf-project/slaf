@@ -97,6 +97,37 @@ class TestRandomShuffle:
         )
         assert result is not self.test_df
 
+    def test_apply_with_batch_size(self):
+        """Test chunking with batch_size parameter"""
+        # Create DataFrame with more cells to test chunking
+        large_df = pl.DataFrame(
+            {
+                "cell_integer_id": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+                "gene_integer_id": [10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+                "value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
+            }
+        )
+
+        result = self.shuffle.apply(large_df, seed=42, batch_size=3)
+
+        # Should return a list of DataFrames
+        assert isinstance(result, list)
+        assert len(result) > 0
+
+        # Each DataFrame should be a valid chunk
+        for chunk in result:
+            assert isinstance(chunk, pl.DataFrame)
+            assert len(chunk) > 0
+
+    def test_apply_with_batch_size_empty(self):
+        """Test batch_size with empty DataFrame"""
+        empty_df = pl.DataFrame(
+            {"cell_integer_id": [], "gene_integer_id": [], "value": []}
+        )
+        result = self.shuffle.apply(empty_df, seed=42, batch_size=3)
+        assert isinstance(result, list)
+        assert len(result) == 0
+
 
 class TestStratifiedShuffle:
     """Test StratifiedShuffle implementation"""
@@ -204,6 +235,57 @@ class TestStratifiedShuffle:
         original_types = set(self.test_df["cell_type"].to_list())
         result_types = set(result["cell_type"].to_list())
         assert original_types == result_types
+
+    def test_apply_with_batch_size(self):
+        """Test chunking with batch_size parameter"""
+        # Create DataFrame with more cells to test chunking
+        large_df = pl.DataFrame(
+            {
+                "cell_integer_id": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+                "gene_integer_id": [10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+                "value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
+                "cell_type": ["A", "A", "B", "B", "C", "C", "A", "B", "C", "A"],
+            }
+        )
+
+        result = self.shuffle.apply(
+            large_df, seed=42, batch_size=3, cell_type_column="cell_type"
+        )
+
+        # Should return a list of DataFrames
+        assert isinstance(result, list)
+        assert len(result) > 0
+
+        # Each DataFrame should be a valid chunk
+        for chunk in result:
+            assert isinstance(chunk, pl.DataFrame)
+            assert len(chunk) > 0
+
+    def test_apply_with_batch_size_empty(self):
+        """Test batch_size with empty DataFrame"""
+        empty_df = pl.DataFrame(
+            {"cell_integer_id": [], "gene_integer_id": [], "value": [], "cell_type": []}
+        )
+        result = self.shuffle.apply(
+            empty_df, seed=42, batch_size=3, cell_type_column="cell_type"
+        )
+        assert isinstance(result, list)
+        assert len(result) == 0
+
+    def test_apply_with_batch_size_falls_back_to_random(self):
+        """Test that batch_size works when falling back to random shuffle"""
+        df_without_cell_type = pl.DataFrame(
+            {
+                "cell_integer_id": [0, 1, 2, 3, 4, 5],
+                "gene_integer_id": [10, 11, 12, 13, 14, 15],
+                "value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            }
+        )
+
+        result = self.shuffle.apply(df_without_cell_type, seed=42, batch_size=3)
+        # Should still work and return a list of DataFrames
+        assert isinstance(result, list)
+        assert len(result) > 0
 
 
 class TestCreateShuffle:
