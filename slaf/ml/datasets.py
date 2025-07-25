@@ -7,6 +7,9 @@ from queue import Queue
 from typing import Any, Union
 
 import polars as pl
+import torch
+from rich.console import Console
+from rich.panel import Panel
 
 # Try to import rich for colored output
 try:
@@ -245,53 +248,13 @@ class TokenizedPrefetchBatch:
 
 @dataclass
 class RawPrefetchBatch:
-    """
-    Container for a batch of raw cell × gene data.
-
-    This dataclass holds the results of raw data processing from Lance fragments,
-    including shuffled Polars DataFrames for efficient batch creation.
-    It serves as the primary data structure for transferring raw data
-    between the background prefetcher and the main training loop.
-
-    Examples:
-        >>> # Create a raw prefetch batch
-        >>> import polars as pl
-        >>> batch = RawPrefetchBatch(
-        ...     batch_id=0,
-        ...     df=pl.DataFrame({
-        ...         "cell_integer_id": [0, 1, 2, 3],
-        ...         "gene_integer_id": [12, 16, 19, 25],
-        ...         "value": [2.0, 2.0, 3.0, 1.0]
-        ...     }),
-        ...     cell_integer_ids=[0, 1, 2, 3],
-        ...     process_time=0.0015
-        ... )
-        >>> print(f"Batch {batch.batch_id}: {len(batch.cell_integer_ids)} cells")
-        Batch 0: 4 cells
-
-        >>> # Access batch components
-        >>> print(f"DataFrame shape: {batch.df.shape}")
-        DataFrame shape: (4, 3)
-        >>> print(f"Processing time: {batch.process_time * 1000:.1f}ms")
-        Processing time: 1.5ms
-
-        >>> # Check for partial cell data
-        >>> if batch.partial_cell_data is not None:
-        ...     print(f"Partial cells: {len(batch.partial_cell_data)}")
-        ... else:
-        ...     print("No partial cell data")
-        No partial cell data
-    """
+    """Raw prefetch batch containing pre-chunked raw data for fast batch creation."""
 
     batch_id: int
-    df: (
-        pl.DataFrame
-    )  # Shuffled Polars DataFrame with cell_integer_id, gene_integer_id, value
-    cell_integer_ids: list[int]  # Corresponding cell integer IDs
-    partial_cell_data: dict | None = (
-        None  # Store partial cell data for boundary handling
-    )
-    process_time: float = 0.0  # Time spent on processing
+    batch_dfs: list[pl.DataFrame]  # List of pre-chunked DataFrames
+    cell_integer_ids: list[int]  # List of all cell IDs across all batches
+    process_time: float
+    memory_mb: float
 
 
 class PrefetchBatchProcessor:
@@ -317,77 +280,7 @@ class PrefetchBatchProcessor:
         n_epochs: int = 1,  # Add n_epochs parameter
         raw_mode: bool = False,  # Add raw_mode parameter
     ):
-        """
-        Initialize the PrefetchBatchProcessor with processing configuration.
-
-        Args:
-            slaf_array: SLAFArray instance containing the single-cell data.
-                       Must have a valid Lance dataset at slaf_path/expression.lance.
-            window: Window function strategy for gene ranking and filtering.
-                   Determines how genes are selected and ordered within cells.
-            shuffle: Shuffle strategy for cell ordering within batches.
-                    Controls the randomization of cells for training.
-            tokenizer: SLAFTokenizer instance for sequence tokenization.
-                      Handles conversion of gene sequences to token IDs.
-            seed: Random seed for reproducible shuffling and processing.
-                  Used by both window and shuffle strategies.
-            max_genes: Maximum number of genes to include per cell.
-                      For Geneformer: same as sequence length.
-                      For scGPT: number of gene-expression pairs.
-            batches_per_chunk: Number of Lance batches to process together.
-                             Higher values improve throughput but use more memory.
-                             Range: 10-200, default: 50.
-            n_expression_bins: Number of expression bins for scGPT discretization.
-                             Only used when use_binned_expressions=True.
-                             Range: 1-1000, default: 10.
-            use_binned_expressions: Whether to use binned expression values for scGPT.
-                                   If False, raw expression values are used.
-                                   Only affects scGPT tokenization.
-            n_epochs: Number of epochs to run. If > 1, the generator will be reset
-                     after each epoch. Default: 1.
-            raw_mode: If True, process raw data (sparse CSR tensors) instead of
-                      pre-tokenized sequences. Default: False.
-
-        Raises:
-            ValueError: If parameters are invalid or SLAF array is malformed.
-            RuntimeError: If Lance dataset cannot be loaded.
-            TypeError: If slaf_array is not a valid SLAFArray instance.
-
-        Examples:
-            >>> # Basic initialization
-            >>> slaf_array = SLAFArray("path/to/data.slaf")
-            >>> window = ScGPTWindow()
-            >>> shuffle = RandomShuffle()
-            >>> tokenizer = SLAFTokenizer(slaf_array)
-            >>> processor = PrefetchBatchProcessor(
-            ...     slaf_array=slaf_array,
-            ...     window=window,
-            ...     shuffle=shuffle,
-            ...     tokenizer=tokenizer
-            ... )
-            >>> print(f"Max genes: {processor.max_genes}")
-            Max genes: 1024
-
-            >>> # Custom configuration
-            >>> processor = PrefetchBatchProcessor(
-            ...     slaf_array=slaf_array,
-            ...     window=window,
-            ...     shuffle=shuffle,
-            ...     tokenizer=tokenizer,
-            ...     max_genes=2048,
-            ...     batches_per_chunk=100,
-            ...     use_binned_expressions=False
-            ... )
-            >>> print(f"Batches per chunk: {processor.batches_per_chunk}")
-            Batches per chunk: 100
-
-            >>> # Error handling for invalid SLAF array
-            >>> try:
-            ...     processor = PrefetchBatchProcessor(None, window, shuffle, tokenizer)
-            ... except TypeError as e:
-            ...     print(f"Error: {e}")
-            Error: slaf_array must be a valid SLAFArray instance
-        """
+        """Initialize the PrefetchBatchProcessor."""
         self.slaf_array = slaf_array
         self.window = window
         self.shuffle = shuffle
@@ -399,18 +292,23 @@ class PrefetchBatchProcessor:
         self.use_binned_expressions = use_binned_expressions
         self.n_epochs = n_epochs
         self.raw_mode = raw_mode
-        self.window_kwargs: dict[str, Any] = {}  # Additional kwargs for window function
+
+        # Initialize state
+        self.batch_id = 0
+        self.current_epoch = 0
+        self.partial_cell_data: dict[
+            Any, pl.DataFrame
+        ] = {}  # Store partial cell data across chunks
+        self.window_kwargs: dict[str, Any] = {}
+
+        # Track prefetch statistics
+        self.total_prefetch_cells = 0
 
         # Create Lance dataset and batch generator
         self.expression_dataset = lance.dataset(
             f"{self.slaf_array.slaf_path}/expression.lance"
         )
         self.batch_generator = self.expression_dataset.to_batches()
-        self.batch_id = 0
-        self.current_epoch = 0
-        self.partial_cell_data: dict[
-            Any, pl.DataFrame
-        ] = {}  # Store partial cell data across chunks
 
         # Initialize timing variables for consolidated reporting
         self._last_load_time = 0.0
@@ -588,51 +486,60 @@ class PrefetchBatchProcessor:
             # Process complete cells
             if len(complete_df) > 0:
                 # Apply shuffle strategy
-                # Shuffle cells within this batch
-                shuffle_start = time.time()
-
-                # Apply shuffling directly to the DataFrame
-                shuffled_df = self.shuffle.apply(
-                    complete_df,  # type: ignore
-                    self.seed + self.batch_id + self.current_epoch * 10000,
-                )
-
-                # Get the unique cell IDs from the shuffled DataFrame
-                shuffled_cell_integer_ids = (
-                    shuffled_df["cell_integer_id"].unique().to_list()
-                )
-
-                shuffle_time = time.time() - shuffle_start
-
                 if self.raw_mode:
-                    # Raw mode: return shuffled Polars DataFrame
-                    # No additional processing needed - just return the shuffled DataFrame
+                    # Raw mode: shuffle and chunk the data
+                    shuffle_start = time.time()
+
+                    # Apply shuffling with chunking
+                    shuffled_chunks = self.shuffle.apply(
+                        complete_df,  # type: ignore
+                        self.seed + self.batch_id + self.current_epoch * 10000,
+                        batch_size=32,  # TODO: make this configurable
+                    )
+
+                    shuffle_time = time.time() - shuffle_start
                     total_time = time.time() - start_time
 
-                    # Print consolidated timing breakdown every 10 batches
-                    if self.batch_id % 10 == 0:
-                        # Consolidate all prefetch batch reporting into one cyan block
-                        prefetch_report = f"Raw prefetch batch {self.batch_id} (epoch {self.current_epoch}):\n"
-                        prefetch_report += f"   Lance loading: {self._last_load_time * 1000:.1f}ms ({self._last_batch_dfs_count} batches, {self._last_total_rows} rows)\n"
-                        prefetch_report += (
-                            f"   Processing: {shuffle_time * 1000:.1f}ms shuffle\n"
-                        )
-                        prefetch_report += f"   Total: {total_time * 1000:.1f}ms, {len(shuffled_cell_integer_ids)} cells, {self._last_memory_mb:.1f} MB"
+                    # Count total cells across all chunks
+                    total_cells_in_chunks = sum(
+                        len(chunk["cell_integer_id"].unique())
+                        for chunk in shuffled_chunks
+                    )
 
-                        print_prefetch(prefetch_report)
+                    # Track total cells processed in prefetch
+                    self.total_prefetch_cells += total_cells_in_chunks
 
-                    self.batch_id += 1
+                    # Consolidate all prefetch batch reporting into one cyan block
+                    prefetch_report = f"Raw prefetch batch {self.batch_id} (epoch {self.current_epoch}):\n"
+                    prefetch_report += f"   Lance loading: {self._last_load_time * 1000:.1f}ms ({self._last_batch_dfs_count} batches, {self._last_total_rows} rows)\n"
+                    prefetch_report += (
+                        f"   Processing: {shuffle_time * 1000:.1f}ms shuffle\n"
+                    )
+                    prefetch_report += f"   Total: {total_time * 1000:.1f}ms, {len(shuffled_chunks)} chunks, {total_cells_in_chunks} cells, {self._last_memory_mb:.1f} MB"
+
+                    print_prefetch(prefetch_report)
+
+                    self.batch_id += 1  # Increment batch_id for raw mode
                     return RawPrefetchBatch(
                         batch_id=self.batch_id - 1,
-                        df=shuffled_df,  # Store the Polars DataFrame
-                        cell_integer_ids=shuffled_df["cell_integer_id"]
+                        batch_dfs=shuffled_chunks,  # List of pre-chunked DataFrames
+                        cell_integer_ids=complete_df["cell_integer_id"]
                         .unique()
                         .to_list(),
-                        partial_cell_data=self.partial_cell_data.copy(),
                         process_time=shuffle_time,  # Use shuffle time as process time
+                        memory_mb=self._last_memory_mb,  # Use last memory for reporting
                     )
                 else:
-                    # Tokenized mode: apply window function and tokenize
+                    # Tokenized mode: apply window functions and tokenize
+                    shuffle_start = time.time()
+
+                    # Apply shuffling directly to the DataFrame (no chunking for tokenized mode)
+                    shuffled_df = self.shuffle.apply(
+                        complete_df,  # type: ignore
+                        self.seed + self.batch_id + self.current_epoch * 10000,
+                    )
+
+                    shuffle_time = time.time() - shuffle_start
                     window_start = time.time()
                     window_params = {
                         "n_expression_bins": self.n_expression_bins,
@@ -667,13 +574,17 @@ class PrefetchBatchProcessor:
                     tokenize_time = time.time() - tokenize_start
                     total_time = time.time() - start_time
 
+                    # Track total cells processed in prefetch
+                    cells_in_batch = len(complete_df["cell_integer_id"].unique())
+                    self.total_prefetch_cells += cells_in_batch
+
                     # Print consolidated timing breakdown every 10 batches
                     if self.batch_id % 10 == 0:
                         # Consolidate all prefetch batch reporting into one cyan block
                         prefetch_report = f"Prefetch batch {self.batch_id} (epoch {self.current_epoch}):\n"
                         prefetch_report += f"   Lance loading: {self._last_load_time * 1000:.1f}ms ({self._last_batch_dfs_count} batches, {self._last_total_rows} rows)\n"
                         prefetch_report += f"   Processing: {window_time * 1000:.1f}ms window, {shuffle_time * 1000:.1f}ms shuffle, {tokenize_time * 1000:.1f}ms tokenize\n"
-                        prefetch_report += f"   Total: {total_time * 1000:.1f}ms, {len(shuffled_cell_integer_ids)} cells, {self._last_memory_mb:.1f} MB"
+                        prefetch_report += f"   Total: {total_time * 1000:.1f}ms, {cells_in_batch} cells, {self._last_memory_mb:.1f} MB"
 
                         print_prefetch(prefetch_report)
 
@@ -682,7 +593,9 @@ class PrefetchBatchProcessor:
                         batch_id=self.batch_id - 1,
                         input_ids=input_ids,
                         attention_mask=attention_mask,
-                        cell_integer_ids=shuffled_cell_integer_ids,
+                        cell_integer_ids=complete_df["cell_integer_id"]
+                        .unique()
+                        .to_list(),
                         partial_cell_data=self.partial_cell_data.copy(),
                         tokenize_time=tokenize_time,
                     )
@@ -1287,7 +1200,10 @@ class SLAFIterableDataset(IterableDataset):
 
         while True:
             # Get data from prefetcher
+            data_start = time.time()
             data = self.prefetcher.get_batch()
+            data_time = time.time() - data_start
+
             if data is None:
                 # Check if prefetcher has finished all epochs
                 stats = self.prefetcher.get_stats()
@@ -1333,86 +1249,46 @@ class SLAFIterableDataset(IterableDataset):
 
             # Check if this is a raw batch or tokenized batch
             if isinstance(data, RawPrefetchBatch):
-                # Raw mode: process Polars DataFrame and convert to sparse tensors
-                df = data.df
-                n_genes = self.slaf_array.shape[1]
-                cell_integer_ids = (
-                    data.cell_integer_ids
-                )  # Get cell IDs from the data object
+                # Raw mode: use pre-chunked DataFrames
+                batch_dfs = data.batch_dfs
+                cell_integer_ids = data.cell_integer_ids
 
-                # Process all cells in this data chunk
-                for batch_start in range(0, num_cells, self.batch_size):
-                    batch_end = min(batch_start + self.batch_size, num_cells)
+                # Process each pre-chunked DataFrame
+                for batch_df in batch_dfs:
+                    # Time the overall batch processing
+                    batch_start_time = time.time()
 
-                    # Extract batch cell IDs
-                    batch_cell_ids = cell_integer_ids[batch_start:batch_end]
+                    # Get unique cell IDs in this batch
+                    batch_cell_ids = batch_df["cell_integer_id"].unique().to_list()
 
-                    # Filter DataFrame to get data for this batch
-                    batch_df = df.filter(
-                        pl.col("cell_integer_id").is_in(batch_cell_ids)
-                    )
+                    # Calculate total batch processing time
+                    total_batch_time = time.time() - batch_start_time
 
-                    # Sort by row_idx to ensure proper CSR format
-                    batch_df = batch_df.sort("cell_integer_id", "gene_integer_id")
+                    # Create batch dictionary
+                    batch_dict = {
+                        "x": batch_df,  # Polars DataFrame with CSR-like structure
+                        "cell_ids": batch_cell_ids,
+                    }
 
-                    # Convert to sparse CSR tensor
-                    crow_indices = batch_df["cell_integer_id"].to_list()
-                    col_indices = batch_df["gene_integer_id"].to_list()
-                    values = batch_df["value"].to_list()
-
-                    batch_X = torch.sparse_csr_tensor(
-                        crow_indices=crow_indices,
-                        col_indices=col_indices,
-                        values=values,
-                        size=(self.batch_size, n_genes),
-                        dtype=torch.float32,
-                    )
-
-                    # Convert cell IDs to tensor (pre-allocated)
-                    tensor_start = time.time()
-                    cell_ids_tensor = torch.tensor(batch_cell_ids, dtype=torch.long)
-                    tensor_time = time.time() - tensor_start
-
-                    # Always return CPU tensors (device-agnostic)
-                    # Training loop should handle device transfer
+                    # Add epoch info if multi-epoch training
+                    if self.n_epochs > 1:
+                        batch_dict["epoch"] = current_epoch  # type: ignore
 
                     batches_yielded += 1
 
                     # Print detailed timing every 1000 batches
                     if batches_yielded % 100 == 0:
                         # Consolidate training batch reporting
-                        training_report = f"Raw training batch {batches_yielded} (epoch {current_epoch}) processing:\n"
+                        training_report = f"  Raw training batch {batches_yielded} (epoch {current_epoch}) processing:\n"
                         training_report += (
-                            f"   Tensor creation: {tensor_time * 1000:.1f}ms\n"
+                            f"     Data retrieval: {data_time * 1000:.1f}ms\n"
                         )
-                        training_report += "   Raw data (no tokenization overhead)"
+                        training_report += (
+                            f"     Total batch time: {total_batch_time * 1000:.1f}ms\n"
+                        )
+                        training_report += "     Raw data (polars DataFrame)"
 
                         print_training(training_report)
-
-                    # Logging
-                    if batches_yielded % 100 == 0:
-                        current_time = time.time()
-                        time_since_last_rate = current_time - last_rate_time
-                        batches_since_last_rate = batches_yielded - last_rate_batches
-                        if time_since_last_rate > 0:
-                            instantaneous_rate = (
-                                batches_since_last_rate / time_since_last_rate
-                            )
-                            overall_rate = batches_yielded / (current_time - start_time)
-                            rate_report = f"Raw training batch {batches_yielded} (epoch {current_epoch}): {instantaneous_rate:.1f} batches/sec (instantaneous, overall: {overall_rate:.1f})"
-                            print_training(rate_report)
-                        last_rate_time = current_time
-                        last_rate_batches = batches_yielded
-
-                    # Prepare batch dict for raw mode (AnnDataLoader format)
-                    batch_dict = {
-                        "x": batch_X,  # Use lowercase 'x' to match AnnDataLoader
-                        "cell_ids": cell_ids_tensor,
-                    }
-
-                    # Add epoch information if using multiple epochs
-                    if self.n_epochs > 1:
-                        batch_dict["epoch"] = current_epoch  # type: ignore
 
                     yield batch_dict
 
