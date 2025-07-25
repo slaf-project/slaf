@@ -212,6 +212,7 @@ class SLAFDataLoader:
     """
 
     device: Optional["torch.device"]  # type: ignore
+    tokenizer: Optional["SLAFTokenizer"]  # type: ignore
 
     def __init__(
         self,
@@ -223,6 +224,7 @@ class SLAFDataLoader:
         vocab_size: int = 50000,
         n_expression_bins: int = 10,
         n_epochs: int = 1,  # Add n_epochs parameter
+        raw_mode: bool = False,  # Add raw_mode parameter
     ):
         """
         Initialize the SLAF DataLoader with training configuration.
@@ -248,6 +250,8 @@ class SLAFDataLoader:
             n_epochs: Number of epochs to run. The generator will automatically reset
                      after each epoch, enabling multi-epoch training on small datasets.
                      Default: 1.
+            raw_mode: If True, return raw cell × gene data as sparse CSR tensors
+                     instead of pre-tokenized sequences. Default: False.
 
         Raises:
             ValueError: If tokenizer_type is not supported or parameters are invalid.
@@ -280,6 +284,14 @@ class SLAFDataLoader:
             >>> print(f"Number of epochs: {dataloader.n_epochs}")
             Number of epochs: 5
 
+            >>> # Raw mode for external comparisons
+            >>> dataloader = SLAFDataLoader(
+            ...     slaf_array=slaf_array,
+            ...     raw_mode=True
+            ... )
+            >>> print(f"Raw mode: {dataloader.raw_mode}")
+            Raw mode: True
+
             >>> # Error handling for invalid tokenizer type
             >>> try:
             ...     dataloader = SLAFDataLoader(slaf_array, tokenizer_type="invalid")
@@ -300,6 +312,7 @@ class SLAFDataLoader:
         self.max_genes = max_genes
         self.num_workers = num_workers  # Note: Not used in current implementation due to pickling issues with Lance/Polars objects
         self.n_epochs = n_epochs
+        self.raw_mode = raw_mode  # Add raw_mode attribute
 
         # Device-agnostic: always return CPU tensors
         self.device = None
@@ -310,16 +323,21 @@ class SLAFDataLoader:
                 "SLAFIterableDataset is required but not available. Please install required dependencies."
             )
 
-        # Initialize tokenizer
-        self.tokenizer = SLAFTokenizer(
-            slaf_array=slaf_array,
-            tokenizer_type=tokenizer_type,
-            vocab_size=vocab_size,
-            n_expression_bins=n_expression_bins,
-        )
+        # Initialize tokenizer (only needed for non-raw mode)
+        if not self.raw_mode:
+            self.tokenizer = SLAFTokenizer(
+                slaf_array=slaf_array,
+                tokenizer_type=tokenizer_type,
+                vocab_size=vocab_size,
+                n_expression_bins=n_expression_bins,
+            )
 
-        # Get special tokens from tokenizer
-        self.special_tokens = self.tokenizer.special_tokens
+            # Get special tokens from tokenizer
+            self.special_tokens = self.tokenizer.special_tokens
+        else:
+            # For raw mode, we don't need a tokenizer
+            self.tokenizer = None
+            self.special_tokens = None
 
         # Use IterableDataset
         self._dataset = SLAFIterableDataset(
@@ -330,6 +348,7 @@ class SLAFDataLoader:
             max_queue_size=500,
             tokenizer_type=tokenizer_type,
             n_epochs=n_epochs,  # Pass n_epochs to dataset
+            raw_mode=raw_mode,  # Pass raw_mode to dataset
         )
 
     def __iter__(self):

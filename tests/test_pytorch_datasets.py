@@ -8,9 +8,9 @@ from torch.utils.data import DataLoader
 from slaf.ml.aggregators import GeneformerWindow, ScGPTWindow
 from slaf.ml.datasets import (
     AsyncPrefetcher,
-    PrefetchBatch,
     PrefetchBatchProcessor,
     SLAFIterableDataset,
+    TokenizedPrefetchBatch,
 )
 from slaf.ml.samplers import RandomShuffle
 from slaf.ml.tokenizers import SLAFTokenizer
@@ -92,7 +92,7 @@ class TestSLAFIterableDataset:
         input_ids = torch.randint(0, 1000, (2, 1024))
         attention_mask = torch.ones(2, 1024, dtype=torch.bool)
 
-        batch = PrefetchBatch(
+        batch = TokenizedPrefetchBatch(
             batch_id=0,
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -113,7 +113,7 @@ class TestSLAFIterableDataset:
         input_ids = torch.randint(0, 1000, (3, 2048))
         attention_mask = torch.ones(3, 2048, dtype=torch.bool)
 
-        batch = PrefetchBatch(
+        batch = TokenizedPrefetchBatch(
             batch_id=1,
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -697,7 +697,7 @@ class TestPrefetchBatchProcessing:
         input_ids = torch.randint(0, 1000, (2, 1024))
         attention_mask = torch.ones(2, 1024, dtype=torch.bool)
 
-        batch = PrefetchBatch(
+        batch = TokenizedPrefetchBatch(
             batch_id=0,
             input_ids=input_ids,
             attention_mask=attention_mask,

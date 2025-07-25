@@ -4,7 +4,7 @@ import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from queue import Queue
-from typing import Any
+from typing import Any, Union
 
 import polars as pl
 
@@ -14,7 +14,7 @@ try:
     from rich.panel import Panel
 
     RICH_AVAILABLE = True
-    console = Console()
+    console: Console | None = Console()
 except ImportError:
     RICH_AVAILABLE = False
     console = None
@@ -52,6 +52,9 @@ from slaf.ml.aggregators import Window
 from slaf.ml.samplers import Shuffle
 from slaf.ml.tokenizers import SLAFTokenizer
 
+# Define union type for both batch types
+PrefetchBatch = Union["TokenizedPrefetchBatch", "RawPrefetchBatch"]
+
 
 def print_prefetch(message: str):
     """
@@ -74,7 +77,7 @@ def print_prefetch(message: str):
         >>> print_prefetch("Processing rate: 1000 cells/sec")
         # Output will be in cyan panel if rich is available
     """
-    if RICH_AVAILABLE:
+    if RICH_AVAILABLE and console is not None:
         console.print(Panel(message, border_style="cyan"))
     else:
         print(f"🔍 {message}")
@@ -101,7 +104,7 @@ def print_training(message: str):
         >>> print_training("Training rate: 500 batches/sec")
         # Output will be in green panel if rich is available
     """
-    if RICH_AVAILABLE:
+    if RICH_AVAILABLE and console is not None:
         console.print(Panel(message, border_style="green"))
     else:
         print(f"📊 {message}")
@@ -128,7 +131,7 @@ def print_epoch_transition(message: str):
         >>> print_epoch_transition("Starting epoch 5")
         # Output will be in yellow if rich is available
     """
-    if RICH_AVAILABLE:
+    if RICH_AVAILABLE and console is not None:
         console.print(f"[yellow]🔄 {message}[/yellow]")
     else:
         print(f"🔄 {message}")
@@ -155,7 +158,7 @@ def print_completion(message: str):
         >>> print_completion("Training finished successfully")
         # Output will be in bright green panel if rich is available
     """
-    if RICH_AVAILABLE:
+    if RICH_AVAILABLE and console is not None:
         console.print(
             Panel(
                 f"[bright_green]✅ {message}[/bright_green]",
@@ -187,14 +190,14 @@ def print_warning(message: str):
         >>> print_warning("Queue is full")
         # Output will be in orange if rich is available
     """
-    if RICH_AVAILABLE:
+    if RICH_AVAILABLE and console is not None:
         console.print(f"[orange3]⚠️ {message}[/orange3]")
     else:
         print(f"⚠️ {message}")
 
 
 @dataclass
-class PrefetchBatch:
+class TokenizedPrefetchBatch:
     """
     Container for a batch of pre-tokenized sequences.
 
@@ -204,9 +207,9 @@ class PrefetchBatch:
     batches between the background prefetcher and the main training loop.
 
     Examples:
-        >>> # Create a prefetch batch
+        >>> # Create a tokenized prefetch batch
         >>> import torch
-        >>> batch = PrefetchBatch(
+        >>> batch = TokenizedPrefetchBatch(
         ...     batch_id=0,
         ...     input_ids=torch.randint(0, 1000, (32, 1024)),
         ...     attention_mask=torch.ones(32, 1024, dtype=torch.bool),
@@ -240,6 +243,57 @@ class PrefetchBatch:
     tokenize_time: float = 0.0  # Time spent on tokenization
 
 
+@dataclass
+class RawPrefetchBatch:
+    """
+    Container for a batch of raw cell × gene data.
+
+    This dataclass holds the results of raw data processing from Lance fragments,
+    including shuffled Polars DataFrames for efficient batch creation.
+    It serves as the primary data structure for transferring raw data
+    between the background prefetcher and the main training loop.
+
+    Examples:
+        >>> # Create a raw prefetch batch
+        >>> import polars as pl
+        >>> batch = RawPrefetchBatch(
+        ...     batch_id=0,
+        ...     df=pl.DataFrame({
+        ...         "cell_integer_id": [0, 1, 2, 3],
+        ...         "gene_integer_id": [12, 16, 19, 25],
+        ...         "value": [2.0, 2.0, 3.0, 1.0]
+        ...     }),
+        ...     cell_integer_ids=[0, 1, 2, 3],
+        ...     process_time=0.0015
+        ... )
+        >>> print(f"Batch {batch.batch_id}: {len(batch.cell_integer_ids)} cells")
+        Batch 0: 4 cells
+
+        >>> # Access batch components
+        >>> print(f"DataFrame shape: {batch.df.shape}")
+        DataFrame shape: (4, 3)
+        >>> print(f"Processing time: {batch.process_time * 1000:.1f}ms")
+        Processing time: 1.5ms
+
+        >>> # Check for partial cell data
+        >>> if batch.partial_cell_data is not None:
+        ...     print(f"Partial cells: {len(batch.partial_cell_data)}")
+        ... else:
+        ...     print("No partial cell data")
+        No partial cell data
+    """
+
+    batch_id: int
+    df: (
+        pl.DataFrame
+    )  # Shuffled Polars DataFrame with cell_integer_id, gene_integer_id, value
+    cell_integer_ids: list[int]  # Corresponding cell integer IDs
+    partial_cell_data: dict | None = (
+        None  # Store partial cell data for boundary handling
+    )
+    process_time: float = 0.0  # Time spent on processing
+
+
 class PrefetchBatchProcessor:
     """
     Processes Lance fragments into pre-tokenized batches using Window and Shuffle strategies.
@@ -254,13 +308,14 @@ class PrefetchBatchProcessor:
         slaf_array: SLAFArray,
         window: "Window",
         shuffle: "Shuffle",
-        tokenizer: SLAFTokenizer,
+        tokenizer: SLAFTokenizer | None,
         seed: int = 42,
         max_genes: int = 1024,
         batches_per_chunk: int = 50,
         n_expression_bins: int = 10,
         use_binned_expressions: bool = True,
         n_epochs: int = 1,  # Add n_epochs parameter
+        raw_mode: bool = False,  # Add raw_mode parameter
     ):
         """
         Initialize the PrefetchBatchProcessor with processing configuration.
@@ -290,6 +345,8 @@ class PrefetchBatchProcessor:
                                    Only affects scGPT tokenization.
             n_epochs: Number of epochs to run. If > 1, the generator will be reset
                      after each epoch. Default: 1.
+            raw_mode: If True, process raw data (sparse CSR tensors) instead of
+                      pre-tokenized sequences. Default: False.
 
         Raises:
             ValueError: If parameters are invalid or SLAF array is malformed.
@@ -341,6 +398,7 @@ class PrefetchBatchProcessor:
         self.n_expression_bins = n_expression_bins
         self.use_binned_expressions = use_binned_expressions
         self.n_epochs = n_epochs
+        self.raw_mode = raw_mode
         self.window_kwargs: dict[str, Any] = {}  # Additional kwargs for window function
 
         # Create Lance dataset and batch generator
@@ -421,54 +479,40 @@ class PrefetchBatchProcessor:
 
     def load_prefetch_batch(self) -> PrefetchBatch:
         """
-        Load and process a chunk of Lance batches into pre-tokenized sequences.
+        Load and process a chunk of Lance batches into pre-tokenized sequences or raw data.
 
         This method loads multiple Lance batches, applies window functions to rank
-        and filter genes, shuffles cells for training, and tokenizes the sequences.
+        and filter genes (if not in raw mode), shuffles cells for training, and
+        either tokenizes the sequences or converts to sparse CSR tensors.
         It handles cell boundary crossing and partial data management. The method
         uses an iterative approach to handle epoch transitions automatically.
 
         Returns:
-            PrefetchBatch: Container with tokenized sequences and metadata
+            PrefetchBatch: Container with either tokenized sequences or raw sparse tensors
 
         Raises:
             StopIteration: When no more batches are available for current epoch
 
         Examples:
-            >>> # Load a single batch
+            >>> # Load a single batch (tokenized mode)
             >>> processor = PrefetchBatchProcessor(slaf_array, window, shuffle, tokenizer)
             >>> batch = processor.load_prefetch_batch()
             >>> print(f"Loaded batch {batch.batch_id} with {len(batch.cell_integer_ids)} cells")
             Loaded batch 0 with 32 cells
 
-            >>> # Load multiple batches
-            >>> batches = []
-            >>> for _ in range(3):
-            ...     try:
-            ...         batch = processor.load_prefetch_batch()
-            ...         batches.append(batch)
-            ...     except StopIteration:
-            ...         break
-            >>> print(f"Loaded {len(batches)} batches")
-            Loaded 3 batches
+            >>> # Load a single batch (raw mode)
+            >>> processor = PrefetchBatchProcessor(slaf_array, window, shuffle, tokenizer, raw_mode=True)
+            >>> batch = processor.load_prefetch_batch()
+            >>> print(f"Loaded raw batch {batch.batch_id} with {len(batch.cell_integer_ids)} cells")
+            Loaded raw batch 0 with 32 cells
 
             >>> # Check batch contents
             >>> batch = processor.load_prefetch_batch()
-            >>> print(f"Input shape: {batch.input_ids.shape}")
-            Input shape: torch.Size([32, 1024])
-            >>> print(f"Tokenization time: {batch.tokenize_time * 1000:.1f}ms")
-            Tokenization time: 2.3ms
-
-            >>> # Handle epoch transitions
-            >>> processor = PrefetchBatchProcessor(slaf_array, window, shuffle, tokenizer, n_epochs=2)
-            >>> batch = processor.load_prefetch_batch()
-            >>> print(f"Epoch: {processor.current_epoch}")
-            Epoch: 0
-            >>> # Continue until epoch transition
-            >>> while processor.current_epoch < 1:
-            ...     batch = processor.load_prefetch_batch()
-            >>> print(f"Now in epoch: {processor.current_epoch}")
-            Now in epoch: 1
+            >>> if hasattr(batch, 'input_ids'):
+            ...     print(f"Tokenized input shape: {batch.input_ids.shape}")
+            ... else:
+            ...     print(f"Raw X shape: {batch.X.shape}")
+            Raw X shape: torch.Size([32, 62710])
         """
         # Iterative approach to handle epoch transitions
         while True:
@@ -477,13 +521,12 @@ class PrefetchBatchProcessor:
             # Load multiple batches
             batch_dfs = []
             load_start = time.time()
-            batch_sizes = []
+
             for _ in range(self.batches_per_chunk):
                 try:
                     batch = next(self.batch_generator)
                     batch_df = pl.from_arrow(batch)
                     batch_dfs.append(batch_df)
-                    batch_sizes.append(batch_df.shape[0])
                 except StopIteration:
                     break
 
@@ -530,12 +573,12 @@ class PrefetchBatchProcessor:
             last_complete_cell = cell_counts["cell_integer_id"].max()
 
             # Split into complete cells and partial cells
-            complete_df = combined_df.filter(
+            complete_df = combined_df.filter(  # type: ignore[arg-type]
                 pl.col("cell_integer_id") < last_complete_cell
-            )  # type: ignore
-            partial_df = combined_df.filter(
+            )
+            partial_df = combined_df.filter(  # type: ignore[arg-type]
                 pl.col("cell_integer_id") == last_complete_cell
-            )  # type: ignore
+            )
 
             # Store partial cell data for next chunk
             self.partial_cell_data = {}
@@ -544,80 +587,105 @@ class PrefetchBatchProcessor:
 
             # Process complete cells
             if len(complete_df) > 0:
-                # Apply window function with expression binning parameters
-                window_start = time.time()
-                window_params = {
-                    "n_expression_bins": self.n_expression_bins,
-                    "use_binned_expressions": self.use_binned_expressions,
-                }
-                window_params.update(self.window_kwargs)  # Add any additional kwargs
-                grouped = self.window.apply(
-                    complete_df,  # type: ignore
-                    self.max_genes,
-                    **window_params,
-                )
-                window_time = time.time() - window_start
-
                 # Apply shuffle strategy
+                # Shuffle cells within this batch
                 shuffle_start = time.time()
-                cell_integer_ids = grouped["cell_integer_id"].to_list()
-                shuffled_cell_integer_ids = self.shuffle.apply(
-                    cell_integer_ids,
+
+                # Apply shuffling directly to the DataFrame
+                shuffled_df = self.shuffle.apply(
+                    complete_df,  # type: ignore
                     self.seed + self.batch_id + self.current_epoch * 10000,
                 )
 
-                # Reorder grouped data based on shuffled cell IDs
-                cell_id_to_index = {
-                    cell_id: i for i, cell_id in enumerate(cell_integer_ids)
-                }
-                shuffled_indices = [
-                    cell_id_to_index[cell_id] for cell_id in shuffled_cell_integer_ids
-                ]
-
-                shuffled_gene_sequences = [
-                    grouped["gene_sequence"][i].to_list() for i in shuffled_indices
-                ]
-
-                # Handle expression sequences for scGPT
-                shuffled_expr_sequences = None
-                if "expr_sequence" in grouped.columns:
-                    # scGPT format: separate gene_sequence and expr_sequence columns
-                    shuffled_expr_sequences = [
-                        grouped["expr_sequence"][i].to_list() for i in shuffled_indices
-                    ]
-                # For scGPT, we now use separate columns for better performance
+                # Get the unique cell IDs from the shuffled DataFrame
+                shuffled_cell_integer_ids = (
+                    shuffled_df["cell_integer_id"].unique().to_list()
+                )
 
                 shuffle_time = time.time() - shuffle_start
 
-                # Tokenize the sequences
-                tokenize_start = time.time()
-                input_ids, attention_mask = self.tokenizer.tokenize(
-                    gene_sequences=shuffled_gene_sequences,
-                    expr_sequences=shuffled_expr_sequences,
-                    max_genes=self.max_genes,
-                )
-                tokenize_time = time.time() - tokenize_start
-                total_time = time.time() - start_time
+                if self.raw_mode:
+                    # Raw mode: return shuffled Polars DataFrame
+                    # No additional processing needed - just return the shuffled DataFrame
+                    total_time = time.time() - start_time
 
-                # Print consolidated timing breakdown every 10 batches
-                if self.batch_id % 10 == 0:
-                    # Consolidate all prefetch batch reporting into one cyan block
-                    prefetch_report = f"Prefetch batch {self.batch_id} (epoch {self.current_epoch}):\n"
-                    prefetch_report += f"   Lance loading: {self._last_load_time * 1000:.1f}ms ({self._last_batch_dfs_count} batches, {self._last_total_rows} rows)\n"
-                    prefetch_report += f"   Processing: {window_time * 1000:.1f}ms window, {shuffle_time * 1000:.1f}ms shuffle, {tokenize_time * 1000:.1f}ms tokenize\n"
-                    prefetch_report += f"   Total: {total_time * 1000:.1f}ms, {len(shuffled_cell_integer_ids)} cells, {self._last_memory_mb:.1f} MB"
+                    # Print consolidated timing breakdown every 10 batches
+                    if self.batch_id % 10 == 0:
+                        # Consolidate all prefetch batch reporting into one cyan block
+                        prefetch_report = f"Raw prefetch batch {self.batch_id} (epoch {self.current_epoch}):\n"
+                        prefetch_report += f"   Lance loading: {self._last_load_time * 1000:.1f}ms ({self._last_batch_dfs_count} batches, {self._last_total_rows} rows)\n"
+                        prefetch_report += (
+                            f"   Processing: {shuffle_time * 1000:.1f}ms shuffle\n"
+                        )
+                        prefetch_report += f"   Total: {total_time * 1000:.1f}ms, {len(shuffled_cell_integer_ids)} cells, {self._last_memory_mb:.1f} MB"
 
-                    print_prefetch(prefetch_report)
+                        print_prefetch(prefetch_report)
 
-                self.batch_id += 1
-                return PrefetchBatch(
-                    batch_id=self.batch_id - 1,
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    cell_integer_ids=shuffled_cell_integer_ids,
-                    partial_cell_data=self.partial_cell_data.copy(),
-                    tokenize_time=tokenize_time,
-                )
+                    self.batch_id += 1
+                    return RawPrefetchBatch(
+                        batch_id=self.batch_id - 1,
+                        df=shuffled_df,  # Store the Polars DataFrame
+                        cell_integer_ids=shuffled_df["cell_integer_id"]
+                        .unique()
+                        .to_list(),
+                        partial_cell_data=self.partial_cell_data.copy(),
+                        process_time=shuffle_time,  # Use shuffle time as process time
+                    )
+                else:
+                    # Tokenized mode: apply window function and tokenize
+                    window_start = time.time()
+                    window_params = {
+                        "n_expression_bins": self.n_expression_bins,
+                        "use_binned_expressions": self.use_binned_expressions,
+                    }
+                    window_params.update(
+                        self.window_kwargs
+                    )  # Add any additional kwargs
+                    grouped = self.window.apply(
+                        shuffled_df,  # Use the shuffled DataFrame
+                        self.max_genes,
+                        **window_params,
+                    )
+                    window_time = time.time() - window_start
+
+                    # Tokenize the sequences
+                    tokenize_start = time.time()
+
+                    if self.tokenizer is None:
+                        raise RuntimeError("Tokenizer is required for tokenized mode")
+
+                    input_ids, attention_mask = self.tokenizer.tokenize(
+                        gene_sequences=grouped["gene_sequence"].to_list(),
+                        expr_sequences=(
+                            grouped["expr_sequence"].to_list()
+                            if "expr_sequence" in grouped.columns
+                            else None
+                        ),
+                        max_genes=self.max_genes,
+                    )
+
+                    tokenize_time = time.time() - tokenize_start
+                    total_time = time.time() - start_time
+
+                    # Print consolidated timing breakdown every 10 batches
+                    if self.batch_id % 10 == 0:
+                        # Consolidate all prefetch batch reporting into one cyan block
+                        prefetch_report = f"Prefetch batch {self.batch_id} (epoch {self.current_epoch}):\n"
+                        prefetch_report += f"   Lance loading: {self._last_load_time * 1000:.1f}ms ({self._last_batch_dfs_count} batches, {self._last_total_rows} rows)\n"
+                        prefetch_report += f"   Processing: {window_time * 1000:.1f}ms window, {shuffle_time * 1000:.1f}ms shuffle, {tokenize_time * 1000:.1f}ms tokenize\n"
+                        prefetch_report += f"   Total: {total_time * 1000:.1f}ms, {len(shuffled_cell_integer_ids)} cells, {self._last_memory_mb:.1f} MB"
+
+                        print_prefetch(prefetch_report)
+
+                    self.batch_id += 1
+                    return TokenizedPrefetchBatch(
+                        batch_id=self.batch_id - 1,
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        cell_integer_ids=shuffled_cell_integer_ids,
+                        partial_cell_data=self.partial_cell_data.copy(),
+                        tokenize_time=tokenize_time,
+                    )
             else:
                 # No complete cells in this chunk, continue to next iteration
                 self.batch_id += 1
@@ -770,8 +838,15 @@ class AsyncPrefetcher:
 
                 # Update monitoring stats
                 self.total_cells_added += len(batch.cell_integer_ids)
-                self.total_tokenize_time += batch.tokenize_time
-                self.tokenize_count += 1
+
+                # Handle different batch types
+                if isinstance(batch, TokenizedPrefetchBatch):
+                    self.total_tokenize_time += batch.tokenize_time
+                    self.tokenize_count += 1
+                else:  # RawPrefetchBatch
+                    self.total_tokenize_time += batch.process_time
+                    self.tokenize_count += 1
+
                 self.current_epoch = self.batch_processor.current_epoch
                 elapsed = time.time() - (self.start_time or 0)
                 rate = self.total_cells_added / elapsed if elapsed > 0 else 0
@@ -781,7 +856,10 @@ class AsyncPrefetcher:
                     avg_tokenize_ms = (
                         self.total_tokenize_time / self.tokenize_count
                     ) * 1000
-                    rate_report = f"Prefetch rate: {rate:.1f} cells/sec (epoch {self.current_epoch}, total: {self.total_cells_added} cells, avg tokenize: {avg_tokenize_ms:.1f}ms)"
+                    batch_type = (
+                        "raw" if isinstance(batch, RawPrefetchBatch) else "tokenized"
+                    )
+                    rate_report = f"Prefetch rate: {rate:.1f} cells/sec (epoch {self.current_epoch}, total: {self.total_cells_added} cells, avg {batch_type}: {avg_tokenize_ms:.1f}ms)"
                     print_prefetch(rate_report)
                     self.last_rate_print = batch.batch_id
 
@@ -1014,7 +1092,7 @@ class SLAFIterableDataset(IterableDataset):
     def __init__(
         self,
         slaf_array: SLAFArray,
-        tokenizer: SLAFTokenizer,
+        tokenizer: SLAFTokenizer | None,
         batch_size: int = 32,
         seed: int = 42,
         max_queue_size: int = 10,
@@ -1023,6 +1101,7 @@ class SLAFIterableDataset(IterableDataset):
         tokenizer_type: str = "geneformer",  # Add tokenizer type parameter
         use_binned_expressions: bool = False,  # Add binned expressions parameter
         n_epochs: int = 1,  # Add n_epochs parameter
+        raw_mode: bool = False,  # Add raw_mode parameter
     ):
         super().__init__()
         self.slaf_array = slaf_array
@@ -1036,6 +1115,7 @@ class SLAFIterableDataset(IterableDataset):
         )  # Default max_genes
         self.pin_memory = pin_memory
         self.n_epochs = n_epochs
+        self.raw_mode = raw_mode  # Add raw_mode attribute
 
         # Pre-allocate cell IDs buffer for better performance
         if TORCH_AVAILABLE:
@@ -1054,8 +1134,11 @@ class SLAFIterableDataset(IterableDataset):
         window = create_window(WindowType(tokenizer_type))
         shuffle = create_shuffle(ShuffleType.RANDOM)
 
-        # Get expression binning parameters from tokenizer
-        n_expression_bins = tokenizer.n_expression_bins
+        # Get expression binning parameters from tokenizer (only for non-raw mode)
+        if not self.raw_mode and tokenizer is not None:
+            n_expression_bins = tokenizer.n_expression_bins
+        else:
+            n_expression_bins = 10  # Default value for raw mode
 
         # Set binning based on tokenizer type
         use_binned_expressions = use_binned_expressions  # Use parameter value
@@ -1071,6 +1154,7 @@ class SLAFIterableDataset(IterableDataset):
             n_expression_bins=n_expression_bins,
             use_binned_expressions=use_binned_expressions,
             n_epochs=n_epochs,  # Pass n_epochs to batch processor
+            raw_mode=raw_mode,  # Pass raw_mode to batch processor
         )
         self.prefetcher = AsyncPrefetcher(
             batch_processor=self.batch_processor,
@@ -1243,72 +1327,159 @@ class SLAFIterableDataset(IterableDataset):
                 )
                 last_epoch = current_epoch
 
-            # Process batch data - now pre-tokenized
+            # Process batch data - now pre-tokenized or raw
             num_cells = len(data.cell_integer_ids)
-            input_ids = data.input_ids
-            attention_mask = data.attention_mask
             cell_integer_ids = data.cell_integer_ids
 
-            # Process all cells in this data chunk
-            for batch_start in range(0, num_cells, self.batch_size):
-                batch_end = min(batch_start + self.batch_size, num_cells)
+            # Check if this is a raw batch or tokenized batch
+            if isinstance(data, RawPrefetchBatch):
+                # Raw mode: process Polars DataFrame and convert to sparse tensors
+                df = data.df
+                n_genes = self.slaf_array.shape[1]
+                cell_integer_ids = (
+                    data.cell_integer_ids
+                )  # Get cell IDs from the data object
 
-                # Extract batch data
-                batch_input_ids = input_ids[batch_start:batch_end]
-                batch_attention_mask = attention_mask[batch_start:batch_end]
-                batch_cell_ids = cell_integer_ids[batch_start:batch_end]
+                # Process all cells in this data chunk
+                for batch_start in range(0, num_cells, self.batch_size):
+                    batch_end = min(batch_start + self.batch_size, num_cells)
 
-                # Convert cell IDs to tensor (pre-allocated)
-                tensor_start = time.time()
-                cell_ids_tensor = self.cell_ids_buffer[: len(batch_cell_ids)].clone()
-                cell_ids_tensor[:] = torch.tensor(batch_cell_ids, dtype=torch.long)
-                tensor_time = time.time() - tensor_start
+                    # Extract batch cell IDs
+                    batch_cell_ids = cell_integer_ids[batch_start:batch_end]
 
-                # Always return CPU tensors (device-agnostic)
-                # Training loop should handle device transfer
-
-                batches_yielded += 1
-
-                # Print detailed timing every 1000 batches
-                if batches_yielded % 100 == 0:
-                    # Consolidate training batch reporting
-                    training_report = f"Training batch {batches_yielded} (epoch {current_epoch}) processing:\n"
-                    training_report += (
-                        f"   Tensor creation: {tensor_time * 1000:.1f}ms\n"
-                    )
-                    training_report += (
-                        "   Pre-tokenized data (no tokenization overhead)"
+                    # Filter DataFrame to get data for this batch
+                    batch_df = df.filter(
+                        pl.col("cell_integer_id").is_in(batch_cell_ids)
                     )
 
-                    print_training(training_report)
+                    # Sort by row_idx to ensure proper CSR format
+                    batch_df = batch_df.sort("cell_integer_id", "gene_integer_id")
 
-                # Logging
-                if batches_yielded % 100 == 0:
-                    current_time = time.time()
-                    time_since_last_rate = current_time - last_rate_time
-                    batches_since_last_rate = batches_yielded - last_rate_batches
-                    if time_since_last_rate > 0:
-                        instantaneous_rate = (
-                            batches_since_last_rate / time_since_last_rate
+                    # Convert to sparse CSR tensor
+                    crow_indices = batch_df["cell_integer_id"].to_list()
+                    col_indices = batch_df["gene_integer_id"].to_list()
+                    values = batch_df["value"].to_list()
+
+                    batch_X = torch.sparse_csr_tensor(
+                        crow_indices=crow_indices,
+                        col_indices=col_indices,
+                        values=values,
+                        size=(self.batch_size, n_genes),
+                        dtype=torch.float32,
+                    )
+
+                    # Convert cell IDs to tensor (pre-allocated)
+                    tensor_start = time.time()
+                    cell_ids_tensor = torch.tensor(batch_cell_ids, dtype=torch.long)
+                    tensor_time = time.time() - tensor_start
+
+                    # Always return CPU tensors (device-agnostic)
+                    # Training loop should handle device transfer
+
+                    batches_yielded += 1
+
+                    # Print detailed timing every 1000 batches
+                    if batches_yielded % 100 == 0:
+                        # Consolidate training batch reporting
+                        training_report = f"Raw training batch {batches_yielded} (epoch {current_epoch}) processing:\n"
+                        training_report += (
+                            f"   Tensor creation: {tensor_time * 1000:.1f}ms\n"
                         )
-                        overall_rate = batches_yielded / (current_time - start_time)
-                        rate_report = f"Training batch {batches_yielded} (epoch {current_epoch}): {instantaneous_rate:.1f} batches/sec (instantaneous, overall: {overall_rate:.1f})"
-                        print_training(rate_report)
-                    last_rate_time = current_time
-                    last_rate_batches = batches_yielded
+                        training_report += "   Raw data (no tokenization overhead)"
 
-                # Prepare batch dict
-                batch_dict = {
-                    "input_ids": batch_input_ids,
-                    "attention_mask": batch_attention_mask,
-                    "cell_ids": cell_ids_tensor,
-                }
+                        print_training(training_report)
 
-                # Add epoch information if using multiple epochs
-                if self.n_epochs > 1:
-                    batch_dict["epoch"] = current_epoch
+                    # Logging
+                    if batches_yielded % 100 == 0:
+                        current_time = time.time()
+                        time_since_last_rate = current_time - last_rate_time
+                        batches_since_last_rate = batches_yielded - last_rate_batches
+                        if time_since_last_rate > 0:
+                            instantaneous_rate = (
+                                batches_since_last_rate / time_since_last_rate
+                            )
+                            overall_rate = batches_yielded / (current_time - start_time)
+                            rate_report = f"Raw training batch {batches_yielded} (epoch {current_epoch}): {instantaneous_rate:.1f} batches/sec (instantaneous, overall: {overall_rate:.1f})"
+                            print_training(rate_report)
+                        last_rate_time = current_time
+                        last_rate_batches = batches_yielded
 
-                yield batch_dict
+                    # Prepare batch dict for raw mode (AnnDataLoader format)
+                    batch_dict = {
+                        "x": batch_X,  # Use lowercase 'x' to match AnnDataLoader
+                        "cell_ids": cell_ids_tensor,
+                    }
+
+                    # Add epoch information if using multiple epochs
+                    if self.n_epochs > 1:
+                        batch_dict["epoch"] = current_epoch  # type: ignore
+
+                    yield batch_dict
+
+            else:  # TokenizedPrefetchBatch
+                # Tokenized mode: process pre-tokenized sequences
+                input_ids = data.input_ids
+                attention_mask = data.attention_mask
+
+                # Process all cells in this data chunk
+                for batch_start in range(0, num_cells, self.batch_size):
+                    batch_end = min(batch_start + self.batch_size, num_cells)
+
+                    # Extract batch data
+                    batch_input_ids = input_ids[batch_start:batch_end]
+                    batch_attention_mask = attention_mask[batch_start:batch_end]
+                    batch_cell_ids = cell_integer_ids[batch_start:batch_end]
+
+                    # Convert cell IDs to tensor (pre-allocated)
+                    tensor_start = time.time()
+                    cell_ids_tensor = torch.tensor(batch_cell_ids, dtype=torch.long)
+                    tensor_time = time.time() - tensor_start
+
+                    # Always return CPU tensors (device-agnostic)
+                    # Training loop should handle device transfer
+
+                    batches_yielded += 1
+
+                    # Print detailed timing every 1000 batches
+                    if batches_yielded % 100 == 0:
+                        # Consolidate training batch reporting
+                        training_report = f"Training batch {batches_yielded} (epoch {current_epoch}) processing:\n"
+                        training_report += (
+                            f"   Tensor creation: {tensor_time * 1000:.1f}ms\n"
+                        )
+                        training_report += (
+                            "   Pre-tokenized data (no tokenization overhead)"
+                        )
+
+                        print_training(training_report)
+
+                    # Logging
+                    if batches_yielded % 100 == 0:
+                        current_time = time.time()
+                        time_since_last_rate = current_time - last_rate_time
+                        batches_since_last_rate = batches_yielded - last_rate_batches
+                        if time_since_last_rate > 0:
+                            instantaneous_rate = (
+                                batches_since_last_rate / time_since_last_rate
+                            )
+                            overall_rate = batches_yielded / (current_time - start_time)
+                            rate_report = f"Training batch {batches_yielded} (epoch {current_epoch}): {instantaneous_rate:.1f} batches/sec (instantaneous, overall: {overall_rate:.1f})"
+                            print_training(rate_report)
+                        last_rate_time = current_time
+                        last_rate_batches = batches_yielded
+
+                    # Prepare batch dict for tokenized mode
+                    batch_dict = {
+                        "input_ids": batch_input_ids,
+                        "attention_mask": batch_attention_mask,
+                        "cell_ids": cell_ids_tensor,
+                    }
+
+                    # Add epoch information if using multiple epochs
+                    if self.n_epochs > 1:
+                        batch_dict["epoch"] = current_epoch  # type: ignore
+
+                    yield batch_dict
 
     def __del__(self):
         """
