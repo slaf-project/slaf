@@ -1,6 +1,6 @@
 # SLAF Benchmark System
 
-This document describes the SLAF benchmark suite for performance testing and documentation generation.
+This document describes the SLAF benchmark suite for performance testing and documentation generation. The benchmark system has been refactored to separate bioinformatics and ML benchmarks.
 
 ## 🚀 Quick Start (Recommended)
 
@@ -27,13 +27,16 @@ slaf benchmark all --datasets pbmc3k_processed --auto-convert
 - `benchmarks/benchmark.py` - Main benchmark runner with CLI integration
 - `benchmarks/benchmark_utils.py` - Shared utilities for all benchmarks
 
-### Individual Benchmark Modules
+### Individual Benchmark Modules (Bioinformatics)
 
 - `benchmarks/benchmark_cell_filtering.py` - Cell filtering performance tests
 - `benchmarks/benchmark_gene_filtering.py` - Gene filtering performance tests
 - `benchmarks/benchmark_expression_queries.py` - Expression query performance tests
 - `benchmarks/benchmark_anndata_ops.py` - AnnData operation performance tests
 - `benchmarks/benchmark_scanpy_preprocessing.py` - Scanpy preprocessing performance tests
+
+### ML Benchmark Modules (Separate)
+
 - `benchmarks/benchmark_tokenizers.py` - Tokenizer throughput tests
 - `benchmarks/benchmark_dataloaders.py` - Dataloader overhead tests
 
@@ -75,7 +78,7 @@ slaf benchmark summary --results comprehensive_benchmark_results.json --output c
 ### Update Documentation
 
 ```bash
-# Update performance.md with summary data
+# Update bioinformatics_benchmarks.md with summary data
 slaf benchmark docs --summary benchmark_summary.json
 
 # Update with custom summary file
@@ -91,11 +94,16 @@ slaf benchmark all --datasets pbmc3k_processed --auto-convert --verbose
 
 ## 📊 Available Benchmark Types
 
+### Bioinformatics Benchmarks
+
 - **cell_filtering** - Metadata-based cell filtering performance
 - **gene_filtering** - Metadata-based gene filtering performance
 - **expression_queries** - Expression matrix slicing performance
 - **anndata_ops** - AnnData operation performance
 - **scanpy_preprocessing** - Scanpy preprocessing pipeline performance
+
+### ML Benchmarks (Separate System)
+
 - **tokenizers** - Tokenizer throughput for transformer training
 - **dataloaders** - Dataloader overhead analysis
 - **multi_process_scaling** - Multi-process scaling analysis
@@ -140,7 +148,7 @@ slaf benchmark run --datasets pbmc3k_processed pbmc_68k --types cell_filtering,e
 
 ### Documentation Integration
 
-The benchmark system automatically updates `docs/benchmarks/performance.md` with the latest performance data, ensuring documentation stays current with benchmark results.
+The benchmark system automatically updates `docs/benchmarks/bioinformatics_benchmarks.md` with the latest performance data, ensuring documentation stays current with benchmark results. ML benchmarks are documented separately in `docs/benchmarks/ml_benchmarks.md`.
 
 ## 🔍 Troubleshooting
 
@@ -174,4 +182,5 @@ The benchmark system uses a modular design:
 - **Benchmark Runner**: Main orchestration in `benchmarks/benchmark.py`
 - **Individual Modules**: Specialized benchmark tests in separate files
 - **Utilities**: Shared functions in `benchmarks/benchmark_utils.py`
-- **Documentation**: Automatic updates to `docs/benchmarks/performance.md`
+- **Documentation**: Automatic updates to `docs/benchmarks/bioinformatics_benchmarks.md`
+- **ML Benchmarks**: Separate system for ML-related benchmarks documented in `docs/benchmarks/ml_benchmarks.md`

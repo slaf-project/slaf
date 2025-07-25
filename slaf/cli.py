@@ -676,7 +676,7 @@ def benchmark(
         help="Summary file path (for docs action)",
     ),
     docs_file: str = typer.Option(
-        "docs/benchmarks/performance.md",
+        "docs/benchmarks/bioinformatics_benchmarks.md",
         "--docs",
         help="Performance docs file path (for docs action)",
     ),

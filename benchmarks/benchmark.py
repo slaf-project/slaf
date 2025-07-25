@@ -23,15 +23,9 @@ import numpy as np
 # Import benchmark modules
 from benchmark_anndata_ops import benchmark_anndata_ops
 from benchmark_cell_filtering import benchmark_cell_filtering
-from benchmark_dataloaders import (
-    benchmark_data_vs_tokenization_timing,
-    benchmark_dataloaders,
-    benchmark_multi_process_scaling,
-)
 from benchmark_expression_queries import benchmark_expression_queries
 from benchmark_gene_filtering import benchmark_gene_filtering
 from benchmark_scanpy_preprocessing import benchmark_scanpy_preprocessing
-from benchmark_tokenizers import benchmark_tokenizers
 from benchmark_utils import print_benchmark_table
 
 # Import SLAF converter for auto-conversion
@@ -92,10 +86,6 @@ def run_benchmark_suite(
         "expression_queries": benchmark_expression_queries,
         "anndata_ops": benchmark_anndata_ops,
         "scanpy_preprocessing": benchmark_scanpy_preprocessing,
-        "tokenizers": benchmark_tokenizers,
-        "dataloaders": benchmark_dataloaders,
-        "multi_process_scaling": benchmark_multi_process_scaling,
-        "data_vs_tokenization_timing": benchmark_data_vs_tokenization_timing,
     }
 
     # Use all types if none specified
@@ -348,85 +338,6 @@ def extract_scanpy_preprocessing_summary(results: list[dict]) -> dict[str, Any]:
     }
 
 
-def extract_tokenizer_summary(results: list[dict]) -> dict[str, Any]:
-    """Extract key metrics for tokenizer benchmarks"""
-    if not results:
-        return {}
-
-    # Extract throughput data from the results
-    throughput_data = []
-
-    # Map scenario descriptions to throughput metrics
-    scenario_throughput_map = {
-        "scGPT small batch (32 cells, 512 genes)": {
-            "cells_per_sec": 1861,
-            "tokens_per_sec": 1909606,
-            "batch_size": 32,
-            "max_genes": 512,
-        },
-        "scGPT medium batch (128 cells, 1024 genes)": {
-            "cells_per_sec": 5195,
-            "tokens_per_sec": 5329646,
-            "batch_size": 128,
-            "max_genes": 1024,
-        },
-        "scGPT large batch (512 cells, 1024 genes)": {
-            "cells_per_sec": 9250,
-            "tokens_per_sec": 9490393,
-            "batch_size": 512,
-            "max_genes": 1024,
-        },
-        "scGPT xlarge batch (2048 cells, 1024 genes)": {
-            "cells_per_sec": 11146,
-            "tokens_per_sec": 11435873,
-            "batch_size": 2048,
-            "max_genes": 1024,
-        },
-        "Geneformer small batch (32 cells, 1024 genes)": {
-            "cells_per_sec": 1933,
-            "tokens_per_sec": 1979732,
-            "batch_size": 32,
-            "max_genes": 1024,
-        },
-        "Geneformer medium batch (128 cells, 2048 genes)": {
-            "cells_per_sec": 5140,
-            "tokens_per_sec": 10527183,
-            "batch_size": 128,
-            "max_genes": 2048,
-        },
-        "Geneformer large batch (512 cells, 2048 genes)": {
-            "cells_per_sec": 10889,
-            "tokens_per_sec": 22300658,
-            "batch_size": 512,
-            "max_genes": 2048,
-        },
-        "Geneformer xlarge batch (2048 cells, 2048 genes)": {
-            "cells_per_sec": 14536,
-            "tokens_per_sec": 29769583,
-            "batch_size": 2048,
-            "max_genes": 2048,
-        },
-    }
-
-    # Extract throughput data for scenarios that exist in results
-    for result in results:
-        desc = result.get("scenario_description", "")
-        if desc in scenario_throughput_map:
-            throughput_info = scenario_throughput_map[desc].copy()
-            throughput_info["description"] = desc
-            throughput_data.append(throughput_info)
-
-    # Calculate max throughput
-    max_throughput = (
-        max([d["cells_per_sec"] for d in throughput_data]) if throughput_data else 0
-    )
-
-    return {
-        "throughput_data": throughput_data,
-        "max_throughput": max_throughput,
-    }
-
-
 def generate_benchmark_summary(input_file: str, output_file: str):
     """Generate benchmark summary for documentation"""
 
@@ -459,11 +370,6 @@ def generate_benchmark_summary(input_file: str, output_file: str):
                 extract_scanpy_preprocessing_summary(
                     dataset_results["scanpy_preprocessing"]
                 )
-            )
-
-        if "tokenizers" in dataset_results:
-            summary[dataset_name]["tokenizers"] = extract_tokenizer_summary(
-                dataset_results["tokenizers"]
             )
 
     # Save summary
@@ -566,51 +472,6 @@ def update_scanpy_preprocessing_section(content: str, summary: dict[str, Any]) -
     return updated_content
 
 
-def update_tokenizer_section(content: str, summary: dict[str, Any]) -> str:
-    """Update the tokenizer performance results section"""
-
-    # Extract throughput data
-    throughput_data = summary.get("throughput_data", [])
-    if not throughput_data:
-        return content
-
-    # Create the table header and separator
-    header = "| Configuration                  | Cells/sec | Tokens/sec | Batch Size | Max Genes | GPU Utilization |"
-    separator = "| ------------------------------ | --------- | ---------- | ---------- | --------- | --------------- |"
-
-    # Create the table rows
-    table_rows = []
-    for scenario in throughput_data:
-        # Format the description to fit in the table
-        desc = scenario["description"]
-        if len(desc) > 50:
-            desc = desc[:47] + "..."
-
-        row = f"| {desc:<50} | {scenario['cells_per_sec']:>8,} | {scenario['tokens_per_sec']:>10,} | {scenario['batch_size']:>10} | {scenario['max_genes']:>10} | ~{scenario['batch_size'] // 100 * 10 + 10}% |"
-        table_rows.append(row)
-
-    # Replace the table in the content - target the High-Throughput Dataloading section specifically
-    table_pattern = r"(## \*\*High-Throughput Dataloading for GPU Training\*\*.*?\n\n### Performance Results\n\n\| Configuration.*?\n.*?\n)(.*?)(\n\n\*\*Key Insights:\*\*)"
-
-    def replace_table(match):
-        new_table = header + "\n" + separator + "\n" + "\n".join(table_rows)
-        footer = match.group(3)
-        return new_table + "\n" + footer
-
-    updated_content = re.sub(table_pattern, replace_table, content, flags=re.DOTALL)
-
-    # Update the max throughput number
-    max_throughput = summary.get("max_throughput", 0)
-    updated_content = re.sub(
-        r"~15K cells/sec", f"~{max_throughput:,} cells/sec", updated_content
-    )
-    updated_content = re.sub(
-        r"15K cells/sec", f"{max_throughput:,} cells/sec", updated_content
-    )
-
-    return updated_content
-
-
 def update_performance_docs(summary_file: str, docs_file: str):
     """Update performance.md with actual benchmark numbers"""
 
@@ -641,9 +502,6 @@ def update_performance_docs(summary_file: str, docs_file: str):
         content = update_scanpy_preprocessing_section(
             content, dataset_summary["scanpy_preprocessing"]
         )
-
-    if "tokenizers" in dataset_summary:
-        content = update_tokenizer_section(content, dataset_summary["tokenizers"])
 
     # Write updated content
     with open(docs_file, "w") as f:
@@ -699,10 +557,6 @@ Examples:
             "expression_queries",
             "anndata_ops",
             "scanpy_preprocessing",
-            "tokenizers",
-            "dataloaders",
-            "multi_process_scaling",
-            "data_vs_tokenization_timing",
         ],
         help="Specific benchmark types to run (default: all types)",
     )
@@ -750,7 +604,7 @@ Examples:
     )
     docs_parser.add_argument(
         "--docs-file",
-        default="../docs/benchmarks/performance.md",
+        default="../docs/benchmarks/bioinformatics_benchmarks.md",
         help="Performance documentation file to update",
     )
 
@@ -776,10 +630,6 @@ Examples:
             "expression_queries",
             "anndata_ops",
             "scanpy_preprocessing",
-            "tokenizers",
-            "dataloaders",
-            "multi_process_scaling",
-            "data_vs_tokenization_timing",
         ],
         help="Specific benchmark types to run (default: all types)",
     )
@@ -806,7 +656,7 @@ Examples:
     )
     all_parser.add_argument(
         "--docs-file",
-        default="../docs/benchmarks/performance.md",
+        default="../docs/benchmarks/bioinformatics_benchmarks.md",
         help="Performance documentation file to update",
     )
 

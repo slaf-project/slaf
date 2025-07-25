@@ -162,7 +162,9 @@ nav:
       - Lazy Processing: examples/lazy-processing.md
       - ML Training: examples/ml-training.md
       - SQL Queries: examples/sql-queries.md
-  - Benchmarks: benchmarks/performance.md
+  - Benchmarks:
+      - For Bioinformaticians: benchmarks/bioinformatics_benchmarks.md
+      - For ML Engineers: benchmarks/ml_benchmarks.md
   - API Reference:
       - Core: api/core.md
       - Data: api/data.md
