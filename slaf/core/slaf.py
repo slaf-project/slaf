@@ -322,7 +322,7 @@ class SLAFArray:
         # Infer categorical columns if not in config
         self._infer_categorical_columns()
 
-    def _map_pandas_to_polars_dtype(self, pandas_dtype: str) -> pl.DataType:
+    def _map_pandas_to_polars_dtype(self, pandas_dtype: str) -> type[pl.DataType]:
         """Map pandas dtype to polars dtype"""
         dtype_mapping = {
             "int64": pl.Int64,
@@ -577,13 +577,18 @@ class SLAFArray:
                     else self.query("SELECT * FROM genes")
                 )
 
+        # For filtering, we need metadata to be loaded to validate columns
+        # If metadata is not loaded, load it first
+        if not self._metadata_loaded:
+            self._ensure_metadata_loaded()
+
         # Use polars filtering for metadata operations
-        if table_name == "cells" and self._metadata_loaded:
+        if table_name == "cells":
             return self._filter_with_polars(self.obs, **filters)
-        elif table_name == "genes" and self._metadata_loaded:
+        elif table_name == "genes":
             return self._filter_with_polars(self.var, **filters)
         else:
-            return self._filter_with_sql(table_name, **filters)
+            raise ValueError(f"Invalid table name: {table_name}")
 
     def _filter_with_polars(
         self, metadata_df: pl.DataFrame, **filters: Any
@@ -656,6 +661,23 @@ class SLAFArray:
         if not filters:
             result = self.query(f"SELECT * FROM {table_name}")
             return result
+
+        # Validate column names first to provide better error messages
+        try:
+            # Get column names from the table
+            columns_result = self.query(f"SELECT * FROM {table_name} LIMIT 0")
+            available_columns = set(columns_result.columns)
+
+            # Check if all filter columns exist
+            for column in filters.keys():
+                if column not in available_columns:
+                    raise ValueError(
+                        f"Column '{column}' not found in {table_name} metadata"
+                    )
+        except Exception:
+            # If we can't validate columns (e.g., table doesn't exist),
+            # let the SQL query fail naturally
+            pass
 
         # Build filter conditions
         conditions = []
