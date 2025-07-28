@@ -4,10 +4,12 @@ This document describes the SLAF benchmark suite for performance testing and doc
 
 ## 🚀 Quick Start (Recommended)
 
-Use the unified CLI interface for all benchmark operations:
+### Bioinformatics Benchmarks (CLI Integration)
+
+Use the unified CLI interface for bioinformatics benchmark operations:
 
 ```bash
-# Run benchmarks
+# Run bioinformatics benchmarks
 slaf benchmark run --datasets pbmc3k_processed --types cell_filtering,expression_queries --verbose
 
 # Generate summary from results
@@ -20,14 +22,29 @@ slaf benchmark docs --summary benchmark_summary.json
 slaf benchmark all --datasets pbmc3k_processed --auto-convert
 ```
 
+### ML Benchmarks (Standalone Scripts)
+
+ML benchmarks are run as standalone scripts:
+
+```bash
+# External dataloader comparisons
+python benchmarks/benchmark_dataloaders_external.py
+
+# Internal tokenization strategies
+python benchmarks/benchmark_dataloaders_internal.py
+
+# Prefetcher performance analysis
+python benchmarks/benchmark_prefetcher.py
+```
+
 ## 📁 File Structure
 
 ### Core Files
 
-- `benchmarks/benchmark.py` - Main benchmark runner with CLI integration
-- `benchmarks/benchmark_utils.py` - Shared utilities for all benchmarks
+- `benchmarks/benchmark.py` - Main bioinformatics benchmark runner with CLI integration
+- `benchmarks/benchmark_utils.py` - Shared utilities for bioinformatics benchmarks
 
-### Individual Benchmark Modules (Bioinformatics)
+### Bioinformatics Benchmark Modules (CLI Integrated)
 
 - `benchmarks/benchmark_cell_filtering.py` - Cell filtering performance tests
 - `benchmarks/benchmark_gene_filtering.py` - Gene filtering performance tests
@@ -35,24 +52,25 @@ slaf benchmark all --datasets pbmc3k_processed --auto-convert
 - `benchmarks/benchmark_anndata_ops.py` - AnnData operation performance tests
 - `benchmarks/benchmark_scanpy_preprocessing.py` - Scanpy preprocessing performance tests
 
-### ML Benchmark Modules (Separate)
+### ML Benchmark Modules (Standalone)
 
-- `benchmarks/benchmark_tokenizers.py` - Tokenizer throughput tests
-- `benchmarks/benchmark_dataloaders.py` - Dataloader overhead tests
+- `benchmarks/benchmark_dataloaders_external.py` - External dataloader comparisons (SLAF vs scDataset, BioNeMo, etc.)
+- `benchmarks/benchmark_dataloaders_internal.py` - Internal tokenization strategy comparisons (scGPT, Geneformer, etc.)
+- `benchmarks/benchmark_prefetcher.py` - Prefetcher pipeline performance analysis
 
 ### Output Files
 
-- `benchmarks/comprehensive_benchmark_results.json` - Complete benchmark results
+- `benchmarks/comprehensive_benchmark_results.json` - Complete bioinformatics benchmark results
 - `benchmarks/benchmark_summary.json` - Documentation-ready summary
 - `benchmarks/benchmark_output.txt` - Detailed benchmark output
 - `benchmarks/benchmark_results.json` - Legacy results file
 
-## 🔧 CLI Commands
+## 🔧 CLI Commands (Bioinformatics Only)
 
 ### Run Benchmarks
 
 ```bash
-# Run all benchmark types
+# Run all bioinformatics benchmark types
 slaf benchmark run --datasets pbmc3k_processed --auto-convert
 
 # Run specific benchmark types
@@ -94,7 +112,7 @@ slaf benchmark all --datasets pbmc3k_processed --auto-convert --verbose
 
 ## 📊 Available Benchmark Types
 
-### Bioinformatics Benchmarks
+### Bioinformatics Benchmarks (CLI Integrated)
 
 - **cell_filtering** - Metadata-based cell filtering performance
 - **gene_filtering** - Metadata-based gene filtering performance
@@ -102,16 +120,15 @@ slaf benchmark all --datasets pbmc3k_processed --auto-convert --verbose
 - **anndata_ops** - AnnData operation performance
 - **scanpy_preprocessing** - Scanpy preprocessing pipeline performance
 
-### ML Benchmarks (Separate System)
+### ML Benchmarks (Standalone Scripts)
 
-- **tokenizers** - Tokenizer throughput for transformer training
-- **dataloaders** - Dataloader overhead analysis
-- **multi_process_scaling** - Multi-process scaling analysis
-- **data_vs_tokenization_timing** - Data loading vs tokenization timing
+- **External Dataloader Comparisons** - SLAF vs scDataset, BioNeMo SCDL, AnnDataLoader
+- **Internal Tokenization Strategies** - scGPT, Geneformer, raw data loading
+- **Prefetcher Performance** - Pipeline timing analysis across configurations
 
 ## 🎯 Usage Examples
 
-### Development Workflow
+### Bioinformatics Development Workflow
 
 ```bash
 # Quick test of cell filtering
@@ -121,34 +138,52 @@ slaf benchmark run --datasets pbmc3k_processed --types cell_filtering --verbose
 slaf benchmark all --datasets pbmc3k_processed --auto-convert --verbose
 ```
 
+### ML Development Workflow
+
+```bash
+# Compare against external dataloaders
+python benchmarks/benchmark_dataloaders_external.py
+
+# Test different tokenization strategies
+python benchmarks/benchmark_dataloaders_internal.py
+
+# Analyze prefetcher performance
+python benchmarks/benchmark_prefetcher.py
+```
+
 ### Performance Analysis
 
 ```bash
-# Generate performance summary
+# Generate bioinformatics performance summary
 slaf benchmark summary --results comprehensive_benchmark_results.json
 
-# Update documentation with latest results
+# Update bioinformatics documentation with latest results
 slaf benchmark docs --summary benchmark_summary.json
 ```
 
 ### Multi-Dataset Testing
 
 ```bash
-# Test on multiple datasets
+# Test bioinformatics benchmarks on multiple datasets
 slaf benchmark run --datasets pbmc3k_processed pbmc_68k --types cell_filtering,expression_queries --auto-convert
 ```
 
 ## 📈 Output Files
 
-### Results Files
+### Bioinformatics Results Files
 
 - `comprehensive_benchmark_results.json` - Complete benchmark results with detailed timing and memory data
 - `benchmark_summary.json` - Condensed summary for documentation updates
 - `benchmark_output.txt` - Human-readable benchmark output with tables and analysis
 
+### ML Results Files
+
+- ML benchmarks output results directly to console with rich formatting
+- Results are not automatically saved to files (manual documentation updates required)
+
 ### Documentation Integration
 
-The benchmark system automatically updates `docs/benchmarks/bioinformatics_benchmarks.md` with the latest performance data, ensuring documentation stays current with benchmark results. ML benchmarks are documented separately in `docs/benchmarks/ml_benchmarks.md`.
+The bioinformatics benchmark system automatically updates `docs/benchmarks/bioinformatics_benchmarks.md` with the latest performance data, ensuring documentation stays current with benchmark results. ML benchmarks are documented separately in `docs/benchmarks/ml_benchmarks.md` and require manual updates.
 
 ## 🔍 Troubleshooting
 
@@ -157,30 +192,65 @@ The benchmark system automatically updates `docs/benchmarks/bioinformatics_bench
 1. **Dataset not found**: Ensure datasets are in the correct directory and use `--auto-convert` to convert h5ad files
 2. **Benchmark failures**: Check that SLAF files exist and are properly formatted
 3. **Memory issues**: Some benchmarks require significant memory for large datasets
+4. **ML benchmark dependencies**: Ensure all ML dependencies are installed for standalone ML benchmarks
 
 ### Debug Mode
 
 ```bash
-# Run with verbose output for debugging
+# Run bioinformatics benchmarks with verbose output for debugging
 slaf benchmark run --datasets pbmc3k_processed --types cell_filtering --verbose
+
+# Run ML benchmarks with debug output
+python benchmarks/benchmark_dataloaders_external.py --debug
 ```
 
 ## 📝 Contributing
 
-When adding new benchmarks:
+### Adding Bioinformatics Benchmarks
+
+When adding new bioinformatics benchmarks:
 
 1. Create a new benchmark module following the existing pattern
 2. Add the benchmark type to the CLI in `slaf/cli.py`
 3. Update this documentation with the new benchmark type
 4. Test with `slaf benchmark run --types your_new_benchmark`
 
+### Adding ML Benchmarks
+
+When adding new ML benchmarks:
+
+1. Create a new standalone benchmark script following the existing pattern
+2. Add appropriate documentation in `docs/benchmarks/ml_benchmarks.md`
+3. Test the standalone script directly
+4. Consider integration with CLI system in the future
+
 ## 🏗️ Architecture
 
-The benchmark system uses a modular design:
+The benchmark system uses a modular design with two distinct approaches:
+
+### Bioinformatics Benchmarks (CLI Integrated)
 
 - **CLI Interface**: Unified command-line interface in `slaf/cli.py`
 - **Benchmark Runner**: Main orchestration in `benchmarks/benchmark.py`
 - **Individual Modules**: Specialized benchmark tests in separate files
 - **Utilities**: Shared functions in `benchmarks/benchmark_utils.py`
 - **Documentation**: Automatic updates to `docs/benchmarks/bioinformatics_benchmarks.md`
-- **ML Benchmarks**: Separate system for ML-related benchmarks documented in `docs/benchmarks/ml_benchmarks.md`
+
+### ML Benchmarks (Standalone)
+
+- **Standalone Scripts**: Independent benchmark scripts with rich console output
+- **External Comparisons**: `benchmark_dataloaders_external.py` for competitor analysis
+- **Internal Analysis**: `benchmark_dataloaders_internal.py` for tokenization strategies
+- **Pipeline Analysis**: `benchmark_prefetcher.py` for prefetcher performance
+- **Documentation**: Manual updates to `docs/benchmarks/ml_benchmarks.md`
+
+## 🔄 Future Integration
+
+The ML benchmarks are currently standalone but may be integrated with the CLI system in the future to provide:
+
+- Unified benchmark execution
+- Automatic result aggregation
+- Integrated documentation updates
+- Consistent output formatting
+
+For now, ML benchmarks provide immediate value as standalone tools for development and performance analysis.
