@@ -395,7 +395,7 @@ class TestSLAFTokenizerWithRealData:
         )
 
         # Get actual gene IDs from the SLAF array
-        gene_ids = tiny_slaf.var.index.tolist()[:5]  # First 5 genes
+        gene_ids = tiny_slaf.var["gene_id"].to_list()[:5]  # First 5 genes
         gene_integer_ids = [int(gene_id.split("_")[1]) for gene_id in gene_ids]
 
         # Test vectorized mapping

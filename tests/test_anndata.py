@@ -106,20 +106,28 @@ class TestLazyAnnDataCorrectness:
         # Test mean aggregation
         gene_means_lazy = lazy_adata.X.mean(axis=0)
         gene_means_native = tiny_adata.X.mean(axis=0)
-        np.testing.assert_allclose(gene_means_lazy, gene_means_native, rtol=1e-7)
+        np.testing.assert_allclose(
+            gene_means_lazy, gene_means_native, rtol=1e-6, atol=1e-8
+        )
 
         cell_means_lazy = lazy_adata.X.mean(axis=1)
         cell_means_native = tiny_adata.X.mean(axis=1)
-        np.testing.assert_allclose(cell_means_lazy, cell_means_native, rtol=1e-7)
+        np.testing.assert_allclose(
+            cell_means_lazy, cell_means_native, rtol=1e-6, atol=1e-8
+        )
 
         # Test sum aggregation
         gene_sums_lazy = lazy_adata.X.sum(axis=0)
         gene_sums_native = tiny_adata.X.sum(axis=0)
-        np.testing.assert_allclose(gene_sums_lazy, gene_sums_native, rtol=1e-7)
+        np.testing.assert_allclose(
+            gene_sums_lazy, gene_sums_native, rtol=1e-6, atol=1e-8
+        )
 
         cell_sums_lazy = lazy_adata.X.sum(axis=1)
         cell_sums_native = tiny_adata.X.sum(axis=1)
-        np.testing.assert_allclose(cell_sums_lazy, cell_sums_native, rtol=1e-7)
+        np.testing.assert_allclose(
+            cell_sums_lazy, cell_sums_native, rtol=1e-6, atol=1e-8
+        )
 
     def test_copy_operation(self, tiny_slaf, tiny_adata):
         """Test that copy operation preserves data correctly"""

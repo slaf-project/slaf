@@ -4,7 +4,7 @@ from typing import Any
 
 import duckdb
 import lance
-import pandas as pd
+import polars as pl
 
 from .query_optimizer import QueryOptimizer
 
@@ -113,13 +113,10 @@ class SLAFArray:
         self._load_metadata()
 
     def _setup_lancedb(self):
-        """Setup LanceDB connection"""
+        """Setup LanceDB connection for metadata loading"""
         import lancedb
 
         self.lancedb_conn = lancedb.connect(str(self.slaf_path))
-        self.expression_table = self.lancedb_conn.open_table("expression")
-        self.cells_table = self.lancedb_conn.open_table("cells")
-        self.genes_table = self.lancedb_conn.open_table("genes")
 
     def _setup_datasets(self):
         """Setup Lance datasets for the new table structure"""
@@ -131,76 +128,102 @@ class SLAFArray:
         self.genes = lance.dataset(str(self.slaf_path / self.config["tables"]["genes"]))
 
     def _load_metadata(self):
-        """Load cell and gene metadata into memory, restoring dtypes if available"""
-        # TODO: Consider converting to Polars lazy frames for large datasets
-        # This would require updating all downstream methods that expect pandas DataFrames
-
-        # Load cell metadata
-        self.obs = (
-            self.cells_table.search()
-            .to_pandas()
-            .sort_values("cell_integer_id")
-            .set_index("cell_id")
+        """Load cell and gene metadata into polars DataFrames for fast operations"""
+        # Load cell metadata using polars for better performance
+        # Use lance.dataset() to read Lance files, then convert to polars
+        cells_lance = lance.dataset(
+            str(self.slaf_path / self.config["tables"]["cells"])
         )
+        cells_df = pl.from_arrow(cells_lance.to_table())
+        self.obs = cells_df.sort("cell_integer_id")
 
-        # Load gene metadata
-        self.var = (
-            self.genes_table.search()
-            .to_pandas()
-            .sort_values("gene_integer_id")
-            .set_index("gene_id")
+        # Load gene metadata using polars for better performance
+        # Use lance.dataset() to read Lance files, then convert to polars
+        genes_lance = lance.dataset(
+            str(self.slaf_path / self.config["tables"]["genes"])
         )
+        genes_df = pl.from_arrow(genes_lance.to_table())
+        self.var = genes_df.sort("gene_integer_id")
 
-        # Restore dtypes for obs
+        # Restore dtypes for obs using polars
         obs_dtypes = self.config.get("obs_dtypes", {})
         for col, dtype_info in obs_dtypes.items():
             if col in self.obs.columns:
                 if dtype_info["dtype"] == "category":
-                    self.obs[col] = pd.Categorical(
-                        self.obs[col],
-                        categories=dtype_info.get("categories"),
-                        ordered=dtype_info.get("ordered", False),
+                    # Convert to polars categorical
+                    self.obs = self.obs.with_columns(
+                        pl.col(col).cast(pl.Categorical).cast(pl.Utf8)
                     )
                 else:
-                    self.obs[col] = self.obs[col].astype(dtype_info["dtype"])
+                    # Map pandas dtypes to polars dtypes
+                    polars_dtype = self._map_pandas_to_polars_dtype(dtype_info["dtype"])
+                    self.obs = self.obs.with_columns(pl.col(col).cast(polars_dtype))
 
-        # Restore dtypes for var
+        # Restore dtypes for var using polars
         var_dtypes = self.config.get("var_dtypes", {})
         for col, dtype_info in var_dtypes.items():
             if col in self.var.columns:
                 if dtype_info["dtype"] == "category":
-                    self.var[col] = pd.Categorical(
-                        self.var[col],
-                        categories=dtype_info.get("categories"),
-                        ordered=dtype_info.get("ordered", False),
+                    # Convert to polars categorical
+                    self.var = self.var.with_columns(
+                        pl.col(col).cast(pl.Categorical).cast(pl.Utf8)
                     )
                 else:
-                    self.var[col] = self.var[col].astype(dtype_info["dtype"])
+                    # Map pandas dtypes to polars dtypes
+                    polars_dtype = self._map_pandas_to_polars_dtype(dtype_info["dtype"])
+                    self.var = self.var.with_columns(pl.col(col).cast(polars_dtype))
 
         # Infer categorical columns if not in config
         self._infer_categorical_columns()
 
+    def _map_pandas_to_polars_dtype(self, pandas_dtype: str) -> pl.DataType:
+        """Map pandas dtype to polars dtype"""
+        dtype_mapping = {
+            "int64": pl.Int64,
+            "int32": pl.Int32,
+            "int16": pl.Int16,
+            "int8": pl.Int8,
+            "uint64": pl.UInt64,
+            "uint32": pl.UInt32,
+            "uint16": pl.UInt16,
+            "uint8": pl.UInt8,
+            "float64": pl.Float64,
+            "float32": pl.Float32,
+            "bool": pl.Boolean,
+            "object": pl.Utf8,
+            "string": pl.Utf8,
+        }
+        return dtype_mapping.get(pandas_dtype, pl.Utf8)
+
     def _infer_categorical_columns(self):
-        """Infer categorical columns based on data characteristics"""
-        # For obs: infer categoricals for object columns with few unique values
+        """Infer categorical columns based on data characteristics using polars"""
+        # For obs: infer categoricals for string columns with few unique values
         for col in self.obs.columns:
             if col not in self.config.get("obs_dtypes", {}):
-                if self.obs[col].dtype == "object":
-                    unique_ratio = self.obs[col].nunique() / len(self.obs)
+                if self.obs[col].dtype == pl.Utf8:
+                    unique_count = self.obs[col].n_unique()
+                    total_count = len(self.obs)
+                    unique_ratio = unique_count / total_count
                     # If less than 20% unique values, likely categorical
-                    if unique_ratio < 0.2 and self.obs[col].nunique() < 50:
-                        self.obs[col] = pd.Categorical(self.obs[col])
+                    if unique_ratio < 0.2 and unique_count < 50:
+                        self.obs = self.obs.with_columns(
+                            pl.col(col).cast(pl.Categorical).cast(pl.Utf8)
+                        )
 
-        # For var: infer categoricals for object columns with few unique values
+        # For var: infer categoricals for string columns with few unique values
         for col in self.var.columns:
             if col not in self.config.get("var_dtypes", {}):
-                if self.var[col].dtype == "object":
-                    unique_ratio = self.var[col].nunique() / len(self.var)
+                if self.var[col].dtype == pl.Utf8:
+                    unique_count = self.var[col].n_unique()
+                    total_count = len(self.var)
+                    unique_ratio = unique_count / total_count
                     # If less than 20% unique values, likely categorical
-                    if unique_ratio < 0.2 and self.var[col].nunique() < 50:
-                        self.var[col] = pd.Categorical(self.var[col])
+                    if unique_ratio < 0.2 and unique_count < 50:
+                        self.var = self.var.with_columns(
+                            pl.col(col).cast(pl.Categorical).cast(pl.Utf8)
+                        )
 
-    def query(self, sql: str) -> pd.DataFrame:
+    def query(self, sql: str) -> pl.DataFrame:
         """
         Execute SQL query on the SLAF dataset.
 
@@ -213,7 +236,7 @@ class SLAFArray:
                  Supports standard SQL operations including WHERE, GROUP BY, ORDER BY, etc.
 
         Returns:
-            DataFrame containing the query results.
+            Polars DataFrame containing the query results.
 
         Raises:
             ValueError: If the SQL query is malformed or references non-existent tables.
@@ -223,7 +246,7 @@ class SLAFArray:
             >>> # Basic query to count cells
             >>> slaf_array = SLAFArray("path/to/data.slaf")
             >>> result = slaf_array.query("SELECT COUNT(*) as total_cells FROM cells")
-            >>> print(f"Total cells: {result['total_cells'].iloc[0]}")
+            >>> print(f"Total cells: {result['total_cells'][0]}")
             Total cells: 1000
 
             >>> # Complex aggregation query
@@ -237,10 +260,16 @@ class SLAFArray:
             ...     ORDER BY avg_counts DESC
             ... ")
             >>> print(result)
-               cell_type  cell_count  avg_counts
-            0  T cells         250      1250.5
-            1  B cells         200      1100.2
-            2  Monocytes       150       950.8
+            shape: (3, 3)
+            ┌────────────┬────────────┬────────────┐
+            │ cell_type  ┆ cell_count ┆ avg_counts │
+            │ ---        ┆ ---        ┆ ---        │
+            │ str        ┆ i64        ┆ f64        │
+            ╞════════════╪════════════╪════════════╡
+            │ T cells    ┆ 250        ┆ 1250.5     │
+            │ B cells    ┆ 200        ┆ 1100.2     │
+            │ Monocytes  ┆ 150        ┆ 950.8      │
+            └────────────┴────────────┴────────────┘
 
             >>> # Join query across tables
             >>> result = slaf_array.query("
@@ -261,15 +290,18 @@ class SLAFArray:
 
         # Use global duckdb to query Lance datasets directly
         duckdb.query("SET enable_progress_bar = true;")
-        return duckdb.query(sql).fetchdf()
+        result = duckdb.query(sql).fetchdf()
 
-    def filter_cells(self, **filters: Any) -> pd.DataFrame:
+        # Convert pandas DataFrame to polars DataFrame
+        return pl.from_pandas(result)
+
+    def filter_cells(self, **filters: Any) -> pl.DataFrame:
         """
         Filter cells based on metadata columns.
 
         Provides a convenient interface for filtering cells using metadata columns.
         Supports exact matches, list values, and range queries with operators.
-        Uses in-memory pandas filtering when metadata is loaded, falls back to SQL otherwise.
+        Uses in-memory polars filtering when metadata is loaded, falls back to SQL otherwise.
 
         Args:
             **filters: Column name and filter value pairs. Supports:
@@ -279,7 +311,7 @@ class SLAFArray:
                 - Multiple conditions: cell_type="T cells", total_counts=">500"
 
         Returns:
-            DataFrame containing filtered cell metadata.
+            Polars DataFrame containing filtered cell metadata.
 
         Raises:
             ValueError: If a specified column is not found in cell metadata.
@@ -318,13 +350,13 @@ class SLAFArray:
         """
         return self._filter("cells", **filters)
 
-    def filter_genes(self, **filters: Any) -> pd.DataFrame:
+    def filter_genes(self, **filters: Any) -> pl.DataFrame:
         """
         Filter genes based on metadata columns.
 
         Provides a convenient interface for filtering genes using metadata columns.
         Supports exact matches, list values, and range queries with operators.
-        Uses in-memory pandas filtering when metadata is loaded, falls back to SQL otherwise.
+        Uses in-memory polars filtering when metadata is loaded, falls back to SQL otherwise.
 
         Args:
             **filters: Column name and filter value pairs. Supports:
@@ -334,7 +366,7 @@ class SLAFArray:
                 - Multiple conditions: gene_type="protein_coding", chromosome="chr1"
 
         Returns:
-            DataFrame containing filtered gene metadata.
+            Polars DataFrame containing filtered gene metadata.
 
         Raises:
             ValueError: If a specified column is not found in gene metadata.
@@ -373,55 +405,55 @@ class SLAFArray:
         """
         return self._filter("genes", **filters)
 
-    def _filter(self, table_name: str, **filters: Any) -> pd.DataFrame:
+    def _filter(self, table_name: str, **filters: Any) -> pl.DataFrame:
         """
-        Generic filtering method that chooses between pandas and SQL based on metadata availability.
+        Generic filtering method that uses polars for metadata operations.
 
         Args:
             table_name: Either "cells" or "genes"
             **filters: Filter conditions
 
         Returns:
-            Filtered DataFrame
+            Filtered polars DataFrame
         """
         if not filters:
             # Return all metadata if no filters
             if table_name == "cells":
                 return (
-                    self.obs.copy()
+                    self.obs
                     if self.obs is not None
                     else self.query("SELECT * FROM cells")
                 )
             else:
                 return (
-                    self.var.copy()
+                    self.var
                     if self.var is not None
                     else self.query("SELECT * FROM genes")
                 )
 
-        # Choose filtering method based on metadata availability
+        # Use polars filtering for metadata operations
         if table_name == "cells" and self.obs is not None:
-            return self._filter_with_pandas(self.obs, **filters)
+            return self._filter_with_polars(self.obs, **filters)
         elif table_name == "genes" and self.var is not None:
-            return self._filter_with_pandas(self.var, **filters)
+            return self._filter_with_polars(self.var, **filters)
         else:
             return self._filter_with_sql(table_name, **filters)
 
-    def _filter_with_pandas(
-        self, metadata_df: pd.DataFrame, **filters: Any
-    ) -> pd.DataFrame:
+    def _filter_with_polars(
+        self, metadata_df: pl.DataFrame, **filters: Any
+    ) -> pl.DataFrame:
         """
-        Filter metadata using in-memory pandas operations.
+        Filter metadata using polars operations for high performance.
 
         Args:
-            metadata_df: DataFrame to filter (self.obs or self.var)
+            metadata_df: Polars DataFrame to filter (self.obs or self.var)
             **filters: Filter conditions
 
         Returns:
-            Filtered DataFrame
+            Filtered polars DataFrame
         """
         # Start with all rows
-        mask = pd.Series(True, index=metadata_df.index)
+        result = metadata_df
 
         for column, value in filters.items():
             if column not in metadata_df.columns:
@@ -437,38 +469,34 @@ class SLAFArray:
                 # Convert to numeric for comparison
                 try:
                     numeric_filter_value = float(filter_value)
-                    col_data = pd.to_numeric(metadata_df[column], errors="coerce")
 
-                    # Create boolean mask for the comparison
+                    # Create boolean mask for the comparison using polars expressions
                     if operator == ">":
-                        comparison_mask = col_data > numeric_filter_value  # type: ignore
+                        result = result.filter(pl.col(column) > numeric_filter_value)
                     elif operator == "<":
-                        comparison_mask = col_data < numeric_filter_value  # type: ignore
+                        result = result.filter(pl.col(column) < numeric_filter_value)
                     elif operator == ">=":
-                        comparison_mask = col_data >= numeric_filter_value  # type: ignore
+                        result = result.filter(pl.col(column) >= numeric_filter_value)
                     elif operator == "<=":
-                        comparison_mask = col_data <= numeric_filter_value  # type: ignore
+                        result = result.filter(pl.col(column) <= numeric_filter_value)
                     else:
                         raise ValueError(f"Unsupported operator: {operator}")
 
-                    # Apply the comparison mask, excluding NaN values
-                    mask &= comparison_mask & col_data.notna()  # type: ignore
                 except Exception as err:
                     raise ValueError(
                         f"Cannot perform numeric comparison on non-numeric column '{column}'"
                     ) from err
 
             elif isinstance(value, list):
-                # Handle list values
-                mask &= metadata_df[column].isin(value)
+                # Handle list values using polars is_in
+                result = result.filter(pl.col(column).is_in(value))
             else:
                 # Handle exact matches
-                mask &= metadata_df[column] == value
+                result = result.filter(pl.col(column) == value)
 
-        result = metadata_df[mask].copy()
-        return result  # type: ignore
+        return result
 
-    def _filter_with_sql(self, table_name: str, **filters: Any) -> pd.DataFrame:
+    def _filter_with_sql(self, table_name: str, **filters: Any) -> pl.DataFrame:
         """
         Filter metadata using SQL queries against disk-based tables.
 
@@ -477,10 +505,11 @@ class SLAFArray:
             **filters: Filter conditions
 
         Returns:
-            Filtered DataFrame
+            Filtered polars DataFrame
         """
         if not filters:
-            return self.query(f"SELECT * FROM {table_name}")
+            result = self.query(f"SELECT * FROM {table_name}")
+            return result
 
         # Build filter conditions
         conditions = []
@@ -512,25 +541,35 @@ class SLAFArray:
         if entity_type == "cell":
             metadata = self.obs
             id_col = "cell_integer_id"
+            index_col = "cell_id"
         else:
             metadata = self.var
             id_col = "gene_integer_id"
+            index_col = "gene_id"
 
         # Convert to list if single ID
         if isinstance(entity_ids, str):
             entity_ids = [entity_ids]
 
+        # Map string IDs to integer IDs using polars
+        # Get the index values and corresponding integer IDs
+        index_values = metadata[index_col].to_list()
+        integer_id_values = metadata[id_col].to_list()
+
+        # Create a mapping from index to integer ID
+        id_mapping = dict(zip(index_values, integer_id_values, strict=False))
+
         # Map string IDs to integer IDs
         integer_ids = []
         for entity_id in entity_ids:
-            if entity_id in metadata.index:
-                integer_ids.append(metadata.loc[entity_id][id_col])
+            if entity_id in id_mapping:
+                integer_ids.append(id_mapping[entity_id])
             else:
                 raise ValueError(f"{entity_type} ID '{entity_id}' not found")
 
         return integer_ids
 
-    def get_cell_expression(self, cell_ids: str | list[str]) -> pd.DataFrame:
+    def get_cell_expression(self, cell_ids: str | list[str]) -> pl.DataFrame:
         """
         Get expression data for specific cells using optimized query strategies.
 
@@ -543,7 +582,7 @@ class SLAFArray:
                      Can be string identifiers or integer IDs.
 
         Returns:
-            DataFrame containing expression data for the specified cells.
+            Polars DataFrame containing expression data for the specified cells.
             Columns include cell_id, gene_id, and expression values.
 
         Raises:
@@ -574,7 +613,7 @@ class SLAFArray:
 
         # Build query that joins with metadata tables to get string IDs
         if not integer_ids:
-            return pd.DataFrame({"cell_id": [], "gene_id": [], "value": []})
+            return pl.DataFrame({"cell_id": [], "gene_id": [], "value": []})
 
         # Use optimized query strategy but join with metadata tables
         base_sql = QueryOptimizer.build_optimized_query(integer_ids, "cell")
@@ -592,7 +631,7 @@ class SLAFArray:
 
         return self.query(sql)
 
-    def get_gene_expression(self, gene_ids: str | list[str]) -> pd.DataFrame:
+    def get_gene_expression(self, gene_ids: str | list[str]) -> pl.DataFrame:
         """
         Get expression data for specific genes using optimized query strategies.
 
@@ -605,7 +644,7 @@ class SLAFArray:
                      Can be string identifiers or integer IDs.
 
         Returns:
-            DataFrame containing expression data for the specified genes.
+            Polars DataFrame containing expression data for the specified genes.
             Columns include cell_id, gene_id, and expression values.
 
         Raises:
@@ -636,7 +675,7 @@ class SLAFArray:
 
         # Build query that joins with metadata tables to get string IDs
         if not integer_ids:
-            return pd.DataFrame({"cell_id": [], "gene_id": [], "value": []})
+            return pl.DataFrame({"cell_id": [], "gene_id": [], "value": []})
 
         # Use optimized query strategy but join with metadata tables
         base_sql = QueryOptimizer.build_optimized_query(integer_ids, "gene")
@@ -656,7 +695,7 @@ class SLAFArray:
 
     def get_submatrix(
         self, cell_selector: Any | None = None, gene_selector: Any | None = None
-    ) -> pd.DataFrame:
+    ) -> pl.DataFrame:
         """
         Get expression data using cell/gene selectors that work with obs/var DataFrames.
 
@@ -677,7 +716,7 @@ class SLAFArray:
                 - boolean mask: e.g., [True, False, True, ...] for boolean selection
 
         Returns:
-            DataFrame containing expression data for the selected subset.
+            Polars DataFrame containing expression data for the selected subset.
             Columns include cell_id, gene_id, and expression values.
 
         Raises:
@@ -746,7 +785,7 @@ class SLAFArray:
         print(f"  Format version: {self.config.get('format_version', 'unknown')}")
 
         # Cell metadata columns
-        cell_cols = list(self.obs.columns)
+        cell_cols = self.obs.columns
         print(f"  Cell metadata columns: {len(cell_cols)}")
         if cell_cols:
             print(
@@ -754,7 +793,7 @@ class SLAFArray:
             )
 
         # Gene metadata columns
-        gene_cols = list(self.var.columns)
+        gene_cols = self.var.columns
         print(f"  Gene metadata columns: {len(gene_cols)}")
         if gene_cols:
             print(

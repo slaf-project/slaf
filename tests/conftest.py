@@ -1,45 +1,37 @@
-import shutil
 import tempfile
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import pytest
 import scanpy as sc
 from scipy.sparse import csr_matrix
 
 from slaf.core.slaf import SLAFArray
-
-# Set random seed for reproducible tests
-np.random.seed(42)
+from slaf.data import SLAFConverter
 
 
 @pytest.fixture
 def sample_adata():
-    """Create a sample AnnData object for testing"""
+    """Create a sample AnnData object for testing."""
     # Set random seed for reproducible tests
     np.random.seed(42)
 
-    # Create a small test dataset
+    # Create sparse matrix
     n_cells, n_genes = 100, 50
-
-    # Create sparse matrix with controlled sparsity
-    # Use a more reliable approach than random poisson
-    density = 0.3  # 30% sparsity - ensure we have enough non-zero values
+    density = 0.1  # 10% sparsity
     n_nonzero = int(n_cells * n_genes * density)
 
-    # Generate random sparse data with controlled values
-    data = np.random.uniform(1.0, 10.0, n_nonzero).astype(float)
+    # Generate random sparse data
+    data = np.random.lognormal(0, 1, n_nonzero).astype(np.float32)
     row_indices = np.random.randint(0, n_cells, n_nonzero)
     col_indices = np.random.randint(0, n_genes, n_nonzero)
-
-    # Create sparse matrix
     sparse_matrix = csr_matrix(
         (data, (row_indices, col_indices)), shape=(n_cells, n_genes)
     )
 
-    # Ensure we have at least some non-zero values in each row and column
-    # This prevents completely empty rows/columns that could cause issues
+    # Ensure each row and column has at least one non-zero value
     for i in range(n_cells):
         if sparse_matrix[i, :].nnz == 0:
             # Add a random non-zero value to this row
@@ -52,39 +44,49 @@ def sample_adata():
             i = np.random.randint(0, n_cells)
             sparse_matrix[i, j] = np.random.uniform(1.0, 5.0)
 
-    # Create cell metadata
-    obs = pd.DataFrame(
-        {
-            "cell_type": np.random.choice(["T-cell", "B-cell", "NK-cell"], n_cells),
-            "batch": np.random.choice(["batch_1", "batch_2"], n_cells),
-            "total_counts": sparse_matrix.sum(
-                axis=1
-            ).A1,  # Use actual counts from matrix
-            "n_genes_by_counts": (sparse_matrix > 0)
-            .sum(axis=1)
-            .A1,  # Use actual gene counts
-            "high_mito": np.random.choice([True, False], n_cells),
-        },
-        index=pd.Index([f"cell_{i}" for i in range(n_cells)]),
+    # Create cell metadata using polars
+    obs = (
+        pl.DataFrame(
+            {
+                "cell_type": np.random.choice(["T-cell", "B-cell", "NK-cell"], n_cells),
+                "batch": np.random.choice(["batch_1", "batch_2"], n_cells),
+                "total_counts": sparse_matrix.sum(
+                    axis=1
+                ).A1,  # Use actual counts from matrix
+                "n_genes_by_counts": (sparse_matrix > 0)
+                .sum(axis=1)
+                .A1,  # Use actual gene counts
+                "high_mito": np.random.choice([True, False], n_cells),
+            }
+        )
+        .with_row_index("cell_id", offset=0)
+        .with_columns(pl.col("cell_id").map_elements(lambda x: f"cell_{x}"))
     )
 
-    # Create gene metadata
-    var = pd.DataFrame(
-        {
-            "gene_type": np.random.choice(["protein_coding", "lncRNA"], n_genes),
-            "highly_variable": np.random.choice([True, False], n_genes),
-            "total_counts": sparse_matrix.sum(
-                axis=0
-            ).A1,  # Use actual counts from matrix
-            "n_cells_by_counts": (sparse_matrix > 0)
-            .sum(axis=0)
-            .A1,  # Use actual cell counts
-        },
-        index=pd.Index([f"gene_{i}" for i in range(n_genes)]),
+    # Create gene metadata using polars
+    var = (
+        pl.DataFrame(
+            {
+                "gene_type": np.random.choice(["protein_coding", "lncRNA"], n_genes),
+                "highly_variable": np.random.choice([True, False], n_genes),
+                "total_counts": sparse_matrix.sum(
+                    axis=0
+                ).A1,  # Use actual counts from matrix
+                "n_cells_by_counts": (sparse_matrix > 0)
+                .sum(axis=0)
+                .A1,  # Use actual cell counts
+            }
+        )
+        .with_row_index("gene_id", offset=0)
+        .with_columns(pl.col("gene_id").map_elements(lambda x: f"gene_{x}"))
     )
+
+    # Convert to pandas for AnnData compatibility
+    obs_pd = obs.to_pandas().set_index("cell_id")
+    var_pd = var.to_pandas().set_index("gene_id")
 
     # Create AnnData object
-    adata = sc.AnnData(X=sparse_matrix, obs=obs, var=var)
+    adata = sc.AnnData(X=sparse_matrix, obs=obs_pd, var=var_pd)
     return adata
 
 
@@ -101,25 +103,35 @@ def small_sample_adata():
     col_indices = np.array([0, 1, 1, 2])
     X = csr_matrix((data, (row_indices, col_indices)), shape=(n_cells, n_genes))
 
-    # Create obs (cell metadata)
-    obs = pd.DataFrame(
-        {
-            "cell_type": ["T_cell", "B_cell", "NK_cell", "T_cell", "B_cell"],
-            "batch": ["batch1", "batch1", "batch1", "batch2", "batch2"],
-        },
-        index=pd.Index([f"cell_{i}" for i in range(n_cells)]),
+    # Create obs (cell metadata) using polars
+    obs = (
+        pl.DataFrame(
+            {
+                "cell_type": ["T_cell", "B_cell", "NK_cell", "T_cell", "B_cell"],
+                "batch": ["batch1", "batch1", "batch1", "batch2", "batch2"],
+            }
+        )
+        .with_row_index("cell_id", offset=0)
+        .with_columns(pl.col("cell_id").map_elements(lambda x: f"cell_{x}"))
     )
 
-    # Create var (gene metadata)
-    var = pd.DataFrame(
-        {
-            "gene_symbol": [f"GENE_{i}" for i in range(n_genes)],
-            "highly_variable": [True, True, False],
-        },
-        index=pd.Index([f"ENSG_{i:08d}" for i in range(n_genes)]),
+    # Create var (gene metadata) using polars
+    var = (
+        pl.DataFrame(
+            {
+                "gene_symbol": [f"GENE_{i}" for i in range(n_genes)],
+                "highly_variable": [True, True, False],
+            }
+        )
+        .with_row_index("gene_id", offset=0)
+        .with_columns(pl.col("gene_id").map_elements(lambda x: f"ENSG_{x:08d}"))
     )
 
-    return sc.AnnData(X=X, obs=obs, var=var)
+    # Convert to pandas for AnnData compatibility
+    obs_pd = obs.to_pandas().set_index("cell_id")
+    var_pd = var.to_pandas().set_index("gene_id")
+
+    return sc.AnnData(X=X, obs=obs_pd, var=var_pd)
 
 
 @pytest.fixture
@@ -139,155 +151,179 @@ def large_sample_adata():
     col_indices = np.random.randint(0, n_genes, n_nonzero)
     X = csr_matrix((data, (row_indices, col_indices)), shape=(n_cells, n_genes))
 
-    # Create obs (cell metadata)
-    obs = pd.DataFrame(
-        {
-            "cell_type": np.random.choice(["T_cell", "B_cell", "NK_cell"], n_cells),
-            "batch": np.random.choice(["batch1", "batch2"], n_cells),
-            "n_genes_by_counts": np.random.poisson(100, n_cells),
-            "total_counts": np.random.lognormal(8, 1, n_cells),
-        },
-        index=pd.Index([f"cell_{i}" for i in range(n_cells)]),
+    # Create obs (cell metadata) using polars
+    obs = (
+        pl.DataFrame(
+            {
+                "cell_type": np.random.choice(["T_cell", "B_cell", "NK_cell"], n_cells),
+                "batch": np.random.choice(["batch1", "batch2"], n_cells),
+                "n_genes_by_counts": np.random.poisson(100, n_cells),
+                "total_counts": np.random.lognormal(8, 1, n_cells),
+            }
+        )
+        .with_row_index("cell_id", offset=0)
+        .with_columns(pl.col("cell_id").map_elements(lambda x: f"cell_{x}"))
     )
 
-    # Create var (gene metadata)
-    var = pd.DataFrame(
-        {
-            "gene_symbol": [f"GENE_{i}" for i in range(n_genes)],
-            "highly_variable": np.random.choice([True, False], n_genes, p=[0.2, 0.8]),
-        },
-        index=pd.Index([f"ENSG_{i:08d}" for i in range(n_genes)]),
+    # Create var (gene metadata) using polars
+    var = (
+        pl.DataFrame(
+            {
+                "gene_symbol": [f"GENE_{i}" for i in range(n_genes)],
+                "highly_variable": np.random.choice([True, False], n_genes),
+                "n_cells_by_counts": np.random.poisson(50, n_genes),
+                "total_counts": np.random.lognormal(6, 1, n_genes),
+            }
+        )
+        .with_row_index("gene_id", offset=0)
+        .with_columns(pl.col("gene_id").map_elements(lambda x: f"ENSG_{x:08d}"))
     )
 
-    return sc.AnnData(X=X, obs=obs, var=var)
+    # Convert to pandas for AnnData compatibility
+    obs_pd = obs.to_pandas().set_index("cell_id")
+    var_pd = var.to_pandas().set_index("gene_id")
+
+    return sc.AnnData(X=X, obs=obs_pd, var=var_pd)
 
 
 @pytest.fixture
 def tiny_adata():
-    """Create a tiny sample AnnData object for testing"""
+    """Create a tiny AnnData object for quick testing."""
     # Set random seed for reproducible tests
     np.random.seed(42)
 
-    # Create a small test dataset (100 cells, 50 genes)
+    # Create sparse matrix
     n_cells, n_genes = 100, 50
-
-    # Create sparse matrix with controlled sparsity
-    density = 0.3
+    density = 0.3  # 30% sparsity for more data
     n_nonzero = int(n_cells * n_genes * density)
 
     # Generate random sparse data
-    data = np.random.uniform(1.0, 10.0, n_nonzero).astype(float)
+    data = np.random.uniform(1.0, 5.0, n_nonzero).astype(np.float32)
     row_indices = np.random.randint(0, n_cells, n_nonzero)
     col_indices = np.random.randint(0, n_genes, n_nonzero)
+    X = csr_matrix((data, (row_indices, col_indices)), shape=(n_cells, n_genes))
 
-    # Create sparse matrix
-    sparse_matrix = csr_matrix(
-        (data, (row_indices, col_indices)), shape=(n_cells, n_genes)
-    )
-
-    # Ensure we have at least some non-zero values in each row and column
+    # Ensure each row and column has at least one non-zero value
     for i in range(n_cells):
-        if sparse_matrix[i, :].nnz == 0:
+        if X[i, :].nnz == 0:
             j = np.random.randint(0, n_genes)
-            sparse_matrix[i, j] = np.random.uniform(1.0, 5.0)
+            X[i, j] = np.random.uniform(1.0, 5.0)
 
     for j in range(n_genes):
-        if sparse_matrix[:, j].nnz == 0:
+        if X[:, j].nnz == 0:
             i = np.random.randint(0, n_cells)
-            sparse_matrix[i, j] = np.random.uniform(1.0, 5.0)
+            X[i, j] = np.random.uniform(1.0, 5.0)
 
-    # Create cell metadata
-    obs = pd.DataFrame(
-        {
-            "cell_type": np.random.choice(["T-cell", "B-cell", "NK-cell"], n_cells),
-            "batch": np.random.choice(["batch_1", "batch_2"], n_cells),
-            "total_counts": sparse_matrix.sum(axis=1).A1,
-            "n_genes_by_counts": (sparse_matrix > 0).sum(axis=1).A1,
-            "high_mito": np.random.choice([True, False], n_cells),
-        },
-        index=pd.Index([f"cell_{i}" for i in range(n_cells)]),
+    # Create obs (cell metadata) using polars
+    obs = (
+        pl.DataFrame(
+            {
+                "cell_type": np.random.choice(["A", "B"], n_cells),
+                "total_counts": X.sum(axis=1).A1,
+            }
+        )
+        .with_row_index("cell_id", offset=0)
+        .with_columns(pl.col("cell_id").map_elements(lambda x: f"cell_{x}"))
     )
 
-    # Create gene metadata
-    var = pd.DataFrame(
-        {
-            "gene_type": np.random.choice(["protein_coding", "lncRNA"], n_genes),
-            "highly_variable": np.random.choice([True, False], n_genes),
-            "total_counts": sparse_matrix.sum(axis=0).A1,
-            "n_cells_by_counts": (sparse_matrix > 0).sum(axis=0).A1,
-        },
-        index=pd.Index([f"gene_{i}" for i in range(n_genes)]),
+    # Create var (gene metadata) using polars
+    var = (
+        pl.DataFrame(
+            {
+                "gene_type": np.random.choice(["protein_coding", "lncRNA"], n_genes),
+                "highly_variable": np.random.choice([True, False], n_genes),
+                "expression_mean": np.random.uniform(0.1, 2.0, n_genes),
+            }
+        )
+        .with_row_index("gene_id", offset=0)
+        .with_columns(pl.col("gene_id").map_elements(lambda x: f"gene_{x}"))
     )
 
-    return sc.AnnData(X=sparse_matrix, obs=obs, var=var)
+    # Convert to pandas for AnnData compatibility
+    obs_pd = obs.to_pandas().set_index("cell_id")
+    var_pd = var.to_pandas().set_index("gene_id")
+
+    return sc.AnnData(X=X, obs=obs_pd, var=var_pd)
 
 
 @pytest.fixture
-def tiny_slaf(temp_dir):
-    """Create a tiny sample SLAF dataset for testing"""
+def small_adata():
+    """Create a small AnnData object for SLAFArray testing."""
     # Set random seed for reproducible tests
     np.random.seed(42)
 
-    # Create a small test dataset
-    n_cells, n_genes = 100, 50
-
-    # Create sparse matrix with controlled sparsity
-    density = 0.3
+    # Create sparse matrix
+    n_cells, n_genes = 10, 5
+    density = 0.3  # 30% sparsity for more data
     n_nonzero = int(n_cells * n_genes * density)
 
     # Generate random sparse data
-    data = np.random.uniform(1.0, 10.0, n_nonzero).astype(float)
+    data = np.random.uniform(1.0, 5.0, n_nonzero).astype(np.float32)
     row_indices = np.random.randint(0, n_cells, n_nonzero)
     col_indices = np.random.randint(0, n_genes, n_nonzero)
+    X = csr_matrix((data, (row_indices, col_indices)), shape=(n_cells, n_genes))
 
-    # Create sparse matrix
-    sparse_matrix = csr_matrix(
-        (data, (row_indices, col_indices)), shape=(n_cells, n_genes)
-    )
-
-    # Ensure we have at least some non-zero values in each row and column
+    # Ensure each row and column has at least one non-zero value
     for i in range(n_cells):
-        if sparse_matrix[i, :].nnz == 0:
+        if X[i, :].nnz == 0:
             j = np.random.randint(0, n_genes)
-            sparse_matrix[i, j] = np.random.uniform(1.0, 5.0)
+            X[i, j] = np.random.uniform(1.0, 5.0)
 
     for j in range(n_genes):
-        if sparse_matrix[:, j].nnz == 0:
-            i = np.random.randint(0, n_cells)
-            sparse_matrix[i, j] = np.random.uniform(1.0, 5.0)
+        if X[:, j].nnz == 0:
+            i = np.random.randint(0, n_genes)
+            X[i, j] = np.random.uniform(1.0, 5.0)
 
-    # Create cell metadata
-    obs = pd.DataFrame(
-        {
-            "cell_type": np.random.choice(["T-cell", "B-cell", "NK-cell"], n_cells),
-            "batch": np.random.choice(["batch_1", "batch_2"], n_cells),
-            "total_counts": sparse_matrix.sum(axis=1).A1,
-            "n_genes_by_counts": (sparse_matrix > 0).sum(axis=1).A1,
-            "high_mito": np.random.choice([True, False], n_cells),
-        },
-        index=pd.Index([f"cell_{i}" for i in range(n_cells)]),
+    # Create obs (cell metadata) using polars
+    obs = (
+        pl.DataFrame(
+            {
+                "cell_type": np.random.choice(["A", "B"], n_cells),
+                "total_counts": X.sum(axis=1).A1,
+            }
+        )
+        .with_row_index("cell_id", offset=0)
+        .with_columns(pl.col("cell_id").map_elements(lambda x: f"cell_{x}"))
     )
 
-    # Create gene metadata
-    var = pd.DataFrame(
-        {
-            "gene_type": np.random.choice(["protein_coding", "lncRNA"], n_genes),
-            "highly_variable": np.random.choice([True, False], n_genes),
-            "total_counts": sparse_matrix.sum(axis=0).A1,
-            "n_cells_by_counts": (sparse_matrix > 0).sum(axis=0).A1,
-        },
-        index=pd.Index([f"gene_{i}" for i in range(n_genes)]),
+    # Create var (gene metadata) using polars
+    var = (
+        pl.DataFrame(
+            {
+                "gene_type": np.random.choice(["protein_coding", "lncRNA"], n_genes),
+                "highly_variable": np.random.choice([True, False], n_genes),
+                "expression_mean": np.random.uniform(0.1, 2.0, n_genes),
+            }
+        )
+        .with_row_index("gene_id", offset=0)
+        .with_columns(pl.col("gene_id").map_elements(lambda x: f"gene_{x}"))
     )
 
-    # Create AnnData object
-    adata = sc.AnnData(X=sparse_matrix, obs=obs, var=var)
+    # Convert to pandas for AnnData compatibility
+    obs_pd = obs.to_pandas().set_index("cell_id")
+    var_pd = var.to_pandas().set_index("gene_id")
 
+    return sc.AnnData(X=X, obs=obs_pd, var=var_pd)
+
+
+@pytest.fixture
+def tiny_slaf(temp_dir, tiny_adata):
+    """Create a tiny SLAFArray for testing."""
     # Convert to SLAF format
-    from slaf.data import SLAFConverter
-
     converter = SLAFConverter(use_optimized_dtypes=False, compact_after_write=False)
     slaf_path = Path(temp_dir) / "tiny_test_dataset.slaf"
-    converter.convert_anndata(adata, str(slaf_path))
+    converter.convert_anndata(tiny_adata, str(slaf_path))
+
+    return SLAFArray(str(slaf_path))
+
+
+@pytest.fixture
+def small_slaf(temp_dir, small_adata):
+    """Create a small SLAFArray for SLAFArray testing."""
+    # Convert to SLAF format
+    converter = SLAFConverter(use_optimized_dtypes=False, compact_after_write=False)
+    slaf_path = Path(temp_dir) / "small_test_dataset.slaf"
+    converter.convert_anndata(small_adata, str(slaf_path))
 
     return SLAFArray(str(slaf_path))
 
@@ -353,8 +389,6 @@ def tiny_slaf_path(temp_dir):
     adata = sc.AnnData(X=sparse_matrix, obs=obs, var=var)
 
     # Convert to SLAF format
-    from slaf.data import SLAFConverter
-
     converter = SLAFConverter(use_optimized_dtypes=False, compact_after_write=False)
     slaf_path = Path(temp_dir) / "tiny_test_dataset.slaf"
     converter.convert_anndata(adata, str(slaf_path))
@@ -364,7 +398,9 @@ def tiny_slaf_path(temp_dir):
 
 @pytest.fixture
 def temp_dir():
-    """Create temporary directory for testing"""
+    """Create a temporary directory for testing."""
+    import shutil
+
     temp_dir = tempfile.mkdtemp()
     yield temp_dir
     shutil.rmtree(temp_dir)

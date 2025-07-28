@@ -2,6 +2,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import scipy
 
 
@@ -317,7 +318,7 @@ class LazySparseMixin:
             return "TRUE"  # Default to no filtering
 
     def _reconstruct_sparse_matrix(
-        self, records: pd.DataFrame, cell_selector, gene_selector
+        self, records: pl.DataFrame, cell_selector, gene_selector
     ) -> scipy.sparse.csr_matrix:
         """Reconstruct scipy sparse matrix from SLAF query results"""
         import scipy.sparse
@@ -328,9 +329,9 @@ class LazySparseMixin:
             return scipy.sparse.csr_matrix(result_shape)
 
         # Get integer IDs directly from the expression table
-        cell_integer_ids = records["cell_integer_id"].values.astype(np.int64)
-        gene_integer_ids = records["gene_integer_id"].values.astype(np.int64)
-        values = records["value"].values
+        cell_integer_ids = records["cell_integer_id"].to_numpy().astype(np.int64)
+        gene_integer_ids = records["gene_integer_id"].to_numpy().astype(np.int64)
+        values = records["value"].to_numpy()
 
         # Build output row indices
         if cell_selector is None or (
@@ -571,8 +572,8 @@ class LazySparseMixin:
 
             if len(result_df) > 0:
                 # Use vectorized operations instead of loops
-                gene_indices = result_df["gene_integer_id"].values
-                sums = result_df["total_sum"].values
+                gene_indices = result_df["gene_integer_id"].to_numpy()
+                sums = result_df["total_sum"].to_numpy()
 
                 # Ensure indices are within bounds
                 valid_mask = (gene_indices >= 0) & (gene_indices < self.shape[1])
@@ -601,8 +602,8 @@ class LazySparseMixin:
 
             if len(result_df) > 0:
                 # Use vectorized operations instead of loops
-                cell_indices = result_df["cell_integer_id"].values
-                sums = result_df["total_sum"].values
+                cell_indices = result_df["cell_integer_id"].to_numpy()
+                sums = result_df["total_sum"].to_numpy()
 
                 # Ensure indices are within bounds
                 valid_mask = (cell_indices >= 0) & (cell_indices < self.shape[0])
@@ -619,7 +620,7 @@ class LazySparseMixin:
             result = self.slaf_array.query(sql)
 
             if len(result) > 0:
-                total_sum = result.iloc[0]["total_sum"]
+                total_sum = result.item(0, "total_sum")
                 total_elements = self.shape[0] * self.shape[1]
                 global_mean = total_sum / total_elements
                 return np.array([global_mean])
@@ -647,9 +648,9 @@ class LazySparseMixin:
 
             if len(result_df) > 0:
                 # Use vectorized operations instead of loops
-                gene_indices = result_df["gene_integer_id"].values
-                sums = result_df["total_sum"].values
-                sum_squares = result_df["sum_squares"].values
+                gene_indices = result_df["gene_integer_id"].to_numpy()
+                sums = result_df["total_sum"].to_numpy()
+                sum_squares = result_df["sum_squares"].to_numpy()
 
                 # Ensure indices are within bounds
                 valid_mask = (gene_indices >= 0) & (gene_indices < self.shape[1])
@@ -684,9 +685,9 @@ class LazySparseMixin:
 
             if len(result_df) > 0:
                 # Use vectorized operations instead of loops
-                cell_indices = result_df["cell_integer_id"].values
-                sums = result_df["total_sum"].values
-                sum_squares = result_df["sum_squares"].values
+                cell_indices = result_df["cell_integer_id"].to_numpy()
+                sums = result_df["total_sum"].to_numpy()
+                sum_squares = result_df["sum_squares"].to_numpy()
 
                 # Ensure indices are within bounds
                 valid_mask = (cell_indices >= 0) & (cell_indices < self.shape[0])
@@ -713,8 +714,8 @@ class LazySparseMixin:
             result = self.slaf_array.query(sql)
 
             if len(result) > 0:
-                total_sum = result.iloc[0]["total_sum"]
-                sum_squares = result.iloc[0]["sum_squares"]
+                total_sum = result.item(0, "total_sum")
+                sum_squares = result.item(0, "sum_squares")
                 total_elements = self.shape[0] * self.shape[1]
 
                 # Global variance calculation
@@ -746,8 +747,8 @@ class LazySparseMixin:
 
             if len(result_df) > 0:
                 # Use vectorized operations instead of loops
-                gene_indices = result_df["gene_integer_id"].values
-                results = result_df["result"].values
+                gene_indices = result_df["gene_integer_id"].to_numpy()
+                results = result_df["result"].to_numpy()
 
                 # Ensure indices are within bounds
                 valid_mask = (gene_indices >= 0) & (gene_indices < self.shape[1])
@@ -772,8 +773,8 @@ class LazySparseMixin:
 
             if len(result_df) > 0:
                 # Use vectorized operations instead of loops
-                cell_indices = result_df["cell_integer_id"].values
-                results = result_df["result"].values
+                cell_indices = result_df["cell_integer_id"].to_numpy()
+                results = result_df["result"].to_numpy()
 
                 # Ensure indices are within bounds
                 valid_mask = (cell_indices >= 0) & (cell_indices < self.shape[0])
@@ -786,7 +787,7 @@ class LazySparseMixin:
             sql = f"SELECT {operation.upper()}(value) as result FROM expression"
             result = self.slaf_array.query(sql)
             return (
-                np.array([float(result.iloc[0]["result"])])
+                np.array([float(result.item(0, "result"))])
                 if len(result) > 0
                 else np.array([0.0])
             )
@@ -993,20 +994,20 @@ class LazySparseMixin:
 
                 for op in operations:
                     if op.upper() in ["MEAN", "AVG"]:
-                        total_sum = result.iloc[0][f"{op.lower()}_sum"]
+                        total_sum = result.item(0, f"{op.lower()}_sum")
                         global_results[op.lower()] = np.array(
                             [total_sum / total_elements]
                         )
                     elif op.upper() in ["VARIANCE", "VAR"]:
-                        total_sum = result.iloc[0][f"{op.lower()}_sum"]
-                        sum_squares = result.iloc[0][f"{op.lower()}_sum_squares"]
+                        total_sum = result.item(0, f"{op.lower()}_sum")
+                        sum_squares = result.item(0, f"{op.lower()}_sum_squares")
                         global_mean = total_sum / total_elements
                         global_variance = (sum_squares / total_elements) - (
                             global_mean * global_mean
                         )
                         global_results[op.lower()] = np.array([global_variance])
                     else:
-                        op_result = result.iloc[0][f"{op.lower()}_result"]
+                        op_result = result.item(0, f"{op.lower()}_result")
                         global_results[op.lower()] = np.array([float(op_result)])
             else:
                 for op in operations:

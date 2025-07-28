@@ -259,6 +259,19 @@ class ChunkedH5ADReader(BaseChunkedReader):
                         self._var_names = self._var_names.astype(str)
                 else:
                     raise ValueError("Expected h5py.Dataset for _index")
+            elif isinstance(var_group, h5py.Group) and "gene_id" in var_group:
+                # Handle case where gene names are stored in gene_id column
+                gene_id_dataset = var_group["gene_id"]
+                if isinstance(gene_id_dataset, h5py.Dataset):
+                    self._var_names = gene_id_dataset[:]
+                    # Handle bytes to string conversion if needed
+                    if (
+                        hasattr(self._var_names, "dtype")
+                        and self._var_names.dtype.kind == "S"
+                    ):
+                        self._var_names = self._var_names.astype(str)
+                else:
+                    raise ValueError("Expected h5py.Dataset for gene_id")
             else:
                 self._var_names = np.array([f"gene_{i}" for i in range(self.n_vars)])
         assert self._var_names is not None
@@ -486,10 +499,34 @@ class ChunkedH5ADReader(BaseChunkedReader):
         var_names = self.var_names
         gene_indices = []
         for gene in gene_names:
-            if gene in var_names:
-                gene_indices.append(np.where(var_names == gene)[0][0])
+            # Handle byte string to string conversion if needed
+            if isinstance(gene, bytes):
+                gene_str = gene.decode("utf-8")
             else:
-                warnings.warn(f"Gene {gene} not found in dataset", stacklevel=2)
+                gene_str = gene
+
+            # Handle case where var_names contains byte strings
+            if var_names.dtype.kind == "S" or (
+                hasattr(var_names, "dtype")
+                and var_names.dtype.kind == "O"
+                and any(isinstance(x, bytes) for x in var_names)
+            ):
+                # Convert var_names to strings for comparison
+                var_names_str = np.array(
+                    [
+                        x.decode("utf-8") if isinstance(x, bytes) else str(x)
+                        for x in var_names
+                    ]
+                )
+                if gene_str in var_names_str:
+                    gene_indices.append(np.where(var_names_str == gene_str)[0][0])
+                else:
+                    warnings.warn(f"Gene {gene} not found in dataset", stacklevel=2)
+            else:
+                if gene_str in var_names:
+                    gene_indices.append(np.where(var_names == gene_str)[0][0])
+                else:
+                    warnings.warn(f"Gene {gene} not found in dataset", stacklevel=2)
 
         if not gene_indices:
             return

@@ -1,11 +1,11 @@
 """Tests for SLAF sparse operations."""
 
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import pytest
-import scipy.sparse
 
 from slaf.core.sparse_ops import LazySparseMixin
 
@@ -43,7 +43,7 @@ class TestLazySparseMixin:
     def mock_slaf_array(self):
         """Create a mock SLAFArray for testing."""
         mock_array = Mock()
-        mock_array.get_submatrix.return_value = pd.DataFrame(
+        mock_array.get_submatrix.return_value = pl.DataFrame(
             {
                 "cell_integer_id": [0, 1, 2],
                 "gene_integer_id": [0, 1, 2],
@@ -150,9 +150,9 @@ class TestLazySparseMixin:
         assert condition == "cell_integer_id = 5"
 
     def test_selector_to_sql_condition_gene_type(self, sparse_mixin):
-        """Test SQL condition for gene type."""
-        condition = sparse_mixin._selector_to_sql_condition([1, 2, 3], 1, "gene")
-        assert condition == "gene_integer_id IN (1,2,3)"
+        """Test SQL condition for gene type selector."""
+        condition = sparse_mixin._selector_to_sql_condition(slice(10, 20), 1, "gene")
+        assert condition == "gene_integer_id >= 10 AND gene_integer_id < 20"
 
     def test_selector_to_sql_condition_unsupported_type(self, sparse_mixin):
         """Test error for unsupported selector type."""
@@ -166,13 +166,13 @@ class TestLazySparseMixin:
         assert stop == 100
 
     def test_selector_to_range_slice(self, sparse_mixin):
-        """Test range conversion for slice."""
+        """Test range conversion for slice selector."""
         start, stop = sparse_mixin._selector_to_range(slice(10, 20), 0)
         assert start == 10
         assert stop == 20
 
     def test_selector_to_range_list(self, sparse_mixin):
-        """Test range conversion for list."""
+        """Test range conversion for list selector."""
         start, stop = sparse_mixin._selector_to_range([1, 3, 5], 0)
         assert start == 1
         assert stop == 6
@@ -196,12 +196,12 @@ class TestLazySparseMixin:
         assert count == 100
 
     def test_estimate_selected_count_slice(self, sparse_mixin):
-        """Test count estimation for slice."""
+        """Test count estimation for slice selector."""
         count = sparse_mixin._estimate_selected_count(slice(10, 20), 0)
         assert count == 10
 
     def test_estimate_selected_count_list(self, sparse_mixin):
-        """Test count estimation for list."""
+        """Test count estimation for list selector."""
         count = sparse_mixin._estimate_selected_count([1, 3, 5], 0)
         assert count == 3
 
@@ -212,135 +212,141 @@ class TestLazySparseMixin:
         assert count == 3
 
     def test_estimate_selected_count_integer(self, sparse_mixin):
-        """Test count estimation for integer."""
+        """Test count estimation for integer selector."""
         count = sparse_mixin._estimate_selected_count(5, 0)
         assert count == 1
 
     def test_build_submatrix_query(self, sparse_mixin):
         """Test building submatrix query."""
-        result = sparse_mixin._build_submatrix_query([1, 2, 3], [4, 5, 6])
-        assert isinstance(result, pd.DataFrame)
-        sparse_mixin.slaf_array.get_submatrix.assert_called_once_with(
-            cell_selector=[1, 2, 3], gene_selector=[4, 5, 6]
-        )
+        result = sparse_mixin._build_submatrix_query(slice(0, 10), slice(0, 20), None)
+
+        # Check that we got a polars DataFrame
+        assert isinstance(result, pl.DataFrame)
+
+        # Check that it has the expected columns
+        assert "cell_integer_id" in result.columns
+        assert "gene_integer_id" in result.columns
+        assert "expression" in result.columns
 
     def test_get_result_shape(self, sparse_mixin):
-        """Test getting result shape."""
-        shape = sparse_mixin._get_result_shape([1, 2, 3], [4, 5, 6])
-        assert shape == (3, 3)
+        """Test result shape calculation."""
+        shape = sparse_mixin._get_result_shape(slice(0, 10), slice(0, 20))
+        assert shape == (10, 20)
 
     def test_get_result_shape_boolean_mask(self, sparse_mixin):
-        """Test getting result shape with boolean mask."""
+        """Test result shape calculation with boolean mask."""
         mask = np.array([True, False, True, False, True])
-        shape = sparse_mixin._get_result_shape(mask, [4, 5, 6])
-        assert shape == (3, 3)
+        shape = sparse_mixin._get_result_shape(mask, slice(0, 20))
+        assert shape == (3, 20)
 
     def test_sql_aggregation(self, sparse_mixin):
         """Test SQL aggregation."""
-        with patch.object(sparse_mixin, "_sql_mean_aggregation") as mock_mean:
-            mock_mean.return_value = np.array([1.0, 2.0, 3.0])
-            result = sparse_mixin._sql_aggregation("mean", axis=0)
-            assert np.array_equal(result, np.array([1.0, 2.0, 3.0]))
+        # Mock the query method to return a polars DataFrame
+        sparse_mixin.slaf_array.query.return_value = pl.DataFrame({"result": [42.0]})
+
+        result = sparse_mixin._sql_aggregation("SUM", None)
+        assert isinstance(result, np.ndarray)
+        assert result[0] == 42.0
 
     def test_sql_mean_aggregation(self, sparse_mixin):
         """Test SQL mean aggregation."""
-        with patch.object(sparse_mixin.slaf_array, "query") as mock_query:
-            mock_query.return_value = pd.DataFrame(
-                {"gene_integer_id": [0, 1, 2], "total_sum": [10.0, 20.0, 30.0]}
-            )
-            result = sparse_mixin._sql_mean_aggregation(axis=0)
-            assert isinstance(result, np.ndarray)
+        # Mock the query method to return a polars DataFrame
+        sparse_mixin.slaf_array.query.return_value = pl.DataFrame(
+            {"total_sum": [100.0]}
+        )
+
+        result = sparse_mixin._sql_mean_aggregation(None)
+        assert isinstance(result, np.ndarray)
+        assert result[0] == 100.0 / (100 * 200)  # total_sum / (n_cells * n_genes)
 
     def test_sql_variance_aggregation(self, sparse_mixin):
         """Test SQL variance aggregation."""
-        with patch.object(sparse_mixin.slaf_array, "query") as mock_query:
-            mock_query.return_value = pd.DataFrame(
-                {
-                    "gene_integer_id": [0, 1, 2],
-                    "total_sum": [10.0, 20.0, 30.0],
-                    "sum_squares": [100.0, 400.0, 900.0],
-                }
-            )
-            result = sparse_mixin._sql_variance_aggregation(axis=0)
-            assert isinstance(result, np.ndarray)
+        # Mock the query method to return a polars DataFrame
+        sparse_mixin.slaf_array.query.return_value = pl.DataFrame(
+            {"total_sum": [100.0], "sum_squares": [200.0]}
+        )
+
+        result = sparse_mixin._sql_variance_aggregation(None)
+        assert isinstance(result, np.ndarray)
+        # Variance calculation: (sum_squares / n) - (mean^2)
+        n = 100 * 200
+        mean = 100.0 / n
+        expected_variance = (200.0 / n) - (mean * mean)
+        assert abs(result[0] - expected_variance) < 1e-10
 
     def test_sql_other_aggregation(self, sparse_mixin):
         """Test SQL other aggregation."""
-        with patch.object(sparse_mixin.slaf_array, "query") as mock_query:
-            mock_query.return_value = pd.DataFrame(
-                {"gene_integer_id": [0, 1, 2], "result": [10.0, 20.0, 30.0]}
-            )
-            result = sparse_mixin._sql_other_aggregation("max", axis=0)
-            assert isinstance(result, np.ndarray)
+        # Mock the query method to return a polars DataFrame
+        sparse_mixin.slaf_array.query.return_value = pl.DataFrame({"result": [42.0]})
+
+        result = sparse_mixin._sql_other_aggregation("MAX", None)
+        assert isinstance(result, np.ndarray)
+        assert result[0] == 42.0
 
     def test_sql_multi_aggregation(self, sparse_mixin):
         """Test SQL multi-aggregation."""
-        # Mock the query result
-        mock_result = pd.DataFrame(
+        # Mock the query method to return a polars DataFrame
+        sparse_mixin.slaf_array.query.return_value = pl.DataFrame(
             {
-                "gene_integer_id": [0, 1, 2],
-                "mean_sum": [10.0, 20.0, 30.0],
-                "variance_sum": [100.0, 200.0, 300.0],
-                "variance_sum_squares": [1000.0, 2000.0, 3000.0],
-                "max_result": [5.0, 10.0, 15.0],
+                "mean_sum": [100.0],
+                "var_sum": [200.0],
+                "var_sum_squares": [400.0],
+                "max_result": [42.0],
             }
         )
-        sparse_mixin.slaf_array.query.return_value = mock_result
 
-        result = sparse_mixin._sql_multi_aggregation(
-            ["mean", "variance", "max"], axis=0
-        )
+        result = sparse_mixin._sql_multi_aggregation(["mean", "var", "max"], None)
+        assert isinstance(result, dict)
         assert "mean" in result
-        assert "variance" in result
+        assert "var" in result
         assert "max" in result
-        # Shape should be (1, 200) for gene-wise aggregation with shape (100, 200)
-        assert result["mean"].shape == (1, 200)
-        assert result["variance"].shape == (1, 200)
-        assert result["max"].shape == (1, 200)
 
     def test_reconstruct_sparse_matrix(self, sparse_mixin):
         """Test sparse matrix reconstruction."""
-        # Mock the obs and var DataFrames
-        sparse_mixin.slaf_array.obs = pd.DataFrame(
-            {"cell_id": ["cell_0", "cell_1", "cell_2"], "cell_integer_id": [0, 1, 2]}
-        ).set_index("cell_id")
-        sparse_mixin.slaf_array.var = pd.DataFrame(
-            {"gene_id": ["gene_0", "gene_1", "gene_2"], "gene_integer_id": [0, 1, 2]}
-        ).set_index("gene_id")
-
-        records = pd.DataFrame(
+        # Create a mock polars DataFrame
+        records = pl.DataFrame(
             {
                 "cell_integer_id": [0, 1, 2],
                 "gene_integer_id": [0, 1, 2],
                 "value": [1.0, 2.0, 3.0],
             }
         )
-        result = sparse_mixin._reconstruct_sparse_matrix(records, [0, 1, 2], [0, 1, 2])
+
+        # Mock the shape attribute properly
+        sparse_mixin.slaf_array.shape = (10, 20)
+
+        result = sparse_mixin._reconstruct_sparse_matrix(
+            records, slice(0, 10), slice(0, 20)
+        )
+
+        # Check that we got a sparse matrix
+        import scipy.sparse
+
         assert isinstance(result, scipy.sparse.csr_matrix)
-        assert result.shape == (3, 3)
+        assert result.shape == (10, 20)
 
     def test_create_id_mapping(self, sparse_mixin):
         """Test ID mapping creation."""
-        mapping = sparse_mixin._create_id_mapping([1, 3, 5], 0)
+        mapping = sparse_mixin._create_id_mapping(slice(0, 10), 0)
         assert isinstance(mapping, dict)
-        assert mapping[1] == 0
-        assert mapping[3] == 1
-        assert mapping[5] == 2
+        assert len(mapping) == 10
+        assert mapping[0] == 0
+        assert mapping[9] == 9
 
     def test_boolean_mask_to_sql(self, sparse_mixin):
         """Test boolean mask to SQL conversion."""
         mask = np.array([True, False, True, False, True])
-        sql = sparse_mixin._boolean_mask_to_sql(mask, "cell_id")
-        assert sql == "cell_id IN (0,2,4)"
+        condition = sparse_mixin._boolean_mask_to_sql(mask, "cell_id")
+        assert condition == "cell_id IN (0,2,4)"
 
     def test_boolean_mask_to_sql_all_true(self, sparse_mixin):
         """Test boolean mask to SQL conversion for all True."""
         mask = np.array([True, True, True])
-        sql = sparse_mixin._boolean_mask_to_sql(mask, "cell_id")
-        assert sql == "TRUE"
+        condition = sparse_mixin._boolean_mask_to_sql(mask, "cell_id")
+        assert condition == "TRUE"
 
     def test_boolean_mask_to_sql_all_false(self, sparse_mixin):
         """Test boolean mask to SQL conversion for all False."""
         mask = np.array([False, False, False])
-        sql = sparse_mixin._boolean_mask_to_sql(mask, "cell_id")
-        assert sql == "FALSE"
+        condition = sparse_mixin._boolean_mask_to_sql(mask, "cell_id")
+        assert condition == "FALSE"

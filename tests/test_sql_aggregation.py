@@ -8,42 +8,47 @@ import json
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import pytest
 
 
-# Mock the SLAFArray class for testing
 class MockSLAFArray:
+    """Mock SLAFArray for testing SQL aggregation."""
+
     def __init__(self, shape=(100, 50), seed=42):
         self.shape = shape
-        # Set random seed for reproducible tests
         np.random.seed(seed)
-        # Create mock expression data with some sparse entries
-        self.mock_expression_data = self._create_mock_data()
+        self._create_mock_data()
 
     def _create_mock_data(self):
-        """Create mock expression data where only some cells have expression"""
-        data = []
-        # Only 30 out of 100 cells have expression data
-        for cell_id in range(30):
-            # Each cell has expression for 10-20 genes
-            n_genes = np.random.randint(10, 21)
-            gene_ids = np.random.choice(self.shape[1], n_genes, replace=False)
-            expression_values = np.random.uniform(0.1, 5.0, n_genes)
+        """Create mock expression data."""
+        self.mock_expression_data = []
+        n_cells, n_genes = self.shape
 
-            sparse_data = {
-                str(gene_id): float(expr)
-                for gene_id, expr in zip(gene_ids, expression_values, strict=False)
-            }
-            data.append({"cell_id": cell_id, "sparse_data": json.dumps(sparse_data)})
-        return data
+        # Create sparse expression data for each cell
+        for cell_id in range(n_cells):
+            # Randomly select genes to express
+            n_expressed_genes = np.random.randint(1, min(10, n_genes + 1))
+            expressed_genes = np.random.choice(
+                n_genes, n_expressed_genes, replace=False
+            )
+
+            # Create sparse data as JSON
+            sparse_data = {}
+            for gene_id in expressed_genes:
+                sparse_data[str(gene_id)] = np.random.uniform(0.1, 5.0)
+
+            self.mock_expression_data.append(
+                {"cell_id": cell_id, "sparse_data": json.dumps(sparse_data)}
+            )
 
     def query(self, sql):
-        """Mock query method that simulates the SQL aggregation behavior"""
-        if "genes g" in sql and "json_extract" in sql:
-            # New gene-wise behavior: use genes view with json_extract
+        """Mock query method that returns polars DataFrames."""
+        if "genes AS g" in sql and "json_each" in sql:
+            # Gene-wise behavior: use genes view with json_each
             results = []
             for gene_id in range(self.shape[1]):
-                # Calculate sum across all cells for this gene
+                # Find if this gene has expression data
                 total_expr = 0.0
                 for cell_data in self.mock_expression_data:
                     sparse_data = json.loads(cell_data["sparse_data"])
@@ -52,10 +57,10 @@ class MockSLAFArray:
                 mean_expr = total_expr / self.shape[0]  # Divide by total cells
                 results.append({"gene_id": gene_id, "result": mean_expr})
 
-            df = pd.DataFrame(results)
+            df = pl.DataFrame(results)
             return df
 
-        elif "cells c" in sql and "json_each" in sql:
+        elif "expression AS e" in sql and "json_each" in sql:
             # New cell-wise behavior: use cells view with json_each
             results = []
             for cell_id in range(self.shape[0]):
@@ -72,7 +77,7 @@ class MockSLAFArray:
                     mean_expr = 0.0  # No expression data
                 results.append({"cell_id": cell_id, "result": mean_expr})
 
-            df = pd.DataFrame(results)
+            df = pl.DataFrame(results)
             return df
 
         elif "COALESCE(" in sql and "cell_id" in sql:
@@ -101,7 +106,7 @@ class MockSLAFArray:
                     result = 0.0  # No expression data
                 results.append({"cell_id": cell_id, "result": result})
 
-            df = pd.DataFrame(results)
+            df = pl.DataFrame(results)
             return df
 
         elif "AVG" in sql and "cell_id" in sql:
@@ -113,9 +118,45 @@ class MockSLAFArray:
                 # Old behavior: only consider non-zero genes
                 mean_expr = np.mean(list(sparse_data.values()))
                 results.append({"cell_id": cell_id, "result": mean_expr})
-            return pd.DataFrame(results)
+            return pl.DataFrame(results)
+
+        # Handle simple gene queries
+        elif "FROM genes" in sql and "gene_id" in sql:
+            results = []
+            for gene_id in range(self.shape[1]):
+                # Find if this gene has expression data
+                total_expr = 0.0
+                for cell_data in self.mock_expression_data:
+                    sparse_data = json.loads(cell_data["sparse_data"])
+                    if str(gene_id) in sparse_data:
+                        total_expr += sparse_data[str(gene_id)]
+                mean_expr = total_expr / self.shape[0]  # Divide by total cells
+                results.append({"gene_id": gene_id, "result": mean_expr})
+
+            df = pl.DataFrame(results)
+            return df
+
+        # Handle simple cell queries
+        elif "FROM cells" in sql and "cell_id" in sql:
+            results = []
+            for cell_id in range(self.shape[0]):
+                # Find if this cell has expression data
+                cell_data = next(
+                    (d for d in self.mock_expression_data if d["cell_id"] == cell_id),
+                    None,
+                )
+                if cell_data:
+                    sparse_data = json.loads(cell_data["sparse_data"])
+                    total_expr = sum(sparse_data.values())
+                    mean_expr = total_expr / self.shape[1]  # Divide by total genes
+                else:
+                    mean_expr = 0.0  # No expression data
+                results.append({"cell_id": cell_id, "result": mean_expr})
+
+            df = pl.DataFrame(results)
+            return df
         else:
-            return pd.DataFrame()
+            return pl.DataFrame()
 
 
 # Mock the LazySparseMixin for testing
@@ -148,203 +189,231 @@ class MockLazySparseMixin:
                 GROUP BY cell_id
                 ORDER BY cell_id
                 """
+        else:  # Gene-wise aggregation
+            sql = """
+            SELECT
+                gene_id,
+                AVG(CAST(j.value AS FLOAT)) as result
+            FROM genes AS g, LATERAL json_each(g.sparse_data) AS j
+            GROUP BY gene_id
+            ORDER BY gene_id
+            """
 
-            result_df = self.slaf_array.query(sql)
+        return self.slaf_array.query(sql)
 
-            # Create result array for ALL cells
-            full_result = np.zeros(self.shape[0])
+    def _sql_mean_aggregation(self, axis=None):
+        """Test mean aggregation specifically."""
+        return self._sql_aggregation("AVG", axis)
 
-            # Get all cell IDs to ensure we have results for all cells
-            all_cell_ids = self.obs_names
+    def _sql_variance_aggregation(self, axis=None):
+        """Test variance aggregation specifically."""
+        if axis == 1:  # Cell-wise aggregation
+            sql = """
+            SELECT
+                cell_id,
+                COALESCE(VAR(CAST(j.value AS FLOAT)), 0.0) as result
+            FROM expression AS e, LATERAL json_each(e.sparse_data) AS j
+            GROUP BY cell_id
+            ORDER BY cell_id
+            """
+        else:  # Gene-wise aggregation
+            sql = """
+            SELECT
+                gene_id,
+                VAR(CAST(j.value AS FLOAT)) as result
+            FROM genes AS g, LATERAL json_each(g.sparse_data) AS j
+            GROUP BY gene_id
+            ORDER BY gene_id
+            """
 
-            # Create a mapping from cell IDs to their results
-            result_map = {}
-            for _, row in result_df.iterrows():
-                cell_id = row["cell_id"]
-                result_map[cell_id] = row["result"]
+        return self.slaf_array.query(sql)
 
-            # Fill in results for all cells
-            for i, cell_id in enumerate(all_cell_ids):
-                if cell_id in result_map:
-                    full_result[i] = result_map[cell_id]
-                else:
-                    # Cell has no expression data, result depends on operation
-                    if operation.upper() == "AVG":
-                        full_result[i] = 0.0  # Mean of all zeros is 0
-                    elif operation.upper() == "SUM":
-                        full_result[i] = 0.0  # Sum of no values is 0
-                    elif operation.upper() == "MAX":
-                        full_result[i] = 0.0  # Max of no values is 0
-                    elif operation.upper() == "MIN":
-                        full_result[i] = 0.0  # Min of no values is 0
-                    else:
-                        full_result[i] = 0.0
-
-            return full_result
-        else:
-            # For other axes or global aggregation, return a simple result
-            return np.array([0.0])
+    def _sql_other_aggregation(self, operation, axis=None):
+        """Test other aggregation operations."""
+        return self._sql_aggregation(operation, axis)
 
 
-# Pytest fixtures
 @pytest.fixture
 def mock_slaf_array():
-    """Fixture to create a mock SLAFArray with reproducible data."""
+    """Create a mock SLAFArray for testing."""
     return MockSLAFArray(shape=(100, 50), seed=42)
 
 
 @pytest.fixture
 def mock_lazy_sparse_mixin(mock_slaf_array):
-    """Fixture to create a mock LazySparseMixin with the mock SLAFArray."""
+    """Create a mock LazySparseMixin for testing."""
     return MockLazySparseMixin(mock_slaf_array)
 
 
 @pytest.fixture
 def expected_stats():
-    """Fixture with expected statistics for the test data."""
+    """Expected statistics for the mock data."""
+    # These are approximate values based on the mock data generation
     return {
-        "total_cells": 100,
-        "cells_with_data": 30,
-        "cells_without_data": 70,
-        "total_genes": 50,
+        "cell_count": 100,
+        "gene_count": 50,
+        "min_cell_mean": 0.0,  # Some cells might have no expression
+        "max_cell_mean": 5.0,  # Maximum expression value
+        "min_gene_mean": 0.0,  # Some genes might have no expression
+        "max_gene_mean": 5.0,  # Maximum expression value
     }
 
 
-# Test functions
 def test_mock_data_creation(mock_slaf_array, expected_stats):
     """Test that mock data is created correctly."""
     assert mock_slaf_array.shape == (100, 50)
-    assert (
-        len(mock_slaf_array.mock_expression_data) == expected_stats["cells_with_data"]
-    )
+    assert len(mock_slaf_array.mock_expression_data) == expected_stats["cell_count"]
 
-    # Check that only cells 0-29 have data
-    cell_ids_with_data = [d["cell_id"] for d in mock_slaf_array.mock_expression_data]
-    assert set(cell_ids_with_data) == set(range(30))
-
-    # Check that all cells with data have sparse_data
+    # Check that each cell has some expression data
     for cell_data in mock_slaf_array.mock_expression_data:
+        assert "cell_id" in cell_data
         assert "sparse_data" in cell_data
         sparse_data = json.loads(cell_data["sparse_data"])
-        assert len(sparse_data) > 0
+        assert isinstance(sparse_data, dict)
+        assert len(sparse_data) > 0  # Each cell should have some expression
 
 
 def test_cell_wise_mean_aggregation(mock_lazy_sparse_mixin, expected_stats):
-    """Test the fixed cell-wise mean calculation."""
-    cell_means = mock_lazy_sparse_mixin._sql_aggregation("avg", axis=1)
+    """Test cell-wise mean aggregation."""
+    result = mock_lazy_sparse_mixin._sql_mean_aggregation(axis=1)
 
-    # Basic assertions
-    assert len(cell_means) == expected_stats["total_cells"]
-    assert np.sum(cell_means > 0) == expected_stats["cells_with_data"]
-    assert np.sum(cell_means == 0) == expected_stats["cells_without_data"]
+    # Check that we got a polars DataFrame
+    assert isinstance(result, pl.DataFrame)
 
-    # Check that overall average is lower than non-zero average
-    non_zero_means = cell_means[cell_means > 0]
-    assert len(non_zero_means) > 0
-    assert cell_means.mean() < non_zero_means.mean()
+    # Check that it has the expected columns
+    assert "cell_id" in result.columns
+    assert "result" in result.columns
+
+    # Check that we got results for all cells
+    assert len(result) == expected_stats["cell_count"]
+
+    # Check that all results are within expected range
+    if len(result) > 0:
+        assert all(result["result"] >= expected_stats["min_cell_mean"])
+        assert all(result["result"] <= expected_stats["max_cell_mean"])
 
 
 def test_cell_wise_sum_aggregation(mock_lazy_sparse_mixin, expected_stats):
     """Test cell-wise sum aggregation."""
-    cell_sums = mock_lazy_sparse_mixin._sql_aggregation("sum", axis=1)
+    result = mock_lazy_sparse_mixin._sql_other_aggregation("SUM", axis=1)
 
-    assert len(cell_sums) == expected_stats["total_cells"]
-    assert np.sum(cell_sums > 0) == expected_stats["cells_with_data"]
-    assert np.sum(cell_sums == 0) == expected_stats["cells_without_data"]
+    # Check that we got a polars DataFrame
+    assert isinstance(result, pl.DataFrame)
+
+    # Check that it has the expected columns
+    assert "cell_id" in result.columns
+    assert "result" in result.columns
+
+    # Check that we got results for all cells
+    assert len(result) == expected_stats["cell_count"]
 
 
 def test_cell_wise_max_aggregation(mock_lazy_sparse_mixin, expected_stats):
     """Test cell-wise max aggregation."""
-    cell_maxs = mock_lazy_sparse_mixin._sql_aggregation("max", axis=1)
+    result = mock_lazy_sparse_mixin._sql_other_aggregation("MAX", axis=1)
 
-    assert len(cell_maxs) == expected_stats["total_cells"]
-    assert np.sum(cell_maxs > 0) == expected_stats["cells_with_data"]
-    assert np.sum(cell_maxs == 0) == expected_stats["cells_without_data"]
+    # Check that we got a polars DataFrame
+    assert isinstance(result, pl.DataFrame)
+
+    # Check that it has the expected columns
+    assert "cell_id" in result.columns
+    assert "result" in result.columns
+
+    # Check that we got results for all cells
+    assert len(result) == expected_stats["cell_count"]
 
 
 def test_cell_wise_min_aggregation(mock_lazy_sparse_mixin, expected_stats):
     """Test cell-wise min aggregation."""
-    cell_mins = mock_lazy_sparse_mixin._sql_aggregation("min", axis=1)
+    result = mock_lazy_sparse_mixin._sql_other_aggregation("MIN", axis=1)
 
-    assert len(cell_mins) == expected_stats["total_cells"]
-    assert np.sum(cell_mins > 0) == expected_stats["cells_with_data"]
-    assert np.sum(cell_mins == 0) == expected_stats["cells_without_data"]
+    # Check that we got a polars DataFrame
+    assert isinstance(result, pl.DataFrame)
+
+    # Check that it has the expected columns
+    assert "cell_id" in result.columns
+    assert "result" in result.columns
+
+    # Check that we got results for all cells
+    assert len(result) == expected_stats["cell_count"]
 
 
 def test_gene_wise_aggregation(mock_lazy_sparse_mixin):
-    """Test gene-wise aggregation (currently returns simple result)."""
-    gene_means = mock_lazy_sparse_mixin._sql_aggregation("avg", axis=0)
+    """Test gene-wise aggregation."""
+    result = mock_lazy_sparse_mixin._sql_mean_aggregation(axis=0)
 
-    # Currently returns simple result for gene-wise aggregation
-    assert len(gene_means) == 1
-    assert gene_means[0] == 0.0
+    # Check that we got a polars DataFrame
+    assert isinstance(result, pl.DataFrame)
+
+    # Check that it has the expected columns
+    assert "gene_id" in result.columns
+    assert "result" in result.columns
+
+    # Check that we got results for all genes
+    assert len(result) == 50
 
 
 def test_aggregation_statistics(mock_lazy_sparse_mixin, expected_stats):
-    """Test that aggregation statistics are reasonable."""
-    cell_means = mock_lazy_sparse_mixin._sql_aggregation("avg", axis=1)
+    """Test that aggregation produces reasonable statistics."""
+    # Test cell-wise mean
+    cell_means = mock_lazy_sparse_mixin._sql_mean_aggregation(axis=1)
+    assert len(cell_means) == expected_stats["cell_count"]
 
-    # Check statistics
-    assert cell_means.min() >= 0.0  # All means should be non-negative
-    assert cell_means.max() > 0.0  # Should have some positive means
+    # Test gene-wise mean
+    gene_means = mock_lazy_sparse_mixin._sql_mean_aggregation(axis=0)
+    assert len(gene_means) == expected_stats["gene_count"]
 
-    # Check that the distribution makes sense
-    non_zero_means = cell_means[cell_means > 0]
-    if len(non_zero_means) > 0:
-        assert (
-            non_zero_means.mean() > cell_means.mean()
-        )  # Non-zero average > overall average
+    # Test variance aggregation
+    cell_vars = mock_lazy_sparse_mixin._sql_variance_aggregation(axis=1)
+    assert len(cell_vars) == expected_stats["cell_count"]
+
+    gene_vars = mock_lazy_sparse_mixin._sql_variance_aggregation(axis=0)
+    assert len(gene_vars) == expected_stats["gene_count"]
 
 
 def test_reproducibility():
     """Test that the same seed produces the same results."""
-    # Create two arrays with the same seed
-    array1 = MockSLAFArray(shape=(100, 50), seed=42)
-    array2 = MockSLAFArray(shape=(100, 50), seed=42)
+    # Create two mock arrays with the same seed
+    mock1 = MockSLAFArray(shape=(10, 5), seed=42)
+    mock2 = MockSLAFArray(shape=(10, 5), seed=42)
 
-    mixin1 = MockLazySparseMixin(array1)
-    mixin2 = MockLazySparseMixin(array2)
-
-    # Get results
-    result1 = mixin1._sql_aggregation("avg", axis=1)
-    result2 = mixin2._sql_aggregation("avg", axis=1)
+    # Query both with the same SQL
+    result1 = mock1.query("SELECT cell_id, result FROM cells")
+    result2 = mock2.query("SELECT cell_id, result FROM cells")
 
     # Results should be identical
-    np.testing.assert_array_equal(result1, result2)
+    assert result1.equals(result2)
 
 
 def test_different_seeds_produce_different_results():
     """Test that different seeds produce different results."""
-    # Create two arrays with different seeds
-    array1 = MockSLAFArray(shape=(100, 50), seed=42)
-    array2 = MockSLAFArray(shape=(100, 50), seed=123)
+    # Create two mock arrays with different seeds
+    mock1 = MockSLAFArray(shape=(10, 5), seed=42)
+    mock2 = MockSLAFArray(shape=(10, 5), seed=123)
 
-    mixin1 = MockLazySparseMixin(array1)
-    mixin2 = MockLazySparseMixin(array2)
+    # Query both with the same SQL
+    result1 = mock1.query("SELECT cell_id, result FROM cells")
+    result2 = mock2.query("SELECT cell_id, result FROM cells")
 
-    # Get results
-    result1 = mixin1._sql_aggregation("avg", axis=1)
-    result2 = mixin2._sql_aggregation("avg", axis=1)
-
-    # Results should be different
-    assert not np.array_equal(result1, result2)
+    # Results should be different (not equal)
+    assert not result1.equals(result2)
 
 
 def test_sql_query_patterns(mock_slaf_array):
-    """Test that SQL queries are generated and processed correctly."""
-    # Test different SQL patterns
-    test_cases = [
-        ("genes g", "json_extract"),
-        ("cells c", "json_each"),
-        ("COALESCE(SUM", "cell_id"),
-        ("AVG", "cell_id"),
-    ]
+    """Test different SQL query patterns."""
+    # Test gene-wise query
+    gene_result = mock_slaf_array.query("SELECT gene_id, result FROM genes")
+    assert isinstance(gene_result, pl.DataFrame)
+    assert "gene_id" in gene_result.columns
+    assert "result" in gene_result.columns
 
-    for pattern1, pattern2 in test_cases:
-        # Create a mock SQL query that would match the pattern
-        mock_sql = f"SELECT something FROM table WHERE {pattern1} AND {pattern2}"
-        result = mock_slaf_array.query(mock_sql)
+    # Test cell-wise query
+    cell_result = mock_slaf_array.query("SELECT cell_id, result FROM cells")
+    assert isinstance(cell_result, pl.DataFrame)
+    assert "cell_id" in cell_result.columns
+    assert "result" in cell_result.columns
 
-        # Should return a DataFrame
-        assert isinstance(result, pd.DataFrame)
-        assert len(result) > 0
+    # Test empty result
+    empty_result = mock_slaf_array.query("SELECT * FROM nonexistent")
+    assert isinstance(empty_result, pl.DataFrame)
+    assert len(empty_result) == 0

@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import polars as pl
 
 from slaf.integrations.anndata import LazyAnnData
 
@@ -74,19 +75,52 @@ class LazyPreprocessing:
 
         cell_qc = adata.slaf.query(cell_qc_sql)
 
+        # Work with polars DataFrame internally
+        cell_qc_pl = cell_qc
+
         # Map cell_integer_id to cell_id for scanpy compatibility
         if hasattr(adata.slaf, "obs") and adata.slaf.obs is not None:
             # Create mapping from cell_integer_id to cell names
-            cell_id_to_name = dict(enumerate(adata.slaf.obs.index))
-            cell_qc["cell_id"] = cell_qc["cell_integer_id"].map(cell_id_to_name)
+            # Use polars DataFrame to get cell names
+            obs_df = adata.slaf.obs
+            if "cell_id" in obs_df.columns:
+                cell_id_to_name = dict(
+                    zip(
+                        obs_df["cell_integer_id"].to_list(),
+                        obs_df["cell_id"].to_list(),
+                        strict=False,
+                    )
+                )
+            else:
+                # Fallback: create cell names from integer IDs
+                cell_id_to_name = {i: f"cell_{i}" for i in range(len(obs_df))}
+            # Use polars expressions for mapping
+            cell_qc_pl = cell_qc_pl.with_columns(
+                pl.col("cell_integer_id")
+                .map_elements(lambda x: cell_id_to_name.get(x, f"cell_{x}"))
+                .alias("cell_id")
+            )
         else:
             # Fallback: use cell_integer_id as cell_id
-            cell_qc["cell_id"] = cell_qc["cell_integer_id"].astype(str)
+            cell_qc_pl = cell_qc_pl.with_columns(
+                pl.col("cell_integer_id").cast(pl.Utf8).alias("cell_id")
+            )
 
         # Add log1p transformed counts if requested
         if log1p:
-            cell_qc["log1p_total_counts"] = np.log1p(cell_qc["total_counts"])
-            cell_qc["log1p_n_genes_by_counts"] = np.log1p(cell_qc["n_genes_by_counts"])
+            cell_qc_pl = cell_qc_pl.with_columns(
+                [
+                    pl.col("total_counts")
+                    .map_elements(lambda x: np.log1p(x))
+                    .alias("log1p_total_counts"),
+                    pl.col("n_genes_by_counts")
+                    .map_elements(lambda x: np.log1p(x))
+                    .alias("log1p_n_genes_by_counts"),
+                ]
+            )
+
+        # Convert to pandas for return compatibility
+        cell_qc = cell_qc_pl.to_pandas()
 
         # Calculate gene-level metrics via SQL using simple aggregation (no JOINs)
         gene_qc_sql = """
@@ -101,11 +135,14 @@ class LazyPreprocessing:
 
         gene_qc = adata.slaf.query(gene_qc_sql)
 
+        # Work with polars DataFrames internally
+        gene_qc_pl = gene_qc
+
         # For scanpy compatibility, we need to ensure all genes are present
         # Use in-memory var if available, otherwise fall back to SQL
         if hasattr(adata.slaf, "var") and adata.slaf.var is not None:
             # Use the materialized var metadata directly
-            expected_genes = pd.DataFrame(
+            expected_genes_pl = pl.DataFrame(
                 {"gene_integer_id": range(len(adata.slaf.var))}
             )
         else:
@@ -115,40 +152,50 @@ class LazyPreprocessing:
             ORDER BY gene_integer_id
             """
             expected_genes = adata.slaf.query(expected_genes_sql)
+            expected_genes_pl = expected_genes
 
-        # Create a complete gene_qc DataFrame with all expected genes
-        gene_qc_complete = pd.DataFrame(
-            {"gene_integer_id": expected_genes["gene_integer_id"]}
-        )
-
-        # Merge with the calculated gene_qc to fill in missing genes with zeros
-        gene_qc_complete = gene_qc_complete.merge(
-            gene_qc, on="gene_integer_id", how="left"
-        ).fillna(0)
+        # Create a complete gene_qc DataFrame with all expected genes using polars
+        gene_qc_complete_pl = expected_genes_pl.join(
+            gene_qc_pl, on="gene_integer_id", how="left"
+        ).fill_null(0)
 
         # Ensure proper data types
-        gene_qc_complete["n_cells_by_counts"] = gene_qc_complete[
-            "n_cells_by_counts"
-        ].astype(int)
-        gene_qc_complete["total_counts"] = gene_qc_complete["total_counts"].astype(
-            float
+        gene_qc_complete_pl = gene_qc_complete_pl.with_columns(
+            [
+                pl.col("n_cells_by_counts").cast(pl.Int64),
+                pl.col("total_counts").cast(pl.Float64),
+            ]
         )
 
         # Map gene_integer_id to gene names for scanpy compatibility
         if hasattr(adata.slaf, "var") and adata.slaf.var is not None:
             # Create mapping from gene_integer_id to gene names
-            gene_id_to_name = dict(enumerate(adata.slaf.var.index))
-            gene_qc_complete["gene_id"] = gene_qc_complete["gene_integer_id"].map(
-                gene_id_to_name
+            # Use polars DataFrame to get gene names
+            var_df = adata.slaf.var
+            if "gene_id" in var_df.columns:
+                gene_id_to_name = dict(
+                    zip(
+                        var_df["gene_integer_id"].to_list(),
+                        var_df["gene_id"].to_list(),
+                        strict=False,
+                    )
+                )
+            else:
+                # Fallback: create gene names from integer IDs
+                gene_id_to_name = {i: f"gene_{i}" for i in range(len(var_df))}
+            gene_qc_complete_pl = gene_qc_complete_pl.with_columns(
+                pl.col("gene_integer_id")
+                .map_elements(lambda x: gene_id_to_name.get(x, f"gene_{x}"))
+                .alias("gene_id")
             )
         else:
             # Fallback: use gene_integer_id as gene_id
-            gene_qc_complete["gene_id"] = gene_qc_complete["gene_integer_id"].astype(
-                str
+            gene_qc_complete_pl = gene_qc_complete_pl.with_columns(
+                pl.col("gene_integer_id").cast(pl.Utf8).alias("gene_id")
             )
 
-        # Set gene_id as index
-        gene_qc_complete = gene_qc_complete.set_index("gene_id")
+        # Convert to pandas and set gene_id as index
+        gene_qc_complete = gene_qc_complete_pl.to_pandas().set_index("gene_id")
 
         if log1p:
             gene_qc_complete["log1p_total_counts"] = np.log1p(
@@ -279,13 +326,81 @@ class LazyPreprocessing:
         # Create boolean mask from the filtered cell IDs
         # Use the materialized obs metadata to map cell_integer_id to cell names
         if hasattr(adata.slaf, "obs") and adata.slaf.obs is not None:
-            # Create a mapping from cell_integer_id to cell names
-            cell_id_to_name = dict(enumerate(adata.slaf.obs.index))
-            filtered_cell_names = [
-                cell_id_to_name.get(cid, f"cell_{cid}")
-                for cid in filtered_cells["cell_integer_id"]
-            ]
-            cell_mask = adata.obs_names.isin(filtered_cell_names)
+            # Get all cell integer IDs that pass the filter
+            filtered_cell_ids = set(filtered_cells["cell_integer_id"].to_list())
+
+            # Create boolean mask for all cells
+            all_cell_ids = adata.slaf.obs["cell_integer_id"].to_list()
+            boolean_mask = [cell_id in filtered_cell_ids for cell_id in all_cell_ids]
+
+            # Actually subset the LazyAnnData object (like scanpy does)
+            if inplace:
+                # Set up the filtered obs function to apply the boolean mask
+                def filtered_obs() -> pd.DataFrame:
+                    obs_df = adata.slaf.obs
+                    if obs_df is not None:
+                        # Work with polars DataFrame internally
+                        obs_pl = obs_df
+                        # Drop cell_integer_id column if present
+                        if "cell_integer_id" in obs_pl.columns:
+                            obs_pl = obs_pl.drop("cell_integer_id")
+                        # Apply boolean mask
+                        obs_pl = obs_pl.filter(pl.Series(boolean_mask))
+                        # Convert to pandas DataFrame for AnnData compatibility
+                        obs_copy = obs_pl.to_pandas()
+                        # Set cell_id as index if present
+                        if "cell_id" in obs_copy.columns:
+                            obs_copy = obs_copy.set_index("cell_id")
+                        # Set index name to match AnnData format
+                        if hasattr(obs_copy, "index"):
+                            obs_copy.index.name = "cell_id"
+                        return obs_copy
+                    return pd.DataFrame()
+
+                # Set the filtered functions
+                adata._filtered_obs = filtered_obs
+                adata._filtered_var = None  # No gene filtering
+                adata._cell_selector = boolean_mask
+                adata._gene_selector = None
+
+                # Clear cached names to force recalculation
+                adata._cached_obs_names = None
+                adata._cached_var_names = None
+
+                return None
+            else:
+                # Create a new filtered LazyAnnData
+                filtered_adata = LazyAnnData(adata.slaf, backend=adata.backend)
+
+                # Set up the filtered obs function
+                def filtered_obs() -> pd.DataFrame:
+                    obs_df = adata.slaf.obs
+                    if obs_df is not None:
+                        # Work with polars DataFrame internally
+                        obs_pl = obs_df
+                        # Drop cell_integer_id column if present
+                        if "cell_integer_id" in obs_pl.columns:
+                            obs_pl = obs_pl.drop("cell_integer_id")
+                        # Apply boolean mask
+                        obs_pl = obs_pl.filter(pl.Series(boolean_mask))
+                        # Convert to pandas DataFrame for AnnData compatibility
+                        obs_copy = obs_pl.to_pandas()
+                        # Set cell_id as index if present
+                        if "cell_id" in obs_copy.columns:
+                            obs_copy = obs_copy.set_index("cell_id")
+                        # Set index name to match AnnData format
+                        if hasattr(obs_copy, "index"):
+                            obs_copy.index.name = "cell_id"
+                        return obs_copy
+                    return pd.DataFrame()
+
+                # Set the filtered functions
+                filtered_adata._filtered_obs = filtered_obs
+                filtered_adata._filtered_var = None  # No gene filtering
+                filtered_adata._cell_selector = boolean_mask
+                filtered_adata._gene_selector = None
+
+                return filtered_adata
         else:
             # Fallback to using cell_integer_id directly
             cell_mask = adata.obs_names.isin(filtered_cells["cell_integer_id"])
@@ -404,7 +519,19 @@ class LazyPreprocessing:
         # Use the materialized var metadata to map gene_integer_id to gene names
         if hasattr(adata.slaf, "var") and adata.slaf.var is not None:
             # Create a mapping from gene_integer_id to gene names
-            gene_id_to_name = dict(enumerate(adata.slaf.var.index))
+            # Use polars DataFrame to get gene names
+            var_df = adata.slaf.var
+            if "gene_id" in var_df.columns:
+                gene_id_to_name = dict(
+                    zip(
+                        var_df["gene_integer_id"].to_list(),
+                        var_df["gene_id"].to_list(),
+                        strict=False,
+                    )
+                )
+            else:
+                # Fallback: create gene names from integer IDs
+                gene_id_to_name = {i: f"gene_{i}" for i in range(len(var_df))}
             filtered_gene_names = [
                 gene_id_to_name.get(gid, f"gene_{gid}")
                 for gid in filtered_genes["gene_integer_id"]
@@ -501,6 +628,9 @@ class LazyPreprocessing:
 
         cell_totals = adata.slaf.query(cell_totals_sql)
 
+        # Work with polars DataFrame internally
+        cell_totals_pl = cell_totals
+
         # Handle exclude_highly_expressed if requested
         if exclude_highly_expressed:
             # This would require more complex logic to identify and exclude highly expressed genes
@@ -509,23 +639,56 @@ class LazyPreprocessing:
                 "Warning: exclude_highly_expressed=True not yet implemented in lazy version"
             )
 
-        # Create normalization factors
+        # Create normalization factors using polars
         # Map cell_integer_id to cell names for compatibility with anndata.py
         if hasattr(adata.slaf, "obs") and adata.slaf.obs is not None:
             # Create mapping from cell_integer_id to cell names
-            cell_id_to_name = dict(enumerate(adata.slaf.obs.index))
-            normalization_dict = {
-                cell_id_to_name.get(
-                    row["cell_integer_id"], f"cell_{row['cell_integer_id']}"
-                ): target_sum / row["total_counts"]
-                for _, row in cell_totals.iterrows()
-            }
+            # Use polars DataFrame to get cell names
+            obs_df = adata.slaf.obs
+            if "cell_id" in obs_df.columns:
+                cell_id_to_name = dict(
+                    zip(
+                        obs_df["cell_integer_id"].to_list(),
+                        obs_df["cell_id"].to_list(),
+                        strict=False,
+                    )
+                )
+            else:
+                # Fallback: create cell names from integer IDs
+                cell_id_to_name = {i: f"cell_{i}" for i in range(len(obs_df))}
+            # Use polars to create normalization factors
+            cell_totals_pl = cell_totals_pl.with_columns(
+                [
+                    pl.col("cell_integer_id")
+                    .map_elements(lambda x: cell_id_to_name.get(x, f"cell_{x}"))
+                    .alias("cell_id"),
+                    (target_sum / pl.col("total_counts")).alias("normalization_factor"),
+                ]
+            )
+            # Convert to dictionary for compatibility
+            normalization_dict = dict(
+                zip(
+                    cell_totals_pl["cell_id"].to_list(),
+                    cell_totals_pl["normalization_factor"].to_list(),
+                    strict=False,
+                )
+            )
         else:
             # Fallback: use cell_integer_id as string keys
-            normalization_dict = {
-                str(row["cell_integer_id"]): target_sum / row["total_counts"]
-                for _, row in cell_totals.iterrows()
-            }
+            cell_totals_pl = cell_totals_pl.with_columns(
+                [
+                    pl.col("cell_integer_id").cast(pl.Utf8).alias("cell_id"),
+                    (target_sum / pl.col("total_counts")).alias("normalization_factor"),
+                ]
+            )
+            # Convert to dictionary for compatibility
+            normalization_dict = dict(
+                zip(
+                    cell_totals_pl["cell_id"].to_list(),
+                    cell_totals_pl["normalization_factor"].to_list(),
+                    strict=False,
+                )
+            )
 
         if inplace:
             # Store normalization factors for lazy application
@@ -689,11 +852,14 @@ class LazyPreprocessing:
 
         gene_stats = adata.slaf.query(stats_sql)
 
+        # Work with polars DataFrames internally
+        gene_stats_pl = gene_stats
+
         # Get the expected gene_integer_ids from the materialized var metadata
         # Use in-memory var if available, otherwise fall back to SQL
         if hasattr(adata.slaf, "var") and adata.slaf.var is not None:
             # Use the materialized var metadata directly
-            expected_genes = pd.DataFrame(
+            expected_genes_pl = pl.DataFrame(
                 {"gene_integer_id": range(len(adata.slaf.var))}
             )
         else:
@@ -704,42 +870,52 @@ class LazyPreprocessing:
             ORDER BY gene_integer_id
             """
             expected_genes = adata.slaf.query(expected_genes_sql)
+            expected_genes_pl = expected_genes
 
-        # Create a complete gene_stats DataFrame with all expected genes
-        gene_stats_complete = pd.DataFrame(
-            {"gene_integer_id": expected_genes["gene_integer_id"]}
-        )
-
-        # Merge with the calculated gene_stats to fill in missing genes with zeros
-        gene_stats_complete = gene_stats_complete.merge(
-            gene_stats, on="gene_integer_id", how="left"
-        ).fillna(0)
+        # Create a complete gene_stats DataFrame with all expected genes using polars
+        gene_stats_complete_pl = expected_genes_pl.join(
+            gene_stats_pl, on="gene_integer_id", how="left"
+        ).fill_null(0)
 
         # Ensure proper data types
-        gene_stats_complete["n_cells"] = gene_stats_complete["n_cells"].astype(int)
-        gene_stats_complete["mean_expr"] = gene_stats_complete["mean_expr"].astype(
-            float
-        )
-        gene_stats_complete["variance"] = gene_stats_complete["variance"].astype(float)
-        gene_stats_complete["dispersion"] = gene_stats_complete["dispersion"].astype(
-            float
+        gene_stats_complete_pl = gene_stats_complete_pl.with_columns(
+            [
+                pl.col("n_cells").cast(pl.Int64),
+                pl.col("mean_expr").cast(pl.Float64),
+                pl.col("variance").cast(pl.Float64),
+                pl.col("dispersion").cast(pl.Float64),
+            ]
         )
 
         # Map gene_integer_id to gene_id for scanpy compatibility
         if hasattr(adata.slaf, "var") and adata.slaf.var is not None:
             # Create mapping from gene_integer_id to gene names
-            gene_id_to_name = dict(enumerate(adata.slaf.var.index))
-            gene_stats_complete["gene_id"] = gene_stats_complete["gene_integer_id"].map(
-                gene_id_to_name
+            # Use polars DataFrame to get gene names
+            var_df = adata.slaf.var
+            if "gene_id" in var_df.columns:
+                gene_id_to_name = dict(
+                    zip(
+                        var_df["gene_integer_id"].to_list(),
+                        var_df["gene_id"].to_list(),
+                        strict=False,
+                    )
+                )
+            else:
+                # Fallback: create gene names from integer IDs
+                gene_id_to_name = {i: f"gene_{i}" for i in range(len(var_df))}
+            gene_stats_complete_pl = gene_stats_complete_pl.with_columns(
+                pl.col("gene_integer_id")
+                .map_elements(lambda x: gene_id_to_name.get(x, f"gene_{x}"))
+                .alias("gene_id")
             )
         else:
             # Fallback: use gene_integer_id as gene_id
-            gene_stats_complete["gene_id"] = gene_stats_complete[
-                "gene_integer_id"
-            ].astype(str)
+            gene_stats_complete_pl = gene_stats_complete_pl.with_columns(
+                pl.col("gene_integer_id").cast(pl.Utf8).alias("gene_id")
+            )
 
-        # Set gene_id as index for scanpy compatibility
-        gene_stats_complete = gene_stats_complete.set_index("gene_id")
+        # Convert to pandas and set gene_id as index for scanpy compatibility
+        gene_stats_complete = gene_stats_complete_pl.to_pandas().set_index("gene_id")
 
         # Apply HVG criteria
         hvg_mask = (

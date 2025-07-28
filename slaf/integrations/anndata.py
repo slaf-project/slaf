@@ -71,8 +71,8 @@ class LazyExpressionMatrix(LazySparseMixin):
         self.slaf_array = slaf_array
         self.parent_adata: LazyAnnData | None = None
         # Store slicing selectors
-        self._cell_selector = None
-        self._gene_selector = None
+        self._cell_selector: Any = None
+        self._gene_selector: Any = None
         # Initialize shape attribute (required by LazySparseMixin)
         self._shape = self.slaf_array.shape
         self._cache: dict[str, Any] = {}  # Simple caching for repeated queries
@@ -762,8 +762,8 @@ class LazyAnnData(LazySparseMixin):
         self._cached_var_names: pd.Index | None = None
 
         # Filter selectors for subsetting
-        self._cell_selector = None
-        self._gene_selector = None
+        self._cell_selector: Any = None
+        self._gene_selector: Any = None
         self._filtered_obs: Callable[[], pd.DataFrame] | None = None
         self._filtered_var: Callable[[], pd.DataFrame] | None = None
 
@@ -814,19 +814,22 @@ class LazyAnnData(LazySparseMixin):
                 return result
             return pd.DataFrame()
         if self._obs is None:
-            # Use the obs from SLAFArray (already loaded in memory)
+            # Use the obs from SLAFArray (now polars DataFrame)
             obs_df = getattr(self.slaf, "obs", None)
             if obs_df is not None:
-                obs_copy = obs_df.copy()
+                # Work with polars DataFrame internally
+                obs_pl = obs_df
                 # Drop cell_integer_id column if present to match AnnData expectations
-                if (
-                    hasattr(obs_copy, "columns")
-                    and "cell_integer_id" in obs_copy.columns
-                ):
-                    obs_copy = obs_copy.drop(columns=["cell_integer_id"])
-                # Set index name to None to match AnnData format
+                if "cell_integer_id" in obs_pl.columns:
+                    obs_pl = obs_pl.drop("cell_integer_id")
+                # Convert to pandas DataFrame for AnnData compatibility at API boundary
+                obs_copy = obs_pl.to_pandas()
+                # Set cell_id as index if present, otherwise use default index
+                if "cell_id" in obs_copy.columns:
+                    obs_copy = obs_copy.set_index("cell_id")
+                # Set index name to match AnnData format
                 if hasattr(obs_copy, "index"):
-                    obs_copy.index.name = None
+                    obs_copy.index.name = "cell_id"
                 self._obs = obs_copy
             else:
                 self._obs = pd.DataFrame()
@@ -848,16 +851,19 @@ class LazyAnnData(LazySparseMixin):
         if self._var is None:
             var_df = getattr(self.slaf, "var", None)
             if var_df is not None:
-                var_copy = var_df.copy()
+                # Work with polars DataFrame internally
+                var_pl = var_df
                 # Drop gene_integer_id column if present to match AnnData expectations
-                if (
-                    hasattr(var_copy, "columns")
-                    and "gene_integer_id" in var_copy.columns
-                ):
-                    var_copy = var_copy.drop(columns=["gene_integer_id"])
-                # Set index name to None to match AnnData format
+                if "gene_integer_id" in var_pl.columns:
+                    var_pl = var_pl.drop("gene_integer_id")
+                # Convert to pandas DataFrame for AnnData compatibility at API boundary
+                var_copy = var_pl.to_pandas()
+                # Set gene_id as index if present, otherwise use default index
+                if "gene_id" in var_copy.columns:
+                    var_copy = var_copy.set_index("gene_id")
+                # Set index name to match AnnData format
                 if hasattr(var_copy, "index"):
-                    var_copy.index.name = None
+                    var_copy.index.name = "gene_id"
                 self._var = var_copy
             else:
                 self._var = pd.DataFrame()

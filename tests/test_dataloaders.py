@@ -1,3 +1,4 @@
+import polars as pl
 import pytest
 import torch
 
@@ -148,7 +149,7 @@ class TestSLAFDataLoader:
             cell_ids = batch["cell_ids"]
 
             # Check that cell IDs are within expected range
-            max_cell_id = int(tiny_slaf.obs["cell_integer_id"].astype(int).max())
+            max_cell_id = int(tiny_slaf.obs["cell_integer_id"].cast(pl.Int64).max())
             assert all(0 <= cell_id <= max_cell_id for cell_id in cell_ids)
 
             # Check that cell IDs are unique within a batch
