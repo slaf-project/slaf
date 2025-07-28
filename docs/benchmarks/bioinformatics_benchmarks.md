@@ -48,7 +48,7 @@ SLAF provides **efficient metadata-only queries** that avoid loading expression 
 
 ```python
 # Load entire dataset into memory - including expression matrix
-adata = sc.read_h5ad("data.h5ad")  # 7.8 MB for PBMC3K (metadata + expression)
+adata = sc.read_h5ad("data.h5ad", backed="r")  # 7.8 MB for PBMC3K (metadata + expression)
 
 # Filter cells using pandas boolean indexing on metadata
 filtered_cells = adata.obs[adata.obs.n_genes_by_counts >= 500]
@@ -107,7 +107,7 @@ SLAF provides **lazy submatrix extraction** that loads only the cells and genes 
 
 ```python
 # Must load entire dataset
-adata = sc.read_h5ad("data.h5ad")
+adata = sc.read_h5ad("data.h5ad", backed="r")
 
 # Single-cell expression
 cell_id = "AAACCTGAGAAACCAT-1"
@@ -166,7 +166,7 @@ SLAF enables **lazy computation graphs** that build complex preprocessing pipeli
 
 ```python
 # Each step loads data into memory
-adata = sc.read_h5ad("data.h5ad")
+adata = sc.read_h5ad("data.h5ad", backed="r")
 
 # QC metrics calculation
 sc.pp.calculate_qc_metrics(adata, inplace=True)

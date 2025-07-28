@@ -83,7 +83,7 @@ def _measure_h5ad_anndata_op(h5ad_path: str, scenario: dict):
 
     # h5ad load
     start = time.time()
-    adata = sc.read_h5ad(h5ad_path)
+    adata = sc.read_h5ad(h5ad_path, backed="r")
     h5ad_load_time = time.time() - start
 
     # Measure memory footprint of loaded data

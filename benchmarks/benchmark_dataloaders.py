@@ -1,10 +1,19 @@
-import argparse
+"""
+Benchmark dataloader overhead vs direct tokenizer calls
+
+NOTE: This benchmark needs to be updated for the new architecture.
+The old SQL-based approach has been deprecated in favor of the new
+vectorized tokenization approach.
+
+TODO: Update this benchmark to use the new SLAFTokenizer.tokenize() method
+and remove references to deprecated SQL-based methods.
+"""
+
 import gc
-import multiprocessing as mp
 import time
+from multiprocessing import Process, Queue
 
 import numpy as np
-from benchmark_utils import get_object_memory_usage, get_slaf_memory_usage
 from rich.console import Console
 from rich.table import Table
 
@@ -21,7 +30,7 @@ def worker_h5ad(worker_id, h5ad_path, scenario, result_queue):
     from benchmark_utils import get_object_memory_usage
 
     # Each process loads the full h5ad file
-    adata = sc.read_h5ad(h5ad_path)
+    adata = sc.read_h5ad(h5ad_path, backed="r")
 
     # Simulate processing the scenario
     batch_size = scenario["batch_size"]
@@ -373,11 +382,11 @@ def _benchmark_h5ad_multi_process(
 ) -> tuple:
     """Benchmark h5ad with multiple processes"""
     # Run multiple processes
-    result_queue: mp.Queue = mp.Queue()
+    result_queue: Queue = Queue()
     processes = []
 
     for i in range(n_processes):
-        p = mp.Process(target=worker_h5ad, args=(i, h5ad_path, scenario, result_queue))
+        p = Process(target=worker_h5ad, args=(i, h5ad_path, scenario, result_queue))
         processes.append(p)
         p.start()
 
@@ -410,11 +419,11 @@ def _benchmark_slaf_multi_process(
 ) -> tuple:
     """Benchmark SLAF with multiple processes"""
     # Run multiple processes
-    result_queue: mp.Queue = mp.Queue()
+    result_queue: Queue = Queue()
     processes = []
 
     for i in range(n_processes):
-        p = mp.Process(target=worker_slaf, args=(i, slaf_path, scenario, result_queue))
+        p = Process(target=worker_slaf, args=(i, slaf_path, scenario, result_queue))
         processes.append(p)
         p.start()
 
@@ -675,26 +684,10 @@ def benchmark_dataloaders(
         # Test 2: Direct tokenizer calls (just tokenization) - measure one batch only
         gc.collect()
 
-        # Get just the first batch range
-        first_batch_range = dataloader.cell_integer_ranges[0]
-
-        # Use the same approach as dataloader (timer inside the branch)
-        if scenario["tokenizer_type"] == "geneformer":
-            start_time = time.time()
-            tokens = tokenizer.tokenize_geneformer(
-                cell_integer_id_range=first_batch_range,
-                max_genes=int(scenario["max_genes"]),
-            )
-            direct_time = time.time() - start_time
-        else:  # scgpt
-            start_time = time.time()
-            tokens = tokenizer.tokenize_scgpt(
-                cell_integer_id_range=first_batch_range,
-                max_genes=int(scenario["max_genes"]),
-            )
-            direct_time = time.time() - start_time
-
-        total_tokens_direct = sum(len(seq) for seq in tokens)
+        # TODO: Update benchmark to use new architecture
+        # For now, use placeholder values since the new architecture is not yet implemented
+        direct_time = 0.0  # Placeholder
+        total_tokens_direct = 0  # Placeholder
 
         # Calculate overhead (dataloader includes more work, so this is fair)
         overhead_ratio = (dataloader_time - direct_time) / direct_time * 100
@@ -745,7 +738,7 @@ def benchmark_dataloaders(
             console.print(
                 f"  Direct tokens: {total_tokens_direct:,}, Dataloader tokens: {total_tokens_dataloader:,}"
             )
-            console.print(f"  First batch range: {first_batch_range}")
+            console.print("  First batch range: N/A (new architecture)")
 
     # Print table if requested
     if print_table:
@@ -937,7 +930,7 @@ def _benchmark_h5ad_timing_breakdown(h5ad_path: str, scenario: dict) -> dict:
 
     # Load data (this is the data loading phase)
     start_data = time.time()
-    adata = sc.read_h5ad(h5ad_path)
+    adata = sc.read_h5ad(h5ad_path, backed="r")
     end_data = time.time()
 
     # Get expression matrix - handle different types robustly
@@ -1082,6 +1075,19 @@ def _benchmark_slaf_timing_breakdown(slaf_path: str, scenario: dict) -> dict:
 
 
 if __name__ == "__main__":
+    import argparse
+    import gc
+    import time
+
+    import numpy as np
+    from benchmark_utils import get_object_memory_usage, get_slaf_memory_usage
+    from rich.console import Console
+    from rich.table import Table
+
+    from slaf.core.slaf import SLAFArray
+    from slaf.ml.dataloaders import SLAFDataLoader
+    from slaf.ml.tokenizers import SLAFTokenizer
+
     parser = argparse.ArgumentParser(description="Benchmark SLAF dataloaders")
     parser.add_argument("--h5ad", required=True, help="Path to h5ad file")
     parser.add_argument("--slaf", required=True, help="Path to SLAF file")
@@ -1112,6 +1118,5 @@ if __name__ == "__main__":
         results = benchmark_multi_process_scaling(
             args.h5ad, args.slaf, max_processes=args.max_processes, verbose=args.verbose
         )
-
         if args.verbose:
             console.print("\n[bold green]Benchmark completed![/bold green]")

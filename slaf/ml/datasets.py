@@ -59,7 +59,7 @@ from slaf.ml.tokenizers import SLAFTokenizer
 PrefetchBatch = Union["TokenizedPrefetchBatch", "RawPrefetchBatch"]
 
 
-def print_prefetch(message: str):
+def print_prefetch(message: str, verbose: bool = True):
     """
     Print prefetch-related messages in cyan with a panel.
 
@@ -70,6 +70,7 @@ def print_prefetch(message: str):
     Args:
         message: The message text to display. Should contain prefetch-related
                 information like batch processing times, throughput rates, etc.
+        verbose: If False, suppress the print. Default: True.
 
     Examples:
         >>> # Print prefetch message
@@ -79,14 +80,21 @@ def print_prefetch(message: str):
         >>> # With rich formatting (if available)
         >>> print_prefetch("Processing rate: 1000 cells/sec")
         # Output will be in cyan panel if rich is available
+
+        >>> # Suppress print
+        >>> print_prefetch("Batch 10 loaded: 32 cells, 2.3ms", verbose=False)
+        # No output
     """
+    if not verbose:
+        return
+
     if RICH_AVAILABLE and console is not None:
         console.print(Panel(message, border_style="cyan"))
     else:
         print(f"🔍 {message}")
 
 
-def print_training(message: str):
+def print_training(message: str, verbose: bool = True):
     """
     Print training-related messages in green with a panel.
 
@@ -97,6 +105,7 @@ def print_training(message: str):
     Args:
         message: The message text to display. Should contain training-related
                 information like batch processing times, throughput rates, etc.
+        verbose: If False, suppress the print. Default: True.
 
     Examples:
         >>> # Print training message
@@ -106,14 +115,21 @@ def print_training(message: str):
         >>> # With rich formatting (if available)
         >>> print_training("Training rate: 500 batches/sec")
         # Output will be in green panel if rich is available
+
+        >>> # Suppress print
+        >>> print_training("Batch 100 processed: 32 cells, 1.2ms", verbose=False)
+        # No output
     """
+    if not verbose:
+        return
+
     if RICH_AVAILABLE and console is not None:
         console.print(Panel(message, border_style="green"))
     else:
         print(f"📊 {message}")
 
 
-def print_epoch_transition(message: str):
+def print_epoch_transition(message: str, verbose: bool = True):
     """
     Print epoch transition messages in yellow.
 
@@ -124,6 +140,7 @@ def print_epoch_transition(message: str):
     Args:
         message: The message text to display. Should contain epoch transition
                 information like epoch numbers, completion status, etc.
+        verbose: If False, suppress the print. Default: True.
 
     Examples:
         >>> # Print epoch transition message
@@ -133,14 +150,21 @@ def print_epoch_transition(message: str):
         >>> # With rich formatting (if available)
         >>> print_epoch_transition("Starting epoch 5")
         # Output will be in yellow if rich is available
+
+        >>> # Suppress print
+        >>> print_epoch_transition("Epoch 1 -> 2", verbose=False)
+        # No output
     """
+    if not verbose:
+        return
+
     if RICH_AVAILABLE and console is not None:
         console.print(f"[yellow]🔄 {message}[/yellow]")
     else:
         print(f"🔄 {message}")
 
 
-def print_completion(message: str):
+def print_completion(message: str, verbose: bool = True):
     """
     Print completion messages in bright green with a panel.
 
@@ -151,6 +175,7 @@ def print_completion(message: str):
     Args:
         message: The message text to display. Should contain completion
                 information like training completion, epoch completion, etc.
+        verbose: If False, suppress the print. Default: True.
 
     Examples:
         >>> # Print completion message
@@ -160,19 +185,21 @@ def print_completion(message: str):
         >>> # With rich formatting (if available)
         >>> print_completion("Training finished successfully")
         # Output will be in bright green panel if rich is available
+
+        >>> # Suppress print
+        >>> print_completion("All epochs completed", verbose=False)
+        # No output
     """
+    if not verbose:
+        return
+
     if RICH_AVAILABLE and console is not None:
-        console.print(
-            Panel(
-                f"[bright_green]✅ {message}[/bright_green]",
-                border_style="bright_green",
-            )
-        )
+        console.print(Panel(message, border_style="bright_green"))
     else:
         print(f"✅ {message}")
 
 
-def print_warning(message: str):
+def print_warning(message: str, verbose: bool = True):
     """
     Print warning messages in orange.
 
@@ -183,6 +210,7 @@ def print_warning(message: str):
     Args:
         message: The message text to display. Should contain warning
                 information like timeout conditions, errors, etc.
+        verbose: If False, suppress the print. Default: True.
 
     Examples:
         >>> # Print warning message
@@ -192,7 +220,14 @@ def print_warning(message: str):
         >>> # With rich formatting (if available)
         >>> print_warning("Queue is full")
         # Output will be in orange if rich is available
+
+        >>> # Suppress print
+        >>> print_warning("Prefetcher timeout", verbose=False)
+        # No output
     """
+    if not verbose:
+        return
+
     if RICH_AVAILABLE and console is not None:
         console.print(f"[orange3]⚠️ {message}[/orange3]")
     else:
@@ -279,6 +314,8 @@ class PrefetchBatchProcessor:
         use_binned_expressions: bool = True,
         n_epochs: int = 1,  # Add n_epochs parameter
         raw_mode: bool = False,  # Add raw_mode parameter
+        verbose: bool = True,  # Add verbose parameter
+        log_metrics: bool = False,  # Add log_metrics parameter
     ):
         """Initialize the PrefetchBatchProcessor."""
         self.slaf_array = slaf_array
@@ -292,6 +329,9 @@ class PrefetchBatchProcessor:
         self.use_binned_expressions = use_binned_expressions
         self.n_epochs = n_epochs
         self.raw_mode = raw_mode
+        self.verbose = verbose
+        self.log_metrics = log_metrics
+        self.batches_per_chunk = batches_per_chunk
 
         # Initialize state
         self.batch_id = 0
@@ -315,6 +355,20 @@ class PrefetchBatchProcessor:
         self._last_batch_dfs_count = 0
         self._last_total_rows = 0
         self._last_memory_mb = 0.0
+
+        # Initialize timing metrics for benchmarking
+        self._timing_metrics: dict[str, list[float]] | None
+        if self.log_metrics:
+            self._timing_metrics = {
+                "lance_loading": [],
+                "window": [],
+                "shuffle": [],
+                "tokenize": [],
+                "total": [],
+                "cells_processed": [],
+            }
+        else:
+            self._timing_metrics = None
 
     def reset_for_epoch(self, epoch: int) -> None:
         """
@@ -373,7 +427,50 @@ class PrefetchBatchProcessor:
         # Reinitialize the batch generator
         self.batch_generator = self.expression_dataset.to_batches()
 
-        print_epoch_transition(f"Reset batch generator for epoch {epoch}")
+        print_epoch_transition(f"Reset batch generator for epoch {epoch}", self.verbose)
+
+    def get_timing_metrics(self) -> dict | None:
+        """
+        Retrieve timing metrics collected during batch processing.
+
+        Returns:
+            dict | None: Timing metrics if log_metrics=True, None otherwise.
+                        Contains lists of timing values for each processing step.
+
+        Examples:
+            >>> # Get timing metrics
+            >>> processor = PrefetchBatchProcessor(slaf_array, window, shuffle, tokenizer, log_metrics=True)
+            >>> # Process some batches...
+            >>> metrics = processor.get_timing_metrics()
+            >>> if metrics:
+            ...     print(f"Average lance loading time: {np.mean(metrics['lance_loading']):.3f}s")
+            ... else:
+            ...     print("No metrics available")
+            Average lance loading time: 0.123s
+        """
+        if not self.log_metrics or self._timing_metrics is None:
+            return None
+
+        # Calculate averages for each metric
+        avg_metrics = {}
+        for key, values in self._timing_metrics.items():
+            if values:
+                avg_metrics[key] = sum(values) / len(values)
+            else:
+                avg_metrics[key] = 0.0
+
+        return avg_metrics
+
+    def _record_timing(self, step: str, duration: float, cells_processed: int = 0):
+        """Record timing for a processing step."""
+        if not self.log_metrics or self._timing_metrics is None:
+            return
+
+        if step in self._timing_metrics:
+            self._timing_metrics[step].append(duration)
+
+        if cells_processed > 0:
+            self._timing_metrics["cells_processed"].append(cells_processed)
 
     def load_prefetch_batch(self) -> PrefetchBatch:
         """
@@ -432,7 +529,8 @@ class PrefetchBatchProcessor:
                 # Check if we should start a new epoch
                 if self.current_epoch + 1 < self.n_epochs:
                     print_epoch_transition(
-                        f"Epoch {self.current_epoch} complete, starting epoch {self.current_epoch + 1}"
+                        f"Epoch {self.current_epoch} complete, starting epoch {self.current_epoch + 1}",
+                        self.verbose,
                     )
                     self.reset_for_epoch(self.current_epoch + 1)
                     # Continue the loop to load the first batch of the new epoch
@@ -443,6 +541,9 @@ class PrefetchBatchProcessor:
             # Combine all batches
             combined_df = pl.concat(batch_dfs)  # type: ignore
             load_time = time.time() - load_start
+
+            # Record lance loading timing
+            self._record_timing("lance_loading", load_time)
 
             # Print detailed loading breakdown every 10 batches
             if self.batch_id % 10 == 0:
@@ -500,11 +601,18 @@ class PrefetchBatchProcessor:
                     shuffle_time = time.time() - shuffle_start
                     total_time = time.time() - start_time
 
+                    # Record timing metrics
+                    self._record_timing("shuffle", shuffle_time)
+                    self._record_timing("total", total_time)
+
                     # Count total cells across all chunks
                     total_cells_in_chunks = sum(
                         len(chunk["cell_integer_id"].unique())
                         for chunk in shuffled_chunks
                     )
+
+                    # Record cells processed
+                    self._record_timing("cells_processed", 0, total_cells_in_chunks)
 
                     # Track total cells processed in prefetch
                     self.total_prefetch_cells += total_cells_in_chunks
@@ -517,7 +625,7 @@ class PrefetchBatchProcessor:
                     )
                     prefetch_report += f"   Total: {total_time * 1000:.1f}ms, {len(shuffled_chunks)} chunks, {total_cells_in_chunks} cells, {self._last_memory_mb:.1f} MB"
 
-                    print_prefetch(prefetch_report)
+                    print_prefetch(prefetch_report, self.verbose)
 
                     self.batch_id += 1  # Increment batch_id for raw mode
                     return RawPrefetchBatch(
@@ -574,8 +682,15 @@ class PrefetchBatchProcessor:
                     tokenize_time = time.time() - tokenize_start
                     total_time = time.time() - start_time
 
+                    # Record timing metrics
+                    self._record_timing("shuffle", shuffle_time)
+                    self._record_timing("window", window_time)
+                    self._record_timing("tokenize", tokenize_time)
+                    self._record_timing("total", total_time)
+
                     # Track total cells processed in prefetch
                     cells_in_batch = len(complete_df["cell_integer_id"].unique())
+                    self._record_timing("cells_processed", 0, cells_in_batch)
                     self.total_prefetch_cells += cells_in_batch
 
                     # Print consolidated timing breakdown every 10 batches
@@ -586,7 +701,7 @@ class PrefetchBatchProcessor:
                         prefetch_report += f"   Processing: {window_time * 1000:.1f}ms window, {shuffle_time * 1000:.1f}ms shuffle, {tokenize_time * 1000:.1f}ms tokenize\n"
                         prefetch_report += f"   Total: {total_time * 1000:.1f}ms, {cells_in_batch} cells, {self._last_memory_mb:.1f} MB"
 
-                        print_prefetch(prefetch_report)
+                        print_prefetch(prefetch_report, self.verbose)
 
                     self.batch_id += 1
                     return TokenizedPrefetchBatch(
@@ -773,7 +888,7 @@ class AsyncPrefetcher:
                         "raw" if isinstance(batch, RawPrefetchBatch) else "tokenized"
                     )
                     rate_report = f"Prefetch rate: {rate:.1f} cells/sec (epoch {self.current_epoch}, total: {self.total_cells_added} cells, avg {batch_type}: {avg_tokenize_ms:.1f}ms)"
-                    print_prefetch(rate_report)
+                    print_prefetch(rate_report, self.batch_processor.verbose)
                     self.last_rate_print = batch.batch_id
 
                 # Put in queue
@@ -786,7 +901,8 @@ class AsyncPrefetcher:
             except StopIteration as e:
                 if "No more epochs available" in str(e):
                     print_completion(
-                        f"All {self.batch_processor.n_epochs} epochs completed"
+                        f"All {self.batch_processor.n_epochs} epochs completed",
+                        self.batch_processor.verbose,
                     )
                 else:
                     print("Reached end of batches")
@@ -1015,6 +1131,8 @@ class SLAFIterableDataset(IterableDataset):
         use_binned_expressions: bool = False,  # Add binned expressions parameter
         n_epochs: int = 1,  # Add n_epochs parameter
         raw_mode: bool = False,  # Add raw_mode parameter
+        verbose: bool = True,  # Add verbose parameter
+        batches_per_chunk: int = 50,  # Add batches_per_chunk parameter
     ):
         super().__init__()
         self.slaf_array = slaf_array
@@ -1029,6 +1147,7 @@ class SLAFIterableDataset(IterableDataset):
         self.pin_memory = pin_memory
         self.n_epochs = n_epochs
         self.raw_mode = raw_mode  # Add raw_mode attribute
+        self.verbose = verbose  # Add verbose attribute
 
         # Pre-allocate cell IDs buffer for better performance
         if TORCH_AVAILABLE:
@@ -1044,7 +1163,12 @@ class SLAFIterableDataset(IterableDataset):
         from slaf.ml.aggregators import WindowType, create_window
         from slaf.ml.samplers import ShuffleType, create_shuffle
 
-        window = create_window(WindowType(tokenizer_type))
+        # For raw mode, we don't need a window, but we need to pass something
+        # Use geneformer as default since it's the most common
+        if self.raw_mode:
+            window = create_window(WindowType.GENEFORMER)
+        else:
+            window = create_window(WindowType(tokenizer_type))
         shuffle = create_shuffle(ShuffleType.RANDOM)
 
         # Get expression binning parameters from tokenizer (only for non-raw mode)
@@ -1063,11 +1187,13 @@ class SLAFIterableDataset(IterableDataset):
             tokenizer=tokenizer,
             seed=seed,
             max_genes=max_genes,
-            batches_per_chunk=100,
+            batches_per_chunk=batches_per_chunk,
             n_expression_bins=n_expression_bins,
             use_binned_expressions=use_binned_expressions,
             n_epochs=n_epochs,  # Pass n_epochs to batch processor
             raw_mode=raw_mode,  # Pass raw_mode to batch processor
+            verbose=verbose,  # Pass verbose to batch processor
+            log_metrics=False,  # Pass log_metrics to batch processor
         )
         self.prefetcher = AsyncPrefetcher(
             batch_processor=self.batch_processor,
@@ -1116,12 +1242,15 @@ class SLAFIterableDataset(IterableDataset):
         while time.time() - start_time < timeout:
             if self.prefetcher.has_batch():
                 print_completion(
-                    f"Prefetcher ready after {time.time() - start_time:.2f}s"
+                    f"Prefetcher ready after {time.time() - start_time:.2f}s",
+                    self.verbose,
                 )
                 return
             time.sleep(0.1)
 
-        print_warning(f"Prefetcher not ready after {timeout}s, proceeding anyway...")
+        print_warning(
+            f"Prefetcher not ready after {timeout}s, proceeding anyway...", self.verbose
+        )
 
     def __iter__(self) -> Iterator[dict]:
         """
@@ -1209,7 +1338,8 @@ class SLAFIterableDataset(IterableDataset):
                 stats = self.prefetcher.get_stats()
                 if stats["current_epoch"] >= stats["n_epochs"]:
                     print_completion(
-                        f"Dataset iteration complete: all {stats['n_epochs']} epochs finished"
+                        f"Dataset iteration complete: all {stats['n_epochs']} epochs finished",
+                        self.verbose,
                     )
                     break
 
@@ -1219,7 +1349,9 @@ class SLAFIterableDataset(IterableDataset):
                     time.sleep(0.1)
                     # Timeout after 5 seconds to avoid infinite wait
                     if time.time() - wait_start > 5.0:
-                        print_warning("Timeout waiting for prefetcher data")
+                        print_warning(
+                            "Timeout waiting for prefetcher data", self.verbose
+                        )
                         break
 
                 data = self.prefetcher.get_batch()
@@ -1228,18 +1360,20 @@ class SLAFIterableDataset(IterableDataset):
                     stats = self.prefetcher.get_stats()
                     if stats["current_epoch"] >= stats["n_epochs"]:
                         print_completion(
-                            f"Dataset iteration complete: all {stats['n_epochs']} epochs finished"
+                            f"Dataset iteration complete: all {stats['n_epochs']} epochs finished",
+                            self.verbose,
                         )
                         break
                     else:
-                        print_warning("No data available from prefetcher")
+                        print_warning("No data available from prefetcher", self.verbose)
                         break
 
             # Track epoch transitions
             current_epoch = self.batch_processor.current_epoch
             if current_epoch != last_epoch:
                 print_epoch_transition(
-                    f"Epoch transition detected: {last_epoch} -> {current_epoch}"
+                    f"Epoch transition detected: {last_epoch} -> {current_epoch}",
+                    self.verbose,
                 )
                 last_epoch = current_epoch
 
@@ -1288,7 +1422,7 @@ class SLAFIterableDataset(IterableDataset):
                         )
                         training_report += "     Raw data (polars DataFrame)"
 
-                        print_training(training_report)
+                        print_training(training_report, self.verbose)
 
                     yield batch_dict
 
@@ -1327,7 +1461,7 @@ class SLAFIterableDataset(IterableDataset):
                             "   Pre-tokenized data (no tokenization overhead)"
                         )
 
-                        print_training(training_report)
+                        print_training(training_report, self.verbose)
 
                     # Logging
                     if batches_yielded % 100 == 0:
@@ -1340,7 +1474,7 @@ class SLAFIterableDataset(IterableDataset):
                             )
                             overall_rate = batches_yielded / (current_time - start_time)
                             rate_report = f"Training batch {batches_yielded} (epoch {current_epoch}): {instantaneous_rate:.1f} batches/sec (instantaneous, overall: {overall_rate:.1f})"
-                            print_training(rate_report)
+                            print_training(rate_report, self.verbose)
                         last_rate_time = current_time
                         last_rate_batches = batches_yielded
 

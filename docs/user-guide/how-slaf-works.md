@@ -182,7 +182,7 @@ Benefits:
 
 ### 5. Advanced Query Optimization
 
-SLAF includes sophisticated query optimization to overcome current limitations of LanceDB and DataFusion:
+SLAF includes sophisticated query optimization to overcome current limitations of LanceDB:
 
 ```python
 # Adaptive batching for large scattered ID sets

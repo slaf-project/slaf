@@ -111,7 +111,7 @@ def _measure_h5ad_cell_filtering(h5ad_path: str, scenario: dict):
 
     # Load h5ad
     start = time.time()
-    adata = sc.read_h5ad(h5ad_path)
+    adata = sc.read_h5ad(h5ad_path, backed="r")
     h5ad_load_time = time.time() - start
 
     # Measure memory footprint

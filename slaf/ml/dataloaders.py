@@ -225,6 +225,8 @@ class SLAFDataLoader:
         n_expression_bins: int = 10,
         n_epochs: int = 1,  # Add n_epochs parameter
         raw_mode: bool = False,  # Add raw_mode parameter
+        verbose: bool = True,  # Add verbose parameter
+        batches_per_chunk: int = 50,  # Add batches_per_chunk parameter
     ):
         """
         Initialize the SLAF DataLoader with training configuration.
@@ -252,6 +254,9 @@ class SLAFDataLoader:
                      Default: 1.
             raw_mode: If True, return raw cell × gene data as sparse CSR tensors
                      instead of pre-tokenized sequences. Default: False.
+            verbose: If True, print detailed timing and progress information.
+                    If False, suppress all SLAF internal prints for clean output.
+                    Default: True.
 
         Raises:
             ValueError: If tokenizer_type is not supported or parameters are invalid.
@@ -313,6 +318,8 @@ class SLAFDataLoader:
         self.num_workers = num_workers  # Note: Not used in current implementation due to pickling issues with Lance/Polars objects
         self.n_epochs = n_epochs
         self.raw_mode = raw_mode  # Add raw_mode attribute
+        self.verbose = verbose  # Add verbose attribute
+        self.batches_per_chunk = batches_per_chunk  # Add batches_per_chunk attribute
 
         # Device-agnostic: always return CPU tensors
         self.device = None
@@ -349,6 +356,8 @@ class SLAFDataLoader:
             tokenizer_type=tokenizer_type,
             n_epochs=n_epochs,  # Pass n_epochs to dataset
             raw_mode=raw_mode,  # Pass raw_mode to dataset
+            verbose=verbose,  # Pass verbose to dataset
+            batches_per_chunk=batches_per_chunk,  # Pass batches_per_chunk to dataset
         )
 
     def __iter__(self):
