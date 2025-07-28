@@ -568,7 +568,7 @@ class PrefetchBatchProcessor:
 
             # Handle cell boundary crossing
             # Find the last complete cell_integer_id
-            cell_counts = combined_df.group_by("cell_integer_id").count()  # type: ignore
+            cell_counts = combined_df.group_by("cell_integer_id").len()  # type: ignore
             last_complete_cell = cell_counts["cell_integer_id"].max()
 
             # Split into complete cells and partial cells

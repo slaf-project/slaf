@@ -94,11 +94,23 @@ class LazyPreprocessing:
             else:
                 # Fallback: create cell names from integer IDs
                 cell_id_to_name = {i: f"cell_{i}" for i in range(len(obs_df))}
-            # Use polars expressions for mapping
+            # Use vectorized polars operations for mapping
+            # Create mapping DataFrame
+            cell_map_df = pl.DataFrame(
+                {
+                    "cell_integer_id": list(cell_id_to_name.keys()),
+                    "cell_id": list(cell_id_to_name.values()),
+                }
+            )
+            # Join with mapping DataFrame
+            cell_qc_pl = cell_qc_pl.join(cell_map_df, on="cell_integer_id", how="left")
+            # Fill any missing values with default format
             cell_qc_pl = cell_qc_pl.with_columns(
-                pl.col("cell_integer_id")
-                .map_elements(lambda x: cell_id_to_name.get(x, f"cell_{x}"))
-                .alias("cell_id")
+                pl.col("cell_id").fill_null(
+                    pl.col("cell_integer_id")
+                    .cast(pl.Utf8)
+                    .map_elements(lambda x: f"cell_{x}", return_dtype=pl.Utf8)
+                )
             )
         else:
             # Fallback: use cell_integer_id as cell_id
@@ -110,11 +122,9 @@ class LazyPreprocessing:
         if log1p:
             cell_qc_pl = cell_qc_pl.with_columns(
                 [
-                    pl.col("total_counts")
-                    .map_elements(lambda x: np.log1p(x))
-                    .alias("log1p_total_counts"),
+                    pl.col("total_counts").log1p().alias("log1p_total_counts"),
                     pl.col("n_genes_by_counts")
-                    .map_elements(lambda x: np.log1p(x))
+                    .log1p()
                     .alias("log1p_n_genes_by_counts"),
                 ]
             )
@@ -183,10 +193,25 @@ class LazyPreprocessing:
             else:
                 # Fallback: create gene names from integer IDs
                 gene_id_to_name = {i: f"gene_{i}" for i in range(len(var_df))}
+            # Use vectorized polars operations for mapping
+            # Create mapping DataFrame
+            gene_map_df = pl.DataFrame(
+                {
+                    "gene_integer_id": list(gene_id_to_name.keys()),
+                    "gene_id": list(gene_id_to_name.values()),
+                }
+            )
+            # Join with mapping DataFrame
+            gene_qc_complete_pl = gene_qc_complete_pl.join(
+                gene_map_df, on="gene_integer_id", how="left"
+            )
+            # Fill any missing values with default format
             gene_qc_complete_pl = gene_qc_complete_pl.with_columns(
-                pl.col("gene_integer_id")
-                .map_elements(lambda x: gene_id_to_name.get(x, f"gene_{x}"))
-                .alias("gene_id")
+                pl.col("gene_id").fill_null(
+                    pl.col("gene_integer_id")
+                    .cast(pl.Utf8)
+                    .map_elements(lambda x: f"gene_{x}", return_dtype=pl.Utf8)
+                )
             )
         else:
             # Fallback: use gene_integer_id as gene_id
@@ -656,12 +681,26 @@ class LazyPreprocessing:
             else:
                 # Fallback: create cell names from integer IDs
                 cell_id_to_name = {i: f"cell_{i}" for i in range(len(obs_df))}
-            # Use polars to create normalization factors
+            # Use vectorized polars operations for mapping
+            # Create mapping DataFrame
+            cell_map_df = pl.DataFrame(
+                {
+                    "cell_integer_id": list(cell_id_to_name.keys()),
+                    "cell_id": list(cell_id_to_name.values()),
+                }
+            )
+            # Join with mapping DataFrame
+            cell_totals_pl = cell_totals_pl.join(
+                cell_map_df, on="cell_integer_id", how="left"
+            )
+            # Fill any missing values with default format
             cell_totals_pl = cell_totals_pl.with_columns(
                 [
-                    pl.col("cell_integer_id")
-                    .map_elements(lambda x: cell_id_to_name.get(x, f"cell_{x}"))
-                    .alias("cell_id"),
+                    pl.col("cell_id").fill_null(
+                        pl.col("cell_integer_id")
+                        .cast(pl.Utf8)
+                        .map_elements(lambda x: f"cell_{x}", return_dtype=pl.Utf8)
+                    ),
                     (target_sum / pl.col("total_counts")).alias("normalization_factor"),
                 ]
             )
@@ -903,10 +942,25 @@ class LazyPreprocessing:
             else:
                 # Fallback: create gene names from integer IDs
                 gene_id_to_name = {i: f"gene_{i}" for i in range(len(var_df))}
+            # Use vectorized polars operations for mapping
+            # Create mapping DataFrame
+            gene_map_df = pl.DataFrame(
+                {
+                    "gene_integer_id": list(gene_id_to_name.keys()),
+                    "gene_id": list(gene_id_to_name.values()),
+                }
+            )
+            # Join with mapping DataFrame
+            gene_stats_complete_pl = gene_stats_complete_pl.join(
+                gene_map_df, on="gene_integer_id", how="left"
+            )
+            # Fill any missing values with default format
             gene_stats_complete_pl = gene_stats_complete_pl.with_columns(
-                pl.col("gene_integer_id")
-                .map_elements(lambda x: gene_id_to_name.get(x, f"gene_{x}"))
-                .alias("gene_id")
+                pl.col("gene_id").fill_null(
+                    pl.col("gene_integer_id")
+                    .cast(pl.Utf8)
+                    .map_elements(lambda x: f"gene_{x}", return_dtype=pl.Utf8)
+                )
             )
         else:
             # Fallback: use gene_integer_id as gene_id

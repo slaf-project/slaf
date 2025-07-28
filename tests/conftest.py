@@ -60,7 +60,9 @@ def sample_adata():
             }
         )
         .with_row_index("cell_id", offset=0)
-        .with_columns(pl.col("cell_id").map_elements(lambda x: f"cell_{x}"))
+        .with_columns(
+            pl.col("cell_id").map_elements(lambda x: f"cell_{x}", return_dtype=pl.Utf8)
+        )
     )
 
     # Create gene metadata using polars
@@ -78,7 +80,9 @@ def sample_adata():
             }
         )
         .with_row_index("gene_id", offset=0)
-        .with_columns(pl.col("gene_id").map_elements(lambda x: f"gene_{x}"))
+        .with_columns(
+            pl.col("gene_id").map_elements(lambda x: f"gene_{x}", return_dtype=pl.Utf8)
+        )
     )
 
     # Convert to pandas for AnnData compatibility
@@ -112,7 +116,9 @@ def small_sample_adata():
             }
         )
         .with_row_index("cell_id", offset=0)
-        .with_columns(pl.col("cell_id").map_elements(lambda x: f"cell_{x}"))
+        .with_columns(
+            pl.col("cell_id").map_elements(lambda x: f"cell_{x}", return_dtype=pl.Utf8)
+        )
     )
 
     # Create var (gene metadata) using polars
@@ -124,7 +130,11 @@ def small_sample_adata():
             }
         )
         .with_row_index("gene_id", offset=0)
-        .with_columns(pl.col("gene_id").map_elements(lambda x: f"ENSG_{x:08d}"))
+        .with_columns(
+            pl.col("gene_id").map_elements(
+                lambda x: f"ENSG_{x:08d}", return_dtype=pl.Utf8
+            )
+        )
     )
 
     # Convert to pandas for AnnData compatibility
@@ -162,7 +172,9 @@ def large_sample_adata():
             }
         )
         .with_row_index("cell_id", offset=0)
-        .with_columns(pl.col("cell_id").map_elements(lambda x: f"cell_{x}"))
+        .with_columns(
+            pl.col("cell_id").map_elements(lambda x: f"cell_{x}", return_dtype=pl.Utf8)
+        )
     )
 
     # Create var (gene metadata) using polars
@@ -176,7 +188,11 @@ def large_sample_adata():
             }
         )
         .with_row_index("gene_id", offset=0)
-        .with_columns(pl.col("gene_id").map_elements(lambda x: f"ENSG_{x:08d}"))
+        .with_columns(
+            pl.col("gene_id").map_elements(
+                lambda x: f"ENSG_{x:08d}", return_dtype=pl.Utf8
+            )
+        )
     )
 
     # Convert to pandas for AnnData compatibility
@@ -223,7 +239,9 @@ def tiny_adata():
             }
         )
         .with_row_index("cell_id", offset=0)
-        .with_columns(pl.col("cell_id").map_elements(lambda x: f"cell_{x}"))
+        .with_columns(
+            pl.col("cell_id").map_elements(lambda x: f"cell_{x}", return_dtype=pl.Utf8)
+        )
     )
 
     # Create var (gene metadata) using polars
@@ -236,7 +254,9 @@ def tiny_adata():
             }
         )
         .with_row_index("gene_id", offset=0)
-        .with_columns(pl.col("gene_id").map_elements(lambda x: f"gene_{x}"))
+        .with_columns(
+            pl.col("gene_id").map_elements(lambda x: f"gene_{x}", return_dtype=pl.Utf8)
+        )
     )
 
     # Convert to pandas for AnnData compatibility
@@ -283,7 +303,9 @@ def small_adata():
             }
         )
         .with_row_index("cell_id", offset=0)
-        .with_columns(pl.col("cell_id").map_elements(lambda x: f"cell_{x}"))
+        .with_columns(
+            pl.col("cell_id").map_elements(lambda x: f"cell_{x}", return_dtype=pl.Utf8)
+        )
     )
 
     # Create var (gene metadata) using polars
@@ -296,7 +318,9 @@ def small_adata():
             }
         )
         .with_row_index("gene_id", offset=0)
-        .with_columns(pl.col("gene_id").map_elements(lambda x: f"gene_{x}"))
+        .with_columns(
+            pl.col("gene_id").map_elements(lambda x: f"gene_{x}", return_dtype=pl.Utf8)
+        )
     )
 
     # Convert to pandas for AnnData compatibility

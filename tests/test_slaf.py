@@ -332,7 +332,11 @@ class TestSLAFArray:
                 }
             )
             .with_row_index("cell_id", offset=0)
-            .with_columns(pl.col("cell_id").map_elements(lambda x: f"cell_{x}"))
+            .with_columns(
+                pl.col("cell_id").map_elements(
+                    lambda x: f"cell_{x}", return_dtype=pl.Utf8
+                )
+            )
         )
 
         var = (
@@ -345,7 +349,11 @@ class TestSLAFArray:
                 }
             )
             .with_row_index("gene_id", offset=0)
-            .with_columns(pl.col("gene_id").map_elements(lambda x: f"gene_{x}"))
+            .with_columns(
+                pl.col("gene_id").map_elements(
+                    lambda x: f"gene_{x}", return_dtype=pl.Utf8
+                )
+            )
         )
 
         # Convert to pandas for AnnData compatibility
