@@ -64,16 +64,24 @@ class LazyPreprocessing:
         # Calculate cell-level metrics via SQL using simple aggregation (no JOINs)
         cell_qc_sql = """
         SELECT
-            c.cell_id,
+            e.cell_integer_id,
             COUNT(DISTINCT e.gene_integer_id) as n_genes_by_counts,
             SUM(e.value) as total_counts
         FROM expression e
-        JOIN cells c ON e.cell_integer_id = c.cell_integer_id
-        GROUP BY c.cell_id, c.cell_integer_id
-        ORDER BY c.cell_id
+        GROUP BY e.cell_integer_id
+        ORDER BY e.cell_integer_id
         """
 
         cell_qc = adata.slaf.query(cell_qc_sql)
+
+        # Map cell_integer_id to cell_id for scanpy compatibility
+        if hasattr(adata.slaf, "obs") and adata.slaf.obs is not None:
+            # Create mapping from cell_integer_id to cell names
+            cell_id_to_name = dict(enumerate(adata.slaf.obs.index))
+            cell_qc["cell_id"] = cell_qc["cell_integer_id"].map(cell_id_to_name)
+        else:
+            # Fallback: use cell_integer_id as cell_id
+            cell_qc["cell_id"] = cell_qc["cell_integer_id"].astype(str)
 
         # Add log1p transformed counts if requested
         if log1p:
@@ -83,13 +91,12 @@ class LazyPreprocessing:
         # Calculate gene-level metrics via SQL using simple aggregation (no JOINs)
         gene_qc_sql = """
         SELECT
-            g.gene_id,
+            e.gene_integer_id,
             COUNT(DISTINCT e.cell_integer_id) AS n_cells_by_counts,
             SUM(e.value) AS total_counts
         FROM expression e
-        JOIN genes g ON e.gene_integer_id = g.gene_integer_id
-        GROUP BY g.gene_id, g.gene_integer_id
-        ORDER BY g.gene_id
+        GROUP BY e.gene_integer_id
+        ORDER BY e.gene_integer_id
         """
 
         gene_qc = adata.slaf.query(gene_qc_sql)
@@ -97,21 +104,26 @@ class LazyPreprocessing:
         # For scanpy compatibility, we need to ensure all genes are present
         # Use in-memory var if available, otherwise fall back to SQL
         if hasattr(adata.slaf, "var") and adata.slaf.var is not None:
-            expected_genes = pd.DataFrame({"gene_id": adata.slaf.var.index})
+            # Use the materialized var metadata directly
+            expected_genes = pd.DataFrame(
+                {"gene_integer_id": range(len(adata.slaf.var))}
+            )
         else:
             expected_genes_sql = """
-            SELECT gene_id
+            SELECT gene_integer_id
             FROM genes
             ORDER BY gene_integer_id
             """
             expected_genes = adata.slaf.query(expected_genes_sql)
 
         # Create a complete gene_qc DataFrame with all expected genes
-        gene_qc_complete = pd.DataFrame({"gene_id": expected_genes["gene_id"]})
+        gene_qc_complete = pd.DataFrame(
+            {"gene_integer_id": expected_genes["gene_integer_id"]}
+        )
 
         # Merge with the calculated gene_qc to fill in missing genes with zeros
         gene_qc_complete = gene_qc_complete.merge(
-            gene_qc, on="gene_id", how="left"
+            gene_qc, on="gene_integer_id", how="left"
         ).fillna(0)
 
         # Ensure proper data types
@@ -121,6 +133,19 @@ class LazyPreprocessing:
         gene_qc_complete["total_counts"] = gene_qc_complete["total_counts"].astype(
             float
         )
+
+        # Map gene_integer_id to gene names for scanpy compatibility
+        if hasattr(adata.slaf, "var") and adata.slaf.var is not None:
+            # Create mapping from gene_integer_id to gene names
+            gene_id_to_name = dict(enumerate(adata.slaf.var.index))
+            gene_qc_complete["gene_id"] = gene_qc_complete["gene_integer_id"].map(
+                gene_id_to_name
+            )
+        else:
+            # Fallback: use gene_integer_id as gene_id
+            gene_qc_complete["gene_id"] = gene_qc_complete["gene_integer_id"].astype(
+                str
+            )
 
         # Set gene_id as index
         gene_qc_complete = gene_qc_complete.set_index("gene_id")
@@ -233,7 +258,7 @@ class LazyPreprocessing:
 
         # Get filtered cell IDs using simple aggregation (no JOINs)
         filter_sql = f"""
-        SELECT c.cell_id
+        SELECT cell_stats.cell_integer_id
         FROM (
             SELECT
                 e.cell_integer_id,
@@ -242,9 +267,8 @@ class LazyPreprocessing:
             FROM expression e
             GROUP BY e.cell_integer_id
         ) cell_stats
-        JOIN cells c ON cell_stats.cell_integer_id = c.cell_integer_id
         WHERE ({where_clause})
-        ORDER BY c.cell_id
+        ORDER BY cell_stats.cell_integer_id
         """
 
         filtered_cells = adata.slaf.query(filter_sql)
@@ -253,7 +277,18 @@ class LazyPreprocessing:
             raise ValueError("All cells were filtered out")
 
         # Create boolean mask from the filtered cell IDs
-        cell_mask = adata.obs_names.isin(filtered_cells["cell_id"])
+        # Use the materialized obs metadata to map cell_integer_id to cell names
+        if hasattr(adata.slaf, "obs") and adata.slaf.obs is not None:
+            # Create a mapping from cell_integer_id to cell names
+            cell_id_to_name = dict(enumerate(adata.slaf.obs.index))
+            filtered_cell_names = [
+                cell_id_to_name.get(cid, f"cell_{cid}")
+                for cid in filtered_cells["cell_integer_id"]
+            ]
+            cell_mask = adata.obs_names.isin(filtered_cell_names)
+        else:
+            # Fallback to using cell_integer_id directly
+            cell_mask = adata.obs_names.isin(filtered_cells["cell_integer_id"])
 
         if inplace:
             # Apply filter to adata (would need proper implementation)
@@ -347,7 +382,7 @@ class LazyPreprocessing:
 
         # Get filtered gene IDs using simple aggregation (no JOINs)
         filter_sql = f"""
-        SELECT g.gene_id
+        SELECT gene_stats.gene_integer_id
         FROM (
             SELECT
                 e.gene_integer_id,
@@ -356,9 +391,8 @@ class LazyPreprocessing:
             FROM expression e
             GROUP BY e.gene_integer_id
         ) gene_stats
-        JOIN genes g ON gene_stats.gene_integer_id = g.gene_integer_id
         WHERE {where_clause}
-        ORDER BY g.gene_id
+        ORDER BY gene_stats.gene_integer_id
         """
 
         filtered_genes = adata.slaf.query(filter_sql)
@@ -367,7 +401,18 @@ class LazyPreprocessing:
             raise ValueError("All genes were filtered out")
 
         # Create boolean mask from the filtered gene IDs
-        gene_mask = adata.var_names.isin(filtered_genes["gene_id"])
+        # Use the materialized var metadata to map gene_integer_id to gene names
+        if hasattr(adata.slaf, "var") and adata.slaf.var is not None:
+            # Create a mapping from gene_integer_id to gene names
+            gene_id_to_name = dict(enumerate(adata.slaf.var.index))
+            filtered_gene_names = [
+                gene_id_to_name.get(gid, f"gene_{gid}")
+                for gid in filtered_genes["gene_integer_id"]
+            ]
+            gene_mask = adata.var_names.isin(filtered_gene_names)
+        else:
+            # Fallback to using gene_integer_id directly
+            gene_mask = adata.var_names.isin(filtered_genes["gene_integer_id"])
 
         if inplace:
             # Apply filter to adata (would need proper implementation)
@@ -447,12 +492,10 @@ class LazyPreprocessing:
         # Get cell totals for normalization using only the expression table
         cell_totals_sql = """
         SELECT
-            c.cell_id,
-            SUM(e.value) as total_counts,
-            e.cell_integer_id
+            e.cell_integer_id,
+            SUM(e.value) as total_counts
         FROM expression e
-        JOIN cells c ON e.cell_integer_id = c.cell_integer_id
-        GROUP BY c.cell_id, e.cell_integer_id
+        GROUP BY e.cell_integer_id
         ORDER BY e.cell_integer_id
         """
 
@@ -467,10 +510,22 @@ class LazyPreprocessing:
             )
 
         # Create normalization factors
-        normalization_dict = {
-            row["cell_id"]: target_sum / row["total_counts"]
-            for _, row in cell_totals.iterrows()
-        }
+        # Map cell_integer_id to cell names for compatibility with anndata.py
+        if hasattr(adata.slaf, "obs") and adata.slaf.obs is not None:
+            # Create mapping from cell_integer_id to cell names
+            cell_id_to_name = dict(enumerate(adata.slaf.obs.index))
+            normalization_dict = {
+                cell_id_to_name.get(
+                    row["cell_integer_id"], f"cell_{row['cell_integer_id']}"
+                ): target_sum / row["total_counts"]
+                for _, row in cell_totals.iterrows()
+            }
+        else:
+            # Fallback: use cell_integer_id as string keys
+            normalization_dict = {
+                str(row["cell_integer_id"]): target_sum / row["total_counts"]
+                for _, row in cell_totals.iterrows()
+            }
 
         if inplace:
             # Store normalization factors for lazy application
@@ -479,7 +534,9 @@ class LazyPreprocessing:
 
             adata._transformations["normalize_total"] = {
                 "type": "normalize_total",
-                "target_sum": target_sum,
+                "target_sum": float(
+                    f"{target_sum:.10f}"
+                ),  # Convert to regular decimal format
                 "cell_factors": normalization_dict,
             }
 
@@ -493,7 +550,9 @@ class LazyPreprocessing:
 
             new_adata._transformations["normalize_total"] = {
                 "type": "normalize_total",
-                "target_sum": target_sum,
+                "target_sum": float(
+                    f"{target_sum:.10f}"
+                ),  # Convert to regular decimal format
                 "cell_factors": normalization_dict,
             }
 
@@ -618,37 +677,42 @@ class LazyPreprocessing:
         # Calculate gene statistics via SQL using simple aggregation (no JOINs)
         stats_sql = """
         SELECT
-            g.gene_id,
+            e.gene_integer_id,
             COUNT(DISTINCT e.cell_integer_id) AS n_cells,
             AVG(e.value) AS mean_expr,
             VARIANCE(e.value) AS variance,
             CASE WHEN AVG(e.value) > 0 THEN VARIANCE(e.value) / AVG(e.value) ELSE 0 END as dispersion
         FROM expression e
-        JOIN genes g ON e.gene_integer_id = g.gene_integer_id
-        GROUP BY g.gene_id, g.gene_integer_id
-        ORDER BY g.gene_id
+        GROUP BY e.gene_integer_id
+        ORDER BY e.gene_integer_id
         """
 
         gene_stats = adata.slaf.query(stats_sql)
 
-        # Get the expected gene_ids from genes table to ensure all genes are present
+        # Get the expected gene_integer_ids from the materialized var metadata
         # Use in-memory var if available, otherwise fall back to SQL
         if hasattr(adata.slaf, "var") and adata.slaf.var is not None:
-            expected_genes = pd.DataFrame({"gene_id": adata.slaf.var.index})
+            # Use the materialized var metadata directly
+            expected_genes = pd.DataFrame(
+                {"gene_integer_id": range(len(adata.slaf.var))}
+            )
         else:
+            # Fallback to SQL if var is not available
             expected_genes_sql = """
-            SELECT gene_id
+            SELECT gene_integer_id
             FROM genes
             ORDER BY gene_integer_id
             """
             expected_genes = adata.slaf.query(expected_genes_sql)
 
         # Create a complete gene_stats DataFrame with all expected genes
-        gene_stats_complete = pd.DataFrame({"gene_id": expected_genes["gene_id"]})
+        gene_stats_complete = pd.DataFrame(
+            {"gene_integer_id": expected_genes["gene_integer_id"]}
+        )
 
         # Merge with the calculated gene_stats to fill in missing genes with zeros
         gene_stats_complete = gene_stats_complete.merge(
-            gene_stats, on="gene_id", how="left"
+            gene_stats, on="gene_integer_id", how="left"
         ).fillna(0)
 
         # Ensure proper data types
@@ -661,7 +725,20 @@ class LazyPreprocessing:
             float
         )
 
-        # Set gene_id as index
+        # Map gene_integer_id to gene_id for scanpy compatibility
+        if hasattr(adata.slaf, "var") and adata.slaf.var is not None:
+            # Create mapping from gene_integer_id to gene names
+            gene_id_to_name = dict(enumerate(adata.slaf.var.index))
+            gene_stats_complete["gene_id"] = gene_stats_complete["gene_integer_id"].map(
+                gene_id_to_name
+            )
+        else:
+            # Fallback: use gene_integer_id as gene_id
+            gene_stats_complete["gene_id"] = gene_stats_complete[
+                "gene_integer_id"
+            ].astype(str)
+
+        # Set gene_id as index for scanpy compatibility
         gene_stats_complete = gene_stats_complete.set_index("gene_id")
 
         # Apply HVG criteria

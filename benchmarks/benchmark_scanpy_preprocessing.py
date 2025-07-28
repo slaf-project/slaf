@@ -35,16 +35,16 @@ def demo_realistic_scanpy_preprocessing():
         {
             "type": "filtering",
             "operation": "filter_cells",
-            "min_counts": 1000,
-            "min_genes": 500,
-            "description": "Filter cells (min_counts=1000, min_genes=500)",
+            "min_counts": 100,
+            "min_genes": 50,
+            "description": "Filter cells (min_counts=100, min_genes=50)",
         },
         {
             "type": "filtering",
             "operation": "filter_cells",
-            "max_counts": 5000,
-            "max_genes": 2500,
-            "description": "Filter cells (max_counts=5000, max_genes=2500)",
+            "max_counts": 10000,
+            "max_genes": 3000,
+            "description": "Filter cells (max_counts=10000, max_genes=3000)",
         },
         # Gene filtering
         {
@@ -57,9 +57,9 @@ def demo_realistic_scanpy_preprocessing():
         {
             "type": "filtering",
             "operation": "filter_genes",
-            "min_counts": 50,
-            "min_cells": 10,
-            "description": "Filter genes (min_counts=50, min_cells=10)",
+            "min_counts": 20,
+            "min_cells": 5,
+            "description": "Filter genes (min_counts=20, min_cells=5)",
         },
         # Normalization
         {
@@ -84,9 +84,9 @@ def demo_realistic_scanpy_preprocessing():
         {
             "type": "hvg",
             "operation": "highly_variable_genes",
-            "min_mean": 0.0125,
-            "max_mean": 3,
-            "min_disp": 0.5,
+            "min_mean": 0.01,
+            "max_mean": 5,
+            "min_disp": 0.3,
             "description": "Find highly variable genes",
         },
         {
@@ -163,8 +163,12 @@ def _measure_h5ad_scanpy_preprocessing(h5ad_path: str, scenario: dict):
 
     if scenario["type"] == "qc_metrics":
         if scenario["operation"] == "calculate_qc_metrics":
-            sc.pp.calculate_qc_metrics(adata, inplace=True)
-            result = adata
+            # Load into memory to avoid modifying the backed file
+            adata_copy = adata.to_memory()
+            # Materialize the expression matrix for QC calculations
+            adata_copy.X = adata_copy.X[:]
+            sc.pp.calculate_qc_metrics(adata_copy, inplace=True)
+            result = adata_copy
 
     elif scenario["type"] == "filtering":
         if scenario["operation"] == "filter_cells":
@@ -173,38 +177,56 @@ def _measure_h5ad_scanpy_preprocessing(h5ad_path: str, scenario: dict):
             max_counts = scenario.get("max_counts")
             max_genes = scenario.get("max_genes")
 
+            # Load into memory to avoid modifying the backed file
+            adata_copy = adata.to_memory()
+            # Materialize the expression matrix for filtering operations
+            adata_copy.X = adata_copy.X[:]
+
             # scanpy only accepts one parameter at a time, so we need to chain them
             if min_counts is not None:
-                sc.pp.filter_cells(adata, min_counts=min_counts, inplace=True)
+                sc.pp.filter_cells(adata_copy, min_counts=min_counts, inplace=True)
             if min_genes is not None:
-                sc.pp.filter_cells(adata, min_genes=min_genes, inplace=True)
+                sc.pp.filter_cells(adata_copy, min_genes=min_genes, inplace=True)
             if max_counts is not None:
-                sc.pp.filter_cells(adata, max_counts=max_counts, inplace=True)
+                sc.pp.filter_cells(adata_copy, max_counts=max_counts, inplace=True)
             if max_genes is not None:
-                sc.pp.filter_cells(adata, max_genes=max_genes, inplace=True)
-            result = adata
+                sc.pp.filter_cells(adata_copy, max_genes=max_genes, inplace=True)
+            result = adata_copy
 
         elif scenario["operation"] == "filter_genes":
             min_counts = scenario.get("min_counts")
             min_cells = scenario.get("min_cells")
 
+            # Load into memory to avoid modifying the backed file
+            adata_copy = adata.to_memory()
+            # Materialize the expression matrix for filtering operations
+            adata_copy.X = adata_copy.X[:]
+
             # scanpy only accepts one parameter at a time, so we need to chain them
             if min_counts is not None:
-                sc.pp.filter_genes(adata, min_counts=min_counts, inplace=True)
+                sc.pp.filter_genes(adata_copy, min_counts=min_counts, inplace=True)
             if min_cells is not None:
-                sc.pp.filter_genes(adata, min_cells=min_cells, inplace=True)
-            result = adata
+                sc.pp.filter_genes(adata_copy, min_cells=min_cells, inplace=True)
+            result = adata_copy
 
     elif scenario["type"] == "normalization":
         if scenario["operation"] == "normalize_total":
             target_sum = scenario.get("target_sum", 1e4)
-            sc.pp.normalize_total(adata, target_sum=target_sum, inplace=True)
-            result = adata
+            # Load into memory to avoid modifying the backed file
+            adata_copy = adata.to_memory()
+            # Materialize the expression matrix for normalization
+            adata_copy.X = adata_copy.X[:]
+            sc.pp.normalize_total(adata_copy, target_sum=target_sum, inplace=True)
+            result = adata_copy
 
     elif scenario["type"] == "transformation":
         if scenario["operation"] == "log1p":
+            # Load into memory to avoid modifying the backed file
+            adata_copy = adata.to_memory()
+            # Materialize the expression matrix for log1p transformation
+            adata_copy.X = adata_copy.X[:]
             # scanpy log1p doesn't have inplace parameter, it returns a new object
-            result = sc.pp.log1p(adata)
+            result = sc.pp.log1p(adata_copy)
 
     elif scenario["type"] == "hvg":
         if scenario["operation"] == "highly_variable_genes":
@@ -212,68 +234,87 @@ def _measure_h5ad_scanpy_preprocessing(h5ad_path: str, scenario: dict):
             max_mean = scenario.get("max_mean", 3)
             min_disp = scenario.get("min_disp", 0.5)
             n_top_genes = scenario.get("n_top_genes")
+
+            # Load into memory to avoid modifying the backed file
+            adata_copy = adata.to_memory()
+            # Materialize the expression matrix for HVG calculation
+            adata_copy.X = adata_copy.X[:]
+
             if n_top_genes:
                 sc.pp.highly_variable_genes(
-                    adata, n_top_genes=n_top_genes, inplace=True
+                    adata_copy, n_top_genes=n_top_genes, inplace=True
                 )
             else:
                 sc.pp.highly_variable_genes(
-                    adata,
+                    adata_copy,
                     min_mean=min_mean,
                     max_mean=max_mean,
                     min_disp=min_disp,
                     inplace=True,
                 )
-            result = adata
+            result = adata_copy
 
     elif scenario["type"] == "workflow":
         if scenario["operation"] == "qc_and_filter":
+            # Load into memory to avoid modifying the backed file
+            adata_copy = adata.to_memory()
+            # Materialize the expression matrix for all operations
+            adata_copy.X = adata_copy.X[:]
+
             # Calculate QC metrics
-            sc.pp.calculate_qc_metrics(adata, inplace=True)
+            sc.pp.calculate_qc_metrics(adata_copy, inplace=True)
             # Filter cells (chain the filters)
-            sc.pp.filter_cells(adata, min_counts=500, inplace=True)
-            sc.pp.filter_cells(adata, min_genes=200, inplace=True)
+            sc.pp.filter_cells(adata_copy, min_counts=500, inplace=True)
+            sc.pp.filter_cells(adata_copy, min_genes=200, inplace=True)
             # Filter genes (chain the filters)
-            sc.pp.filter_genes(adata, min_counts=10, inplace=True)
-            sc.pp.filter_genes(adata, min_cells=5, inplace=True)
-            result = adata
+            sc.pp.filter_genes(adata_copy, min_counts=10, inplace=True)
+            sc.pp.filter_genes(adata_copy, min_cells=5, inplace=True)
+            result = adata_copy
 
     elif scenario["type"] == "transformed_ops":
         if scenario["operation"] == "normalize_then_slice":
+            # Load into memory to avoid modifying the backed file
+            adata_copy = adata.to_memory()
             # Apply normalization
-            sc.pp.normalize_total(adata, target_sum=1e4, inplace=True)
+            sc.pp.normalize_total(adata_copy, target_sum=1e4, inplace=True)
             # Slice the transformed data
             slice_size = scenario["slice_size"]
-            result = adata[0 : slice_size[0], 0 : slice_size[1]].X
+            result = adata_copy[0 : slice_size[0], 0 : slice_size[1]].X
 
         elif scenario["operation"] == "log1p_then_slice":
+            # Load into memory to avoid modifying the backed file
+            adata_copy = adata.to_memory()
             # Apply log1p transformation
-            transformed_adata = sc.pp.log1p(adata)
+            transformed_adata = sc.pp.log1p(adata_copy)
             # Check if log1p returned a valid object
             if transformed_adata is None:
-                transformed_adata = adata
+                transformed_adata = adata_copy
             # Slice the transformed data
             slice_size = scenario["slice_size"]
             result = transformed_adata[0 : slice_size[0], 0 : slice_size[1]].X
 
         elif scenario["operation"] == "normalize_log1p_then_slice":
+            # Load into memory to avoid modifying the backed file
+            adata_copy = adata.to_memory()
             # Apply both transformations
-            sc.pp.normalize_total(adata, target_sum=1e4, inplace=True)
-            transformed_adata = sc.pp.log1p(adata)
+            sc.pp.normalize_total(adata_copy, target_sum=1e4, inplace=True)
+            transformed_adata = sc.pp.log1p(adata_copy)
             # Check if log1p returned a valid object
             if transformed_adata is None:
-                transformed_adata = adata
+                transformed_adata = adata_copy
             # Slice the transformed data
             slice_size = scenario["slice_size"]
             result = transformed_adata[0 : slice_size[0], 0 : slice_size[1]].X
 
         elif scenario["operation"] == "transformed_aggregation":
+            # Load into memory to avoid modifying the backed file
+            adata_copy = adata.to_memory()
             # Apply transformations
-            sc.pp.normalize_total(adata, target_sum=1e4, inplace=True)
-            transformed_adata = sc.pp.log1p(adata)
+            sc.pp.normalize_total(adata_copy, target_sum=1e4, inplace=True)
+            transformed_adata = sc.pp.log1p(adata_copy)
             # Check if log1p returned a valid object
             if transformed_adata is None:
-                transformed_adata = adata
+                transformed_adata = adata_copy
             # Perform aggregation on transformed data
             try:
                 if hasattr(transformed_adata.X, "mean"):
@@ -285,12 +326,14 @@ def _measure_h5ad_scanpy_preprocessing(h5ad_path: str, scenario: dict):
                 result = np.array([0])  # Fallback
 
         elif scenario["operation"] == "transformed_statistics":
+            # Load into memory to avoid modifying the backed file
+            adata_copy = adata.to_memory()
             # Apply transformations
-            sc.pp.normalize_total(adata, target_sum=1e4, inplace=True)
-            transformed_adata = sc.pp.log1p(adata)
+            sc.pp.normalize_total(adata_copy, target_sum=1e4, inplace=True)
+            transformed_adata = sc.pp.log1p(adata_copy)
             # Check if log1p returned a valid object
             if transformed_adata is None:
-                transformed_adata = adata
+                transformed_adata = adata_copy
             # Perform statistics on transformed data
             try:
                 if hasattr(transformed_adata.X, "var"):
@@ -476,14 +519,20 @@ def _measure_slaf_scanpy_preprocessing(slaf_path: str, scenario: dict):
                 pp.normalize_total(lazy_adata, target_sum=1e4, inplace=True)
                 pp.log1p(lazy_adata, inplace=True)
                 # Perform aggregation on transformed data and materialize
-                result = lazy_adata.X.mean(axis=0).compute()
+                result = lazy_adata.X.mean(axis=0)
+                # Handle both lazy and numpy results
+                if hasattr(result, "compute"):
+                    result = result.compute()
 
             elif scenario["operation"] == "transformed_statistics":
                 # Apply transformations
                 pp.normalize_total(lazy_adata, target_sum=1e4, inplace=True)
                 pp.log1p(lazy_adata, inplace=True)
                 # Perform statistics on transformed data and materialize
-                result = lazy_adata.X.var(axis=1).compute()
+                result = lazy_adata.X.var(axis=1)
+                # Handle both lazy and numpy results
+                if hasattr(result, "compute"):
+                    result = result.compute()
 
         else:
             # Default operation

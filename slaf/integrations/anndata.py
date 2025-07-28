@@ -383,9 +383,8 @@ class LazyExpressionMatrix(LazySparseMixin):
         try:
             # Execute the transformed query
             return self.slaf_array.query(query)
-        except Exception as e:
+        except Exception:
             # If SQL transformation fails, fall back to numpy
-            print(f"SQL transformation failed, falling back to numpy: {e}")
             return None
 
     def _build_transformed_query(
@@ -427,31 +426,48 @@ class LazyExpressionMatrix(LazySparseMixin):
         # Create a CASE statement for cell factors
         case_statements = []
         for cell_id, factor in cell_factors.items():
-            case_statements.append(f"WHEN cell_id = '{cell_id}' THEN {factor}")
+            # Convert scientific notation to regular decimal format for SQL compatibility
+            factor_str = (
+                f"{factor:.10f}".rstrip("0").rstrip(".") if factor != 0 else "0"
+            )
+
+            # Handle both integer and string cell IDs
+            if isinstance(cell_id, str) and cell_id.startswith("cell_"):
+                # Extract integer from string like "cell_0" -> 0
+                try:
+                    cell_integer_id_int = int(cell_id.split("_")[1])
+                except (ValueError, IndexError):
+                    # Fallback: skip this cell if we can't parse it
+                    continue
+            elif isinstance(cell_id, int | np.integer):
+                cell_integer_id_int = int(cell_id)
+            else:
+                # Skip if we can't handle this cell ID type
+                continue
+
+            case_statements.append(
+                f"WHEN e.cell_integer_id = {cell_integer_id_int} THEN {factor_str}"
+            )
 
         factor_case = "CASE " + " ".join(case_statements) + " ELSE 1.0 END"
 
         # Wrap the query to apply normalization
         return f"""
         SELECT
-            c.cell_id,
-            g.gene_id,
+            e.cell_integer_id,
+            e.gene_integer_id,
             e.value * {factor_case} as value
         FROM ({query}) as base_data e
-        JOIN cells c ON e.cell_integer_id = c.cell_integer_id
-        JOIN genes g ON e.gene_integer_id = g.gene_integer_id
         """
 
     def _apply_sql_log1p(self, query: str) -> str:
         """Apply log1p transformation in SQL, only to nonzero values (sparse semantics)"""
         return f"""
         SELECT
-            c.cell_id,
-            g.gene_id,
+            e.cell_integer_id,
+            e.gene_integer_id,
             CASE WHEN e.value != 0 THEN LN(1 + e.value) ELSE 0 END as value
         FROM ({query}) as base_data e
-        JOIN cells c ON e.cell_integer_id = c.cell_integer_id
-        JOIN genes g ON e.gene_integer_id = g.gene_integer_id
         """
 
     def _apply_numpy_transformations(

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# type: ignore
 """SLAF Command Line Interface."""
 
 import importlib.util
@@ -636,7 +637,7 @@ def query(
 
 
 @app.command()
-def benchmark(
+def benchmark(  # type: ignore[misc, assignment, attr-defined]
     action: str = typer.Argument(
         ...,
         help="Action to perform: run, summary, docs, or all",
@@ -697,42 +698,13 @@ def benchmark(
       slaf benchmark all --datasets pbmc3k --auto-convert
     """
 
-    # Temporarily disabled until benchmark module is refactored
-    typer.echo("❌ Benchmark command is temporarily disabled")
-    typer.echo("   The benchmark module needs to be refactored into a proper module")
-    typer.echo("   before this command can be used.")
-    raise typer.Exit(1)
-    r"""
-    Manage SLAF benchmarks and performance testing.
-
-    Actions:
-      run     - Run benchmarks on specified datasets
-      summary - Generate documentation summary from results
-      docs    - Update performance.md with benchmark data
-      all     - Run complete workflow (benchmarks + summary + docs)
-
-    Examples:
-      slaf benchmark run --datasets pbmc3k --auto-convert
-      slaf benchmark summary --results comprehensive_benchmark_results.json
-      slaf benchmark docs --summary benchmark_summary.json
-      slaf benchmark all --datasets pbmc3k --auto-convert
-    """
-
     # Import benchmark functions
     try:
-        import sys
-        from pathlib import Path
-
-        # Add benchmarks directory to path
-        benchmarks_dir = Path(__file__).parent.parent / "benchmarks"
-        if benchmarks_dir.exists():
-            sys.path.insert(0, str(benchmarks_dir))
-
-        from benchmark import (
+        from benchmarks import (
             generate_benchmark_summary,
             run_benchmark_suite,
             update_performance_docs,
-        )  # type: ignore
+        )
     except ImportError as e:
         typer.echo(f"❌ Failed to import benchmark modules: {e}")
         typer.echo("Make sure you're in the project root directory")
@@ -752,19 +724,40 @@ def benchmark(
             typer.echo(f"\n🎯 Benchmarking dataset: {dataset_name}")
             typer.echo("=" * 60)
 
-            # Find dataset files
-            h5ad_pattern = f"{dataset_name}*.h5ad"
-            h5ad_files = list(data_path.glob(h5ad_pattern))
+            # Check if dataset is already a SLAF file
+            if dataset_name.endswith(".slaf"):
+                slaf_path = Path(dataset_name)
+                if not slaf_path.exists():
+                    typer.echo(f"❌ SLAF file not found: {dataset_name}")
+                    continue
 
-            if not h5ad_files:
-                typer.echo(f"❌ No h5ad file found for {dataset_name}")
-                typer.echo(f"   Looking for: {data_path / h5ad_pattern}")
-                continue
+                # For SLAF files, we need to find the corresponding h5ad file
+                # or create a dummy path for comparison
+                h5ad_path = slaf_path.with_suffix(".h5ad")
+                if not h5ad_path.exists():
+                    typer.echo(
+                        f"⚠️  No corresponding h5ad file found for {dataset_name}"
+                    )
+                    typer.echo("   SLAF-only benchmarking may have limited comparisons")
+                    h5ad_path = None
+            else:
+                # Find dataset files
+                h5ad_pattern = f"{dataset_name}*.h5ad"
+                h5ad_files = list(data_path.glob(h5ad_pattern))
 
-            h5ad_path = h5ad_files[0]
-            slaf_path = data_path / f"{dataset_name}.slaf"
+                if not h5ad_files:
+                    typer.echo(f"❌ No h5ad file found for {dataset_name}")
+                    typer.echo(f"   Looking for: {data_path / h5ad_pattern}")
+                    continue
+
+                h5ad_path = h5ad_files[0]
+                slaf_path = data_path / f"{dataset_name}.slaf"
 
             # Run benchmark suite for this dataset
+            if h5ad_path is None:
+                typer.echo("⚠️  Skipping benchmarks that require h5ad comparison")
+                continue
+
             dataset_results = run_benchmark_suite(
                 h5ad_path=str(h5ad_path),
                 slaf_path=str(slaf_path),
@@ -786,7 +779,8 @@ def benchmark(
             json_results: dict[str, Any] = {}
             for dataset, results in all_dataset_results.items():
                 json_results[dataset] = {}
-                for benchmark_type, type_results in results.items():
+                for benchmark_type, type_results in results.items():  # type: ignore
+                    # type_results can be either list[dict] or dict depending on benchmark type
                     if benchmark_type == "data_vs_tokenization_timing":
                         # Handle timing breakdown results (dictionary format)
                         json_results[dataset][benchmark_type] = {}
@@ -861,19 +855,40 @@ def benchmark(
             typer.echo(f"\n🎯 Benchmarking dataset: {dataset_name}")
             typer.echo("=" * 60)
 
-            # Find dataset files
-            h5ad_pattern = f"{dataset_name}*.h5ad"
-            h5ad_files = list(data_path.glob(h5ad_pattern))
+            # Check if dataset is already a SLAF file
+            if dataset_name.endswith(".slaf"):
+                slaf_path = Path(dataset_name)
+                if not slaf_path.exists():
+                    typer.echo(f"❌ SLAF file not found: {dataset_name}")
+                    continue
 
-            if not h5ad_files:
-                typer.echo(f"❌ No h5ad file found for {dataset_name}")
-                typer.echo(f"   Looking for: {data_path / h5ad_pattern}")
-                continue
+                # For SLAF files, we need to find the corresponding h5ad file
+                # or create a dummy path for comparison
+                h5ad_path = slaf_path.with_suffix(".h5ad")
+                if not h5ad_path.exists():
+                    typer.echo(
+                        f"⚠️  No corresponding h5ad file found for {dataset_name}"
+                    )
+                    typer.echo("   SLAF-only benchmarking may have limited comparisons")
+                    h5ad_path = None
+            else:
+                # Find dataset files
+                h5ad_pattern = f"{dataset_name}*.h5ad"
+                h5ad_files = list(data_path.glob(h5ad_pattern))
 
-            h5ad_path = h5ad_files[0]
-            slaf_path = data_path / f"{dataset_name}.slaf"
+                if not h5ad_files:
+                    typer.echo(f"❌ No h5ad file found for {dataset_name}")
+                    typer.echo(f"   Looking for: {data_path / h5ad_pattern}")
+                    continue
+
+                h5ad_path = h5ad_files[0]
+                slaf_path = data_path / f"{dataset_name}.slaf"
 
             # Run benchmark suite for this dataset
+            if h5ad_path is None:
+                typer.echo("⚠️  Skipping benchmarks that require h5ad comparison")
+                continue
+
             dataset_results = run_benchmark_suite(
                 h5ad_path=str(h5ad_path),
                 slaf_path=str(slaf_path),
@@ -895,7 +910,7 @@ def benchmark(
             json_results = {}
             for dataset, results in all_dataset_results.items():
                 json_results[dataset] = {}
-                for benchmark_type, type_results in results.items():
+                for benchmark_type, type_results in results.items():  # type: ignore
                     if benchmark_type == "data_vs_tokenization_timing":
                         # Handle timing breakdown results (dictionary format)
                         json_results[dataset][benchmark_type] = {}

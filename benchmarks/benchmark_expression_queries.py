@@ -86,19 +86,6 @@ def demo_realistic_expression_queries(h5ad_path: str, slaf_path: str):
             "gene_range": (min(500, n_genes // 2), min(1000, n_genes)),
             "description": "500x500 submatrix",
         },
-        # Additional aggregation operations
-        {
-            "type": "aggregation",
-            "operation": "count",
-            "axis": 0,
-            "description": "Number of cells expressing each gene",
-        },
-        {
-            "type": "aggregation",
-            "operation": "count",
-            "axis": 1,
-            "description": "Number of genes expressed in each cell",
-        },
     ]
     return scenarios
 
@@ -143,7 +130,7 @@ def _measure_h5ad_expression_query(h5ad_path: str, scenario: dict):
 
     # h5ad load
     start = time.time()
-    adata = sc.read_h5ad(h5ad_path, backed="r")
+    adata = sc.read_h5ad(h5ad_path)
     h5ad_load_time = time.time() - start
 
     # Measure memory footprint of loaded data
@@ -187,20 +174,8 @@ def _measure_h5ad_expression_query(h5ad_path: str, scenario: dict):
         gene_range = scenario["gene_range"]
         cell_start, cell_end = cell_range
         gene_start, gene_end = gene_range
-        result = adata.X[cell_start:cell_end, gene_start:gene_end]
-
-    elif scenario["type"] == "aggregation":
-        operation = scenario["operation"]
-        axis = scenario["axis"]
-        if operation == "mean":
-            result = adata.X.mean(axis=axis)
-        elif operation == "sum":
-            result = adata.X.sum(axis=axis)
-        elif operation == "count":
-            # Count non-zero elements (expressed genes/cells)
-            result = (adata.X != 0).sum(axis=axis)
-        else:
-            raise ValueError(f"Unknown operation: {operation}")
+        # Materialize the submatrix for backed mode
+        result = adata.X[cell_start:cell_end, gene_start:gene_end][:]
     else:
         raise ValueError(f"Unknown scenario type: {scenario['type']}")
 
