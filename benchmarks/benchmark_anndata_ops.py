@@ -204,12 +204,12 @@ def _measure_slaf_anndata_op(slaf_path: str, scenario: dict):
         if scenario["operation"] == "single_cell":
             cell_id = scenario["cell_id"]
             # Convert integer index to cell ID string
-            cell_ids = slaf.obs.index[cell_id : cell_id + 1].tolist()
+            cell_ids = slaf.obs["cell_id"].to_list()[cell_id : cell_id + 1]
             result = slaf.get_cell_expression(cell_ids[0])
         elif scenario["operation"] == "single_gene":
             gene_id = scenario["gene_id"]
             # Convert integer index to gene ID string
-            gene_ids = slaf.var.index[gene_id : gene_id + 1].tolist()
+            gene_ids = slaf.var["gene_id"].to_list()[gene_id : gene_id + 1]
             result = slaf.get_gene_expression(gene_ids[0])
         elif scenario["operation"] == "submatrix":
             cell_start, cell_end = scenario["cell_range"]
@@ -239,13 +239,13 @@ def _measure_slaf_anndata_op(slaf_path: str, scenario: dict):
             nnz_result = slaf.query(
                 "SELECT COUNT(*) as nnz FROM expression WHERE value > 0"
             )
-            result = nnz_result.iloc[0]["nnz"]
+            result = nnz_result.item(0, "nnz")
         elif scenario["operation"] == "density":
             # Count non-zero elements and calculate density
             nnz_result = slaf.query(
                 "SELECT COUNT(*) as nnz FROM expression WHERE value > 0"
             )
-            nnz = nnz_result.iloc[0]["nnz"]
+            nnz = nnz_result.item(0, "nnz")
             shape = slaf.shape
             result = nnz / (shape[0] * shape[1])
     else:

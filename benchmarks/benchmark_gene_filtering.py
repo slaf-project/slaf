@@ -1,5 +1,6 @@
 import time
 
+import polars as pl
 import scanpy as sc
 from benchmark_utils import clear_caches, get_object_memory_usage, get_slaf_memory_usage
 
@@ -65,8 +66,8 @@ def demo_realistic_gene_queries():
             "h5ad_code": lambda adata: adata.var[
                 (adata.var.total_counts >= 100) & (adata.var.total_counts <= 10000)
             ],
-            "slaf_code": lambda slaf: slaf.filter_genes(total_counts=">=100").query(
-                "total_counts <= 10000"
+            "slaf_code": lambda slaf: slaf.filter_genes(total_counts=">=100").filter(
+                pl.col("total_counts") <= 10000
             ),
         },
         {
@@ -76,8 +77,8 @@ def demo_realistic_gene_queries():
                 (adata.var.n_cells_by_counts >= 5)
                 & (adata.var.n_cells_by_counts <= 1000)
             ],
-            "slaf_code": lambda slaf: slaf.filter_genes(n_cells_by_counts=">=5").query(
-                "n_cells_by_counts <= 1000"
+            "slaf_code": lambda slaf: slaf.filter_genes(n_cells_by_counts=">=5").filter(
+                pl.col("n_cells_by_counts") <= 1000
             ),
         },
     ]

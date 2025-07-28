@@ -1,5 +1,6 @@
 import time
 
+import polars as pl
 import scanpy as sc
 
 # Import shared utilities
@@ -84,8 +85,8 @@ def demo_realistic_cell_queries():
             "h5ad_code": lambda adata: adata.obs[
                 (adata.obs.total_counts >= 800) & (adata.obs.total_counts <= 2000)
             ],
-            "slaf_code": lambda slaf: slaf.filter_cells(total_counts=">=800").query(
-                "total_counts <= 2000"
+            "slaf_code": lambda slaf: slaf.filter_cells(total_counts=">=800").filter(
+                pl.col("total_counts") <= 2000
             ),
         },
         {
@@ -97,7 +98,7 @@ def demo_realistic_cell_queries():
             ],
             "slaf_code": lambda slaf: slaf.filter_cells(
                 n_genes_by_counts=">=200"
-            ).query("n_genes_by_counts <= 1500"),
+            ).filter(pl.col("n_genes_by_counts") <= 1500),
         },
     ]
     return scenarios

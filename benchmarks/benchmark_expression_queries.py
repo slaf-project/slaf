@@ -1,8 +1,7 @@
-import sys
 import time
 
 import scanpy as sc
-from benchmark_utils import get_slaf_memory_usage
+from benchmark_utils import get_object_memory_usage, get_slaf_memory_usage
 
 from slaf.core.slaf import SLAFArray
 
@@ -16,8 +15,8 @@ def demo_realistic_expression_queries(h5ad_path: str, slaf_path: str):
     slaf = SLAFArray(slaf_path)
 
     # Query cells and genes tables for IDs
-    sample_cell_ids = slaf.obs.index[:5].tolist()
-    sample_gene_ids = slaf.var.index[:5].tolist()
+    sample_cell_ids = slaf.obs["cell_id"].to_list()[:5]
+    sample_gene_ids = slaf.var["gene_id"].to_list()[:5]
 
     # Get dataset dimensions for submatrix scenarios
     n_cells, n_genes = slaf.shape
@@ -88,27 +87,6 @@ def demo_realistic_expression_queries(h5ad_path: str, slaf_path: str):
         },
     ]
     return scenarios
-
-
-def get_object_memory_usage(obj):
-    """Get memory usage of a Python object in MB"""
-    # For pandas objects with memory_usage method
-    if hasattr(obj, "memory_usage"):
-        memory_usage = obj.memory_usage(deep=True)
-        if hasattr(memory_usage, "sum"):  # If it's a Series, sum it
-            return memory_usage.sum() / 1024 / 1024
-        else:  # If it's already a scalar
-            return memory_usage / 1024 / 1024
-    # For numpy arrays and similar
-    elif hasattr(obj, "nbytes"):
-        return obj.nbytes / 1024 / 1024
-    # For sparse matrices, use comprehensive size calculation
-    elif hasattr(obj, "getnnz"):
-        total_bytes = get_sparse_matrix_size(obj)
-        return total_bytes / 1024 / 1024
-    else:
-        # Fallback to sys.getsizeof
-        return sys.getsizeof(obj) / 1024 / 1024
 
 
 def get_sparse_matrix_size(sparse_matrix):

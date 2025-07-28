@@ -14,6 +14,13 @@ def get_object_memory_usage(obj):
             return memory_usage.sum() / 1024 / 1024
         else:  # If it's already a scalar
             return memory_usage / 1024 / 1024
+    # For polars DataFrames - estimate memory usage based on data types and shape
+    elif hasattr(obj, "estimated_size") and hasattr(obj, "shape"):
+        # Use polars' built-in size estimation
+        return obj.estimated_size() / 1024 / 1024
+    # For polars Series - estimate based on data type and length
+    elif hasattr(obj, "estimated_size") and hasattr(obj, "len"):
+        return obj.estimated_size() / 1024 / 1024
     # For numpy arrays and similar
     elif hasattr(obj, "nbytes"):
         return obj.nbytes / 1024 / 1024
@@ -228,7 +235,14 @@ def _print_rich_table(
             else:
                 mem_efficiency_text = f"[red]{mem_efficiency_text}[/red]"
         elif h5ad_total_memory > 0.01:  # h5ad used memory but SLAF didn't
-            mem_efficiency_text = "[green]>100x[/green]"  # SLAF is much more efficient
+            # Calculate a more realistic efficiency ratio
+            mem_efficiency = h5ad_total_memory / 0.01  # Assume SLAF used ~0.01 MB
+            if mem_efficiency > 100:
+                mem_efficiency_text = (
+                    "[green]>100x[/green]"  # SLAF is much more efficient
+                )
+            else:
+                mem_efficiency_text = f"[green]{mem_efficiency:.1f}x[/green]"
         else:  # Both used negligible memory
             mem_efficiency_text = "~1x"
 
