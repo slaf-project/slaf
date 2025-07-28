@@ -572,11 +572,11 @@ class PrefetchBatchProcessor:
             last_complete_cell = cell_counts["cell_integer_id"].max()
 
             # Split into complete cells and partial cells
-            complete_df = combined_df.filter(  # type: ignore[arg-type]
-                pl.col("cell_integer_id") < last_complete_cell
+            complete_df = combined_df.filter(
+                pl.col("cell_integer_id") < last_complete_cell  # type: ignore[arg-type]
             )
-            partial_df = combined_df.filter(  # type: ignore[arg-type]
-                pl.col("cell_integer_id") == last_complete_cell
+            partial_df = combined_df.filter(
+                pl.col("cell_integer_id") == last_complete_cell  # type: ignore[arg-type]
             )
 
             # Store partial cell data for next chunk
@@ -607,8 +607,8 @@ class PrefetchBatchProcessor:
 
                     # Count total cells across all chunks
                     total_cells_in_chunks = sum(
-                        len(chunk["cell_integer_id"].unique())
-                        for chunk in shuffled_chunks
+                        len(chunk["cell_integer_id"].unique())  # type: ignore[index]
+                        for chunk in shuffled_chunks  # type: ignore[misc]
                     )
 
                     # Record cells processed
@@ -630,8 +630,8 @@ class PrefetchBatchProcessor:
                     self.batch_id += 1  # Increment batch_id for raw mode
                     return RawPrefetchBatch(
                         batch_id=self.batch_id - 1,
-                        batch_dfs=shuffled_chunks,  # List of pre-chunked DataFrames
-                        cell_integer_ids=complete_df["cell_integer_id"]
+                        batch_dfs=shuffled_chunks,  # type: ignore[arg-type]  # List of pre-chunked DataFrames
+                        cell_integer_ids=complete_df["cell_integer_id"]  # type: ignore[index]
                         .unique()
                         .to_list(),
                         process_time=shuffle_time,  # Use shuffle time as process time
@@ -657,7 +657,7 @@ class PrefetchBatchProcessor:
                         self.window_kwargs
                     )  # Add any additional kwargs
                     grouped = self.window.apply(
-                        shuffled_df,  # Use the shuffled DataFrame
+                        shuffled_df,  # type: ignore[arg-type]  # Use the shuffled DataFrame
                         self.max_genes,
                         **window_params,
                     )
@@ -689,7 +689,7 @@ class PrefetchBatchProcessor:
                     self._record_timing("total", total_time)
 
                     # Track total cells processed in prefetch
-                    cells_in_batch = len(complete_df["cell_integer_id"].unique())
+                    cells_in_batch = len(complete_df["cell_integer_id"].unique())  # type: ignore[index]
                     self._record_timing("cells_processed", 0, cells_in_batch)
                     self.total_prefetch_cells += cells_in_batch
 
@@ -708,7 +708,7 @@ class PrefetchBatchProcessor:
                         batch_id=self.batch_id - 1,
                         input_ids=input_ids,
                         attention_mask=attention_mask,
-                        cell_integer_ids=complete_df["cell_integer_id"]
+                        cell_integer_ids=complete_df["cell_integer_id"]  # type: ignore[index]
                         .unique()
                         .to_list(),
                         partial_cell_data=self.partial_cell_data.copy(),

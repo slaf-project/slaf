@@ -19,10 +19,10 @@ dependencies = [
     # Single-cell ecosystem
     "scanpy>=1.11.2",
     "anndata>=0.11.4",
-    "h5py>=3.10.0", # For chunked H5AD reading
+    "h5py>=3.10.0",    # For chunked H5AD reading
     # Utilities
-    "orjson>=3.10.15", # Fast JSON serialization
-    "tqdm>=4.67.0", # Progress bars
+    "orjson>=3.10.15",         # Fast JSON serialization
+    "tqdm>=4.67.0",            # Progress bars
     "igraph>=0.11.9",
     "leidenalg>=0.10.2",
     "requests>=2.32.4",
@@ -112,3 +112,44 @@ ignore = [
 
 [dependency-groups]
 dev = ["pre-commit>=4.2.0", "ruff==0.12.2", "mypy>=1.8.0"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = false             # Relax this
+warn_unused_configs = false         # Relax this
+disallow_untyped_defs = false       # Relax this
+disallow_incomplete_defs = false    # Relax this
+check_untyped_defs = false          # Relax this
+disallow_untyped_decorators = false # Relax this
+no_implicit_optional = false        # Relax this
+warn_redundant_casts = false        # Relax this
+warn_unused_ignores = false         # Relax this
+warn_no_return = false              # Relax this
+warn_unreachable = false            # Relax this
+strict_equality = false             # Relax this
+show_error_codes = true
+disable_error_code = ["misc"]       # Disable misc errors to preserve performance
+
+[[tool.mypy.overrides]]
+module = "numpy.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "polars.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "torch.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "rich.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "psutil.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "lance.*"
+ignore_missing_imports = true

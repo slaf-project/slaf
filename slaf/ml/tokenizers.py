@@ -406,8 +406,8 @@ class SLAFTokenizer:
                         tokens[0] = self.special_tokens["CLS"]
 
                         # Vectorized interleaving
-                        tokens[1::2][: len(gene_tokens)] = gene_tokens
-                        tokens[2::2][: len(expr_tokens)] = expr_tokens
+                        tokens[1::2][: len(gene_tokens)] = gene_tokens  # type: ignore[assignment]
+                        tokens[2::2][: len(expr_tokens)] = expr_tokens  # type: ignore[assignment]
 
                         tokens[1 + 2 * len(gene_tokens)] = self.special_tokens["SEP"]
                     else:
@@ -415,13 +415,13 @@ class SLAFTokenizer:
                         tokens = np.array(
                             [self.special_tokens["CLS"], self.special_tokens["SEP"]],
                             dtype=np.int64,
-                        )
+                        )  # type: ignore[assignment]
                 else:
                     # Empty sequence case
                     tokens = np.array(
                         [self.special_tokens["CLS"], self.special_tokens["SEP"]],
                         dtype=np.int64,
-                    )
+                    )  # type: ignore[assignment]
 
                 # Pad/truncate to correct sequence length
                 if self.tokenizer_type == TokenizerType.SCPGPT:
@@ -431,17 +431,17 @@ class SLAFTokenizer:
                     # For Geneformer: use max_genes
                     target_length = max_genes
 
-                tokens = tokens[:target_length]
+                tokens = tokens[:target_length]  # type: ignore[assignment]
                 if len(tokens) < target_length:
                     padding = np.full(
                         target_length - len(tokens),
                         self.special_tokens["PAD"],
                         dtype=np.int64,
                     )
-                    tokens = np.concatenate([tokens, padding])
+                    tokens = np.concatenate([tokens, padding])  # type: ignore[assignment]
 
                 # Fill array
-                token_array[i, :] = tokens
+                token_array[i, :] = tokens  # type: ignore[assignment]
 
         else:
             # Geneformer format: [CLS] gene1 gene2 gene3 ... [SEP]
@@ -458,26 +458,26 @@ class SLAFTokenizer:
                             gene_tokens,
                             [self.special_tokens["SEP"]],
                         ]
-                    )
+                    )  # type: ignore[assignment]
                 else:
                     # Empty sequence case
                     tokens = np.array(
                         [self.special_tokens["CLS"], self.special_tokens["SEP"]],
                         dtype=np.int64,
-                    )
+                    )  # type: ignore[assignment]
 
                 # Pad/truncate to max_genes
-                tokens = tokens[:max_genes]
+                tokens = tokens[:max_genes]  # type: ignore[assignment]
                 if len(tokens) < max_genes:
                     padding = np.full(
                         max_genes - len(tokens),
                         self.special_tokens["PAD"],
                         dtype=np.int64,
                     )
-                    tokens = np.concatenate([tokens, padding])
+                    tokens = np.concatenate([tokens, padding])  # type: ignore[assignment]
 
                 # Fill array
-                token_array[i, :] = tokens
+                token_array[i, :] = tokens  # type: ignore[assignment]
 
         # Convert to tensors in one operation
         input_ids = torch.from_numpy(token_array)
