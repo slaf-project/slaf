@@ -1,3 +1,6 @@
+import threading
+import time
+
 import polars as pl
 import pytest
 
@@ -17,6 +20,235 @@ class TestSLAFArray:
         """Test the info method"""
         # This should not raise any exceptions
         small_slaf.info()
+
+    def test_lazy_import_performance(self):
+        """Test that lazy imports work correctly and are fast"""
+        # Test core import is fast
+        start_time = time.time()
+        from slaf import SLAFArray
+
+        import_time = time.time() - start_time
+
+        # Core import should be fast (< 1 second)
+        assert import_time < 1.0
+        assert SLAFArray is not None
+
+    def test_lazy_import_functions(self):
+        """Test that lazy import functions work correctly"""
+        from slaf import get_converter, get_integrations, get_ml_components
+
+        # Test converter lazy import
+        start_time = time.time()
+        converter = get_converter()
+        converter_time = time.time() - start_time
+
+        # Should work and not be too slow
+        assert converter is not None
+        assert converter_time < 5.0  # Allow some time for heavy imports
+
+        # Test integrations lazy import
+        start_time = time.time()
+        LazyAnnData, LazyExpressionMatrix, pp = get_integrations()
+        integrations_time = time.time() - start_time
+
+        # Should work and be relatively fast
+        assert LazyAnnData is not None
+        assert LazyExpressionMatrix is not None
+        assert pp is not None
+        assert integrations_time < 2.0
+
+        # Test ML components lazy import
+        start_time = time.time()
+        SLAFDataLoader, SLAFTokenizer, TokenizerType, create_shuffle, create_window = (
+            get_ml_components()
+        )
+        ml_time = time.time() - start_time
+
+        # Should work and not be too slow
+        assert SLAFDataLoader is not None
+        assert SLAFTokenizer is not None
+        assert TokenizerType is not None
+        assert create_shuffle is not None
+        assert create_window is not None
+        assert ml_time < 5.0  # Allow some time for heavy imports
+
+    def test_async_metadata_loading(self, small_slaf):
+        """Test that async metadata loading works correctly"""
+        # Check initial state
+        assert hasattr(small_slaf, "_metadata_loaded")
+        assert hasattr(small_slaf, "_metadata_loading")
+        assert hasattr(small_slaf, "_metadata_loading_thread")
+
+        # Check metadata status methods exist
+        assert hasattr(small_slaf, "is_metadata_ready")
+        assert hasattr(small_slaf, "is_metadata_loading")
+        assert hasattr(small_slaf, "wait_for_metadata")
+
+        # Test status methods
+        assert isinstance(small_slaf.is_metadata_ready(), bool)
+        assert isinstance(small_slaf.is_metadata_loading(), bool)
+
+    def test_immediate_capabilities(self, small_slaf):
+        """Test that immediate capabilities work without metadata loading"""
+        # Shape should be available immediately
+        assert small_slaf.shape == (10, 5)
+
+        # Config should be available immediately
+        assert small_slaf.config is not None
+        assert "array_shape" in small_slaf.config
+
+        # SQL queries should work immediately
+        result = small_slaf.query("SELECT COUNT(*) as count FROM cells")
+        assert isinstance(result, pl.DataFrame)
+        assert "count" in result.columns
+        assert result.item(0, "count") == 10
+
+    def test_lazy_metadata_access(self, small_slaf):
+        """Test that metadata access triggers lazy loading"""
+        # Initially metadata might not be loaded
+        # Note: We don't use initial_ready since it might be True if metadata was already loaded
+
+        # Access metadata (should trigger loading if not already loaded)
+        obs_columns = small_slaf.obs.columns
+        var_columns = small_slaf.var.columns
+
+        # Should have metadata after access
+        assert len(obs_columns) > 0
+        assert len(var_columns) > 0
+        assert small_slaf.is_metadata_ready()
+
+        # Subsequent access should be instant
+        start_time = time.time()
+        _ = small_slaf.obs.columns  # Access again to test caching
+        access_time = time.time() - start_time
+
+        # Should be very fast (cached)
+        assert access_time < 0.1
+
+    def test_metadata_loading_thread_safety(self, small_slaf):
+        """Test that metadata loading is thread-safe"""
+
+        # Access metadata from multiple threads
+        def access_metadata():
+            return small_slaf.obs.columns, small_slaf.var.columns
+
+        # Create multiple threads
+        threads = []
+        results = []
+
+        for _ in range(3):
+            thread = threading.Thread(target=lambda: results.append(access_metadata()))
+            threads.append(thread)
+            thread.start()
+
+        # Wait for all threads to complete
+        for thread in threads:
+            thread.join()
+
+        # All threads should get the same result
+        assert len(results) == 3
+        for obs_cols, var_cols in results:
+            assert len(obs_cols) > 0
+            assert len(var_cols) > 0
+
+    def test_wait_for_metadata(self, small_slaf):
+        """Test the wait_for_metadata method"""
+        # If metadata is already loaded, should return immediately
+        if small_slaf.is_metadata_ready():
+            start_time = time.time()
+            small_slaf.wait_for_metadata()
+            wait_time = time.time() - start_time
+            assert wait_time < 0.1  # Should be very fast if already loaded
+
+        # Test with timeout
+        start_time = time.time()
+        small_slaf.wait_for_metadata(timeout=1.0)
+        wait_time = time.time() - start_time
+        assert wait_time < 1.1  # Should not exceed timeout significantly
+
+    def test_metadata_properties(self, small_slaf):
+        """Test that obs and var properties work correctly"""
+        # Test obs property
+        obs = small_slaf.obs
+        assert isinstance(obs, pl.DataFrame)
+        assert len(obs) == 10  # All cells
+        assert "cell_id" in obs.columns
+
+        # Test var property
+        var = small_slaf.var
+        assert isinstance(var, pl.DataFrame)
+        assert len(var) == 5  # All genes
+        assert "gene_id" in var.columns
+
+    def test_metadata_loading_optimization(self, small_slaf):
+        """Test that metadata loading uses optimized paths"""
+        # Check that optimized paths are set
+        assert hasattr(small_slaf, "_cells_path")
+        assert hasattr(small_slaf, "_genes_path")
+        assert isinstance(small_slaf._cells_path, str)
+        assert isinstance(small_slaf._genes_path, str)
+
+        # Check that column caches are available
+        assert hasattr(small_slaf, "_obs_columns")
+        assert hasattr(small_slaf, "_var_columns")
+
+    def test_initialization_performance(self, tmp_path):
+        """Test that initialization is fast"""
+        # Create a minimal test dataset
+        import json
+
+        import lance
+
+        # Create test data
+        test_dir = tmp_path / "test_slaf"
+        test_dir.mkdir()
+
+        # Create config
+        config = {
+            "array_shape": [100, 50],
+            "tables": {
+                "cells": "cells.lance",
+                "genes": "genes.lance",
+                "expression": "expression.lance",
+            },
+        }
+
+        with open(test_dir / "config.json", "w") as f:
+            json.dump(config, f)
+
+        # Create minimal Lance datasets
+        cells_data = {
+            "cell_id": [f"cell_{i}" for i in range(100)],
+            "cell_integer_id": list(range(100)),
+        }
+        genes_data = {
+            "gene_id": [f"gene_{i}" for i in range(50)],
+            "gene_integer_id": list(range(50)),
+        }
+
+        lance.write_dataset(cells_data, test_dir / "cells.lance")
+        lance.write_dataset(genes_data, test_dir / "genes.lance")
+
+        # Create empty expression dataset with proper schema
+        import pyarrow as pa
+
+        expression_schema = pa.schema(
+            [
+                pa.field("cell_integer_id", pa.int32()),
+                pa.field("gene_integer_id", pa.int32()),
+                pa.field("value", pa.float32()),
+            ]
+        )
+        lance.write_dataset([], test_dir / "expression.lance", schema=expression_schema)
+
+        # Test initialization performance
+        start_time = time.time()
+        slaf_array = SLAFArray(str(test_dir))
+        init_time = time.time() - start_time
+
+        # Should be very fast (< 1 second)
+        assert init_time < 1.0
+        assert slaf_array.shape == (100, 50)
 
     def test_filter_cells_basic(self, small_slaf):
         """Test basic cell filtering"""

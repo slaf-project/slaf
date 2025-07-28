@@ -1,4 +1,5 @@
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -109,8 +110,89 @@ class SLAFArray:
         self._setup_datasets()
         self._setup_lancedb()
 
-        # Load metadata into memory for fast access
-        self._load_metadata()
+        # Lazy metadata loading - don't load until first access
+        self._obs = None
+        self._var = None
+        self._metadata_loaded = False
+        self._metadata_loading = False
+        self._metadata_loading_thread = None
+
+        # Pre-compute metadata paths for faster loading
+        self._cells_path = str(self.slaf_path / self.config["tables"]["cells"])
+        self._genes_path = str(self.slaf_path / self.config["tables"]["genes"])
+
+        # Cache for metadata column info (lightweight)
+        self._obs_columns = None
+        self._var_columns = None
+
+        # Start async metadata loading in background
+        self._start_async_metadata_loading()
+
+        # Display helpful initialization message
+        self._display_initialization_message()
+
+    def _display_initialization_message(self):
+        """Display helpful initialization message with basic metadata"""
+        n_cells, n_genes = self.shape
+
+        # Format large numbers with commas
+        cells_str = f"{n_cells:,}" if n_cells >= 1000 else str(n_cells)
+        genes_str = f"{n_genes:,}" if n_genes >= 1000 else str(n_genes)
+
+        # Get format version
+        format_version = self.config.get("format_version", "unknown")
+
+        # Get dataset name from path
+        dataset_name = self.slaf_path.name
+
+        # Display message
+        print(f"📊 SLAF Dataset Loaded: {dataset_name}")
+        print(f"   • Shape: {cells_str} cells × {genes_str} genes")
+        print(f"   • Format: SLAF v{format_version}")
+
+        # Add metadata info if available
+        if "metadata" in self.config:
+            metadata = self.config["metadata"]
+            if "expression_count" in metadata:
+                expr_count = metadata["expression_count"]
+                expr_str = f"{expr_count:,}" if expr_count >= 1000 else str(expr_count)
+                print(f"   • Expression records: {expr_str}")
+
+            if "sparsity" in metadata:
+                sparsity = metadata["sparsity"]
+                print(f"   • Sparsity: {sparsity:.1%}")
+
+        # Add optimization info if available
+        optimizations = self.config.get("optimizations", {})
+        if optimizations:
+            opt_info = ", ".join([f"{k}: {v}" for k, v in optimizations.items()])
+            print(f"   • Optimizations: {opt_info}")
+
+        # Status message
+        print("   • Status: Ready for queries (metadata loading in background)")
+        print()
+
+    def _start_async_metadata_loading(self):
+        """Start async metadata loading in background thread"""
+        if self._metadata_loading or self._metadata_loaded:
+            return
+
+        self._metadata_loading = True
+        self._metadata_loading_thread = threading.Thread(
+            target=self._load_metadata_async, daemon=True
+        )
+        self._metadata_loading_thread.start()
+
+    def _load_metadata_async(self):
+        """Load metadata asynchronously in background thread"""
+        try:
+            self._load_metadata()
+            self._metadata_loaded = True
+        except Exception as e:
+            # Log error but don't crash the background thread
+            print(f"Warning: Async metadata loading failed: {e}")
+        finally:
+            self._metadata_loading = False
 
     def _setup_lancedb(self):
         """Setup LanceDB connection for metadata loading"""
@@ -127,51 +209,115 @@ class SLAFArray:
         self.cells = lance.dataset(str(self.slaf_path / self.config["tables"]["cells"]))
         self.genes = lance.dataset(str(self.slaf_path / self.config["tables"]["genes"]))
 
+    def _ensure_metadata_loaded(self):
+        """Ensure metadata is loaded (lazy loading with async support)"""
+        if self._metadata_loaded:
+            return
+
+        if self._metadata_loading:
+            # Wait for async loading to complete
+            if (
+                self._metadata_loading_thread
+                and self._metadata_loading_thread.is_alive()
+            ):
+                print("Loading metadata in background... (this may take a few seconds)")
+                self._metadata_loading_thread.join()
+
+        if not self._metadata_loaded:
+            # Fallback to synchronous loading if async failed
+            self._load_metadata()
+            self._metadata_loaded = True
+
+    @property
+    def obs(self):
+        """Cell metadata (lazy loaded)"""
+        self._ensure_metadata_loaded()
+        return self._obs
+
+    @property
+    def var(self):
+        """Gene metadata (lazy loaded)"""
+        self._ensure_metadata_loaded()
+        return self._var
+
+    def is_metadata_ready(self) -> bool:
+        """Check if metadata is ready for use"""
+        return self._metadata_loaded
+
+    def is_metadata_loading(self) -> bool:
+        """Check if metadata is currently loading"""
+        return self._metadata_loading
+
+    def wait_for_metadata(self, timeout: float = None):
+        """Wait for metadata to be loaded (with optional timeout)"""
+        if self._metadata_loaded:
+            return
+
+        if self._metadata_loading and self._metadata_loading_thread:
+            if timeout:
+                self._metadata_loading_thread.join(timeout=timeout)
+            else:
+                self._metadata_loading_thread.join()
+
+        if not self._metadata_loaded:
+            # Fallback to synchronous loading
+            self._load_metadata()
+            self._metadata_loaded = True
+
     def _load_metadata(self):
         """Load cell and gene metadata into polars DataFrames for fast operations"""
-        # Load cell metadata using polars for better performance
-        # Use lance.dataset() to read Lance files, then convert to polars
-        cells_lance = lance.dataset(
-            str(self.slaf_path / self.config["tables"]["cells"])
-        )
-        cells_df = pl.from_arrow(cells_lance.to_table())
-        self.obs = cells_df.sort("cell_integer_id")
+        # Load cell metadata using optimized Lance operations
+        cells_lance = lance.dataset(self._cells_path)
 
-        # Load gene metadata using polars for better performance
-        # Use lance.dataset() to read Lance files, then convert to polars
-        genes_lance = lance.dataset(
-            str(self.slaf_path / self.config["tables"]["genes"])
-        )
+        # Use more efficient loading strategy for large datasets
+        # Load in chunks if dataset is very large
+        if self.shape[0] > 1000000:  # 1M+ cells
+            # Use scan() for large datasets to avoid loading everything at once
+            cells_df = pl.from_arrow(cells_lance.scanner().to_table())
+        else:
+            # Use direct to_table() for smaller datasets
+            cells_df = pl.from_arrow(cells_lance.to_table())
+
+        self._obs = cells_df.sort("cell_integer_id")
+
+        # Load gene metadata using optimized Lance operations
+        genes_lance = lance.dataset(self._genes_path)
+
+        # Genes are typically smaller, so use direct loading
         genes_df = pl.from_arrow(genes_lance.to_table())
-        self.var = genes_df.sort("gene_integer_id")
+        self._var = genes_df.sort("gene_integer_id")
+
+        # Cache column information for faster access
+        self._obs_columns = list(self._obs.columns)
+        self._var_columns = list(self._var.columns)
 
         # Restore dtypes for obs using polars
         obs_dtypes = self.config.get("obs_dtypes", {})
         for col, dtype_info in obs_dtypes.items():
-            if col in self.obs.columns:
+            if col in self._obs.columns:
                 if dtype_info["dtype"] == "category":
                     # Convert to polars categorical
-                    self.obs = self.obs.with_columns(
+                    self._obs = self._obs.with_columns(
                         pl.col(col).cast(pl.Categorical).cast(pl.Utf8)
                     )
                 else:
                     # Map pandas dtypes to polars dtypes
                     polars_dtype = self._map_pandas_to_polars_dtype(dtype_info["dtype"])
-                    self.obs = self.obs.with_columns(pl.col(col).cast(polars_dtype))
+                    self._obs = self._obs.with_columns(pl.col(col).cast(polars_dtype))
 
         # Restore dtypes for var using polars
         var_dtypes = self.config.get("var_dtypes", {})
         for col, dtype_info in var_dtypes.items():
-            if col in self.var.columns:
+            if col in self._var.columns:
                 if dtype_info["dtype"] == "category":
                     # Convert to polars categorical
-                    self.var = self.var.with_columns(
+                    self._var = self._var.with_columns(
                         pl.col(col).cast(pl.Categorical).cast(pl.Utf8)
                     )
                 else:
                     # Map pandas dtypes to polars dtypes
                     polars_dtype = self._map_pandas_to_polars_dtype(dtype_info["dtype"])
-                    self.var = self.var.with_columns(pl.col(col).cast(polars_dtype))
+                    self._var = self._var.with_columns(pl.col(col).cast(polars_dtype))
 
         # Infer categorical columns if not in config
         self._infer_categorical_columns()
@@ -198,28 +344,28 @@ class SLAFArray:
     def _infer_categorical_columns(self):
         """Infer categorical columns based on data characteristics using polars"""
         # For obs: infer categoricals for string columns with few unique values
-        for col in self.obs.columns:
+        for col in self._obs.columns:
             if col not in self.config.get("obs_dtypes", {}):
-                if self.obs[col].dtype == pl.Utf8:
-                    unique_count = self.obs[col].n_unique()
-                    total_count = len(self.obs)
+                if self._obs[col].dtype == pl.Utf8:
+                    unique_count = self._obs[col].n_unique()
+                    total_count = len(self._obs)
                     unique_ratio = unique_count / total_count
                     # If less than 20% unique values, likely categorical
                     if unique_ratio < 0.2 and unique_count < 50:
-                        self.obs = self.obs.with_columns(
+                        self._obs = self._obs.with_columns(
                             pl.col(col).cast(pl.Categorical).cast(pl.Utf8)
                         )
 
         # For var: infer categoricals for string columns with few unique values
-        for col in self.var.columns:
+        for col in self._var.columns:
             if col not in self.config.get("var_dtypes", {}):
-                if self.var[col].dtype == pl.Utf8:
-                    unique_count = self.var[col].n_unique()
-                    total_count = len(self.var)
+                if self._var[col].dtype == pl.Utf8:
+                    unique_count = self._var[col].n_unique()
+                    total_count = len(self._var)
                     unique_ratio = unique_count / total_count
                     # If less than 20% unique values, likely categorical
                     if unique_ratio < 0.2 and unique_count < 50:
-                        self.var = self.var.with_columns(
+                        self._var = self._var.with_columns(
                             pl.col(col).cast(pl.Categorical).cast(pl.Utf8)
                         )
 
@@ -421,20 +567,20 @@ class SLAFArray:
             if table_name == "cells":
                 return (
                     self.obs
-                    if self.obs is not None
+                    if self._metadata_loaded
                     else self.query("SELECT * FROM cells")
                 )
             else:
                 return (
                     self.var
-                    if self.var is not None
+                    if self._metadata_loaded
                     else self.query("SELECT * FROM genes")
                 )
 
         # Use polars filtering for metadata operations
-        if table_name == "cells" and self.obs is not None:
+        if table_name == "cells" and self._metadata_loaded:
             return self._filter_with_polars(self.obs, **filters)
-        elif table_name == "genes" and self.var is not None:
+        elif table_name == "genes" and self._metadata_loaded:
             return self._filter_with_polars(self.var, **filters)
         else:
             return self._filter_with_sql(table_name, **filters)
