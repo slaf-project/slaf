@@ -10,6 +10,17 @@ import polars as pl
 from .query_optimizer import QueryOptimizer
 
 
+def display_ascii_art():
+    """Display SLAF ASCII art logo"""
+    ascii_art = """
+  z Z
+ ( - . - )
+ /  ^ \\ ⚡
+(  (_)  (_) )
+ \\_______/ """
+    print(ascii_art)
+
+
 class SLAFArray:
     """
     High-performance single-cell data storage and querying format.
@@ -133,6 +144,10 @@ class SLAFArray:
 
     def _display_initialization_message(self):
         """Display helpful initialization message with basic metadata"""
+        # Display ASCII art
+        display_ascii_art()
+        print()
+
         n_cells, n_genes = self.shape
 
         # Format large numbers with commas

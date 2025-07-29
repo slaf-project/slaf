@@ -11,6 +11,8 @@ from typing import Any
 
 import typer
 
+from slaf.core.slaf import display_ascii_art
+
 app = typer.Typer(
     name="slaf",
     help="SLAF (Sparse Lazy Array Format) - High-performance single-cell data storage and analysis",
@@ -40,6 +42,8 @@ def check_dependencies() -> None:
 @app.command()
 def version():
     """Show SLAF version."""
+    display_ascii_art()
+    print()
     try:
         import slaf
 
