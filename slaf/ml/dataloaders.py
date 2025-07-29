@@ -220,7 +220,6 @@ class SLAFDataLoader:
         tokenizer_type: str = "geneformer",
         batch_size: int = 32,
         max_genes: int = 2048,
-        num_workers: int = 4,
         vocab_size: int = 50000,
         n_expression_bins: int = 10,
         n_epochs: int = 1,  # Add n_epochs parameter
@@ -242,8 +241,6 @@ class SLAFDataLoader:
             max_genes: Maximum number of genes to include in each cell's tokenization.
                      For Geneformer: same as sequence length. For scGPT: number of
                      gene-expression pairs (sequence length = 2*max_genes+2).
-            num_workers: Number of worker processes for data loading (unused in current
-                        implementation due to Lance/Polars pickling limitations).
             vocab_size: Size of the tokenizer vocabulary. Higher values allow more
                        genes but use more memory. Range: 1000-100000, default: 50000.
             n_expression_bins: Number of expression level bins for scGPT discretization.
@@ -315,7 +312,6 @@ class SLAFDataLoader:
         self.tokenizer_type = tokenizer_type
         self.batch_size = batch_size
         self.max_genes = max_genes
-        self.num_workers = num_workers  # Note: Not used in current implementation due to pickling issues with Lance/Polars objects
         self.n_epochs = n_epochs
         self.raw_mode = raw_mode  # Add raw_mode attribute
         self.verbose = verbose  # Add verbose attribute

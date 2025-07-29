@@ -17,7 +17,6 @@ class TestSLAFDataLoader:
         assert dataloader.tokenizer_type == "geneformer"
         assert dataloader.batch_size == 32
         assert dataloader.max_genes == 2048
-        assert dataloader.num_workers == 4
 
         # Check tokenizer initialization
         assert dataloader.tokenizer is not None
@@ -33,7 +32,6 @@ class TestSLAFDataLoader:
             tokenizer_type="scgpt",
             batch_size=16,
             max_genes=1024,
-            num_workers=2,
             vocab_size=1000,
             n_expression_bins=5,
         )
@@ -41,7 +39,6 @@ class TestSLAFDataLoader:
         assert dataloader.tokenizer_type == "scgpt"
         assert dataloader.batch_size == 16
         assert dataloader.max_genes == 1024
-        assert dataloader.num_workers == 2
         assert dataloader.tokenizer.vocab_size == 1000
         assert dataloader.tokenizer.n_expression_bins == 5
 

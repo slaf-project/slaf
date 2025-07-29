@@ -40,7 +40,7 @@ import numpy as np
 import pandas as pd
 import scanpy as sc
 from scipy.sparse import csr_matrix
-from slaf.data import SLAFConverter
+from slaf.data.converter import SLAFConverter
 
 # Set random seed for reproducible results
 np.random.seed(42)
@@ -90,7 +90,7 @@ For a more authentic experience, you can use the popular PBMC3K dataset:
 
 ```python
 import scanpy as sc
-from slaf.data import SLAFConverter
+from slaf.data.converter import SLAFConverter
 
 # Download PBMC3K dataset (this will take a moment)
 print("Downloading PBMC3K dataset...")
@@ -184,7 +184,7 @@ variable_genes = slaf_array.query("""
         AVG(e.value) as avg_expression,
         MAX(e.value) as max_expression
     FROM genes g
-    LEFT JOIN expression e ON g.gene_id = e.gene_id
+    LEFT JOIN expression e ON g.gene_integer_id = e.gene_integer_id
     WHERE g.highly_variable = true
     GROUP BY g.gene_id, g.gene_symbol, g.total_counts
     ORDER BY g.total_counts DESC
@@ -213,12 +213,12 @@ print("Cell type analysis:")
 print(cell_type_analysis)
 ```
 
-## Scanpy Integration
+## Lazy Evaluation with Scanpy Integration
 
-SLAF works seamlessly with Scanpy for familiar workflows:
+SLAF works seamlessly with Scanpy for familiar workflows with lazy evaluation:
 
 ```python
-from slaf.integrations import read_slaf
+from slaf.integrations.anndata import read_slaf
 
 # Load as lazy AnnData
 adata = read_slaf(slaf_path)
@@ -238,6 +238,93 @@ print(f"\nT cells subset: {t_cells.shape}")
 # Only load data when you need it
 expression_matrix = t_cells.X.compute()
 print(f"Loaded expression matrix: {expression_matrix.shape}")
+```
+
+## Efficient Filtering
+
+SLAF provides optimized filtering methods:
+
+```python
+# Filter cells by metadata
+t_cells = slaf_array.filter_cells(cell_type="T_cell", total_counts=">1000")
+print(f"Found {len(t_cells)} T cells with high counts")
+
+# Filter genes
+variable_genes = slaf_array.filter_genes(highly_variable=True)
+print(f"Found {len(variable_genes)} highly variable genes")
+
+# Get expression submatrix
+expression = slaf_array.get_submatrix(
+    cell_selector=t_cells,
+    gene_selector=variable_genes
+)
+print(f"Expression submatrix: {expression.shape}")
+```
+
+## ML Training with Dataloaders
+
+SLAF provides efficient tokenization and dataloaders for training foundation models:
+
+### Tokenization
+
+```python
+from slaf.ml import SLAFTokenizer
+
+# Create tokenizer for GeneFormer style tokenization
+tokenizer = SLAFTokenizer(
+    slaf_array=slaf_array,
+    tokenizer_type="geneformer",
+    vocab_size=50000,
+    n_expression_bins=10
+)
+
+# Geneformer tokenization (gene sequence only)
+gene_sequences = [[1, 2, 3], [4, 5, 6]]  # Example gene IDs
+input_ids, attention_mask = tokenizer.tokenize(
+    gene_sequences,
+    max_genes=2048
+)
+
+# Create tokenizer for scGPT style tokenization
+tokenizer = SLAFTokenizer(
+    slaf_array=slaf_array,
+    tokenizer_type="scgpt",
+    vocab_size=50000,
+    n_expression_bins=10
+)
+
+# scGPT tokenization (gene-expression pairs)
+gene_sequences = [[1, 2, 3], [4, 5, 6]]  # Gene IDs
+expr_sequences = [[0.5, 0.8, 0.2], [0.9, 0.1, 0.7]]  # Expression values
+input_ids, attention_mask = tokenizer.tokenize(
+    gene_sequences,
+    expr_sequences=expr_sequences,
+    max_genes=1024
+)
+```
+
+### DataLoader for Training
+
+```python
+from slaf.ml import SLAFDataLoader
+
+# Create DataLoader
+dataloader = SLAFDataLoader(
+    slaf_array=slaf_array,
+    tokenizer_type="geneformer",  # or "scgpt"
+    batch_size=32,
+    max_genes=2048
+)
+
+# Use with PyTorch training
+for batch in dataloader:
+    input_ids = batch["input_ids"]
+    attention_mask = batch["attention_mask"]
+    cell_ids = batch["cell_ids"]
+
+    # Your training loop here
+    loss = model(input_ids, attention_mask=attention_mask)
+    loss.backward()
 ```
 
 ## Using the SLAF CLI

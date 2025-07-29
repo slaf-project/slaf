@@ -1013,7 +1013,7 @@ class SLAFArray:
             # Backward compatibility: query expression count for older format versions
             print("    Expression records: computing...")
             expression_count = self.query("SELECT COUNT(*) as count FROM expression")
-            print(f"    Expression records: {expression_count.iloc[0]['count']:,}")
+            print(f"    Expression records: {expression_count.item(0, 0):,}")
 
         # Optimization info
         optimizations = self.config.get("optimizations", {})

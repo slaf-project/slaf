@@ -90,9 +90,21 @@ def _(mo):
 @app.cell
 def _(SLAFTokenizer, slaf):
     def create_tokenizer():
+        # Ensure metadata is loaded before tokenization
+        print("📊 Loading metadata for tokenizer...")
+        try:
+            # Trigger metadata loading
+            _ = slaf.obs
+            _ = slaf.var
+            print("   ✅ Metadata loaded successfully")
+        except Exception as e:
+            print(f"   ⚠️ Warning: Metadata loading issue: {e}")
+            print("   Continuing with tokenizer creation...")
+
         # Create tokenizer with custom settings
         tokenizer = SLAFTokenizer(
             slaf_array=slaf,
+            tokenizer_type="geneformer",  # Explicitly set tokenizer type
             vocab_size=2000,  # Dataset has <2000 genes
             n_expression_bins=20,  # More expression bins
         )
@@ -121,6 +133,13 @@ def _(SLAFTokenizer, slaf):
     def demonstrate_geneformer():
         print("🧬 GeneFormer Tokenization & Decoding")
         print("=" * 40)
+
+        # Ensure metadata is loaded before tokenization
+        try:
+            _ = slaf.obs
+            _ = slaf.var
+        except Exception as e:
+            print(f"⚠️ Warning: Metadata loading issue: {e}")
 
         # Create GeneFormer tokenizer
         tokenizer = SLAFTokenizer(
@@ -172,6 +191,13 @@ def _(SLAFTokenizer, slaf):
     def demonstrate_scgpt():
         print("🧬 scGPT Tokenization & Decoding")
         print("=" * 40)
+
+        # Ensure metadata is loaded before tokenization
+        try:
+            _ = slaf.obs
+            _ = slaf.var
+        except Exception as e:
+            print(f"⚠️ Warning: Metadata loading issue: {e}")
 
         # Create scGPT tokenizer
         tokenizer = SLAFTokenizer(
@@ -249,6 +275,14 @@ def _(SLAFDataLoader, slaf):
         print("📦 SLAF DataLoader Configuration")
         print("=" * 40)
 
+        # Ensure metadata is loaded before DataLoader creation
+        try:
+            _ = slaf.obs
+            _ = slaf.var
+            print("   ✅ Metadata loaded for DataLoader")
+        except Exception as e:
+            print(f"   ⚠️ Warning: Metadata loading issue: {e}")
+
         # Create DataLoader with custom settings
         dataloader = SLAFDataLoader(
             slaf_array=slaf,
@@ -286,6 +320,13 @@ def _(SLAFDataLoader, slaf):
         print("🔄 DataLoader Iteration")
         print("=" * 25)
 
+        # Ensure metadata is loaded before DataLoader creation
+        try:
+            _ = slaf.obs
+            _ = slaf.var
+        except Exception as e:
+            print(f"⚠️ Warning: Metadata loading issue: {e}")
+
         # Create dataloader
         dataloader = SLAFDataLoader(
             slaf_array=slaf,
@@ -299,30 +340,37 @@ def _(SLAFDataLoader, slaf):
 
         # Get first batch
         print("1. First batch structure:")
-        batch = next(iter(dataloader))
+        try:
+            batch = next(iter(dataloader))
 
-        for key, value in batch.items():
-            if hasattr(value, "shape"):
-                print(f"   {key}: {type(value)} with shape {value.shape}")
-            else:
-                print(f"   {key}: {type(value)} with length {len(value)}")
+            for key, value in batch.items():
+                if hasattr(value, "shape"):
+                    print(f"   {key}: {type(value)} with shape {value.shape}")
+                else:
+                    print(f"   {key}: {type(value)} with length {len(value)}")
 
-        # Show batch details
-        input_ids = batch["input_ids"]
-        attention_mask = batch["attention_mask"]
-        cell_ids = batch["cell_ids"]
+            # Show batch details
+            input_ids = batch["input_ids"]
+            attention_mask = batch["attention_mask"]
+            cell_ids = batch["cell_ids"]
 
-        print("\n2. Batch details:")
-        print(f"   Input IDs shape: {input_ids.shape}")
-        print(f"   Attention mask shape: {attention_mask.shape}")
-        print(f"   Cell IDs shape: {cell_ids.shape}")
-        print(f"   Data type: {input_ids.dtype}")
+            print("\n2. Batch details:")
+            print(f"   Input IDs shape: {input_ids.shape}")
+            print(f"   Attention mask shape: {attention_mask.shape}")
+            print(f"   Cell IDs shape: {cell_ids.shape}")
+            print(f"   Data type: {input_ids.dtype}")
 
-        # Show sample tokens
-        print("\n3. Sample tokens from first sequence:")
-        first_seq = input_ids[0]
-        print(f"   First 10 tokens: {first_seq[:10].tolist()}")
-        print(f"   Sequence length: {len(first_seq)}")
+            # Show sample tokens
+            print("\n3. Sample tokens from first sequence:")
+            first_seq = input_ids[0]
+            print(f"   First 10 tokens: {first_seq[:10].tolist()}")
+            print(f"   Sequence length: {len(first_seq)}")
+
+        except Exception as e:
+            print(f"❌ Error during DataLoader iteration: {e}")
+            print(
+                "   This might be due to metadata loading issues or dataset compatibility."
+            )
 
     demonstrate_dataloader_iteration()
     return

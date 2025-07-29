@@ -12,9 +12,11 @@ SLAF is built on a **SQL-native relational schema** that enables direct SQL quer
 
 SLAF stores single-cell data in three core tables:
 
-- **`cells` table**: Cell metadata, QC metrics, and annotations
-- **`genes` table**: Gene metadata, annotations, and feature information
-- **`expression` table**: Sparse expression matrix with cell_id, gene_id, and value columns
+- **`cells` table**: Cell metadata, QC metrics, and annotations with `cell_id` (string) and `cell_integer_id` (integer)
+- **`genes` table**: Gene metadata, annotations, and feature information with `gene_id` (string) and `gene_integer_id` (integer)
+- **`expression` table**: Sparse expression matrix with `cell_integer_id`, `gene_integer_id`, and `value` columns
+
+The expression table uses integer IDs for efficiency, so you need to JOIN with metadata tables to get string identifiers.
 
 This relational design enables **direct SQL queries** for everything:
 
@@ -24,9 +26,9 @@ results = slaf.query("""
     SELECT cell_type,
            COUNT(*) as cell_count,
            AVG(total_counts) as avg_counts,
-           SUM(value) as total_expression
-    FROM cells
-    JOIN expression ON cells.cell_id = expression.cell_id
+           SUM(e.value) as total_expression
+    FROM cells c
+    JOIN expression e ON c.cell_integer_id = e.cell_integer_id
     WHERE batch = 'batch1' AND n_genes_by_counts >= 500
     GROUP BY cell_type
     ORDER BY cell_count DESC
@@ -34,16 +36,17 @@ results = slaf.query("""
 
 # Window functions for advanced analysis
 ranked_genes = slaf.query("""
-    SELECT gene_id,
-           cell_type,
-           value,
+    SELECT g.gene_id,
+           c.cell_type,
+           e.value,
            ROW_NUMBER() OVER (
-               PARTITION BY cell_type
-               ORDER BY value DESC
+               PARTITION BY c.cell_type
+               ORDER BY e.value DESC
            ) as rank
-    FROM expression
-    JOIN cells ON expression.cell_id = cells.cell_id
-    WHERE gene_id IN ('MS4A1', 'CD3D', 'CD8A')
+    FROM expression e
+    JOIN cells c ON e.cell_integer_id = c.cell_integer_id
+    JOIN genes g ON e.gene_integer_id = g.gene_integer_id
+    WHERE g.gene_id IN ('MS4A1', 'CD3D', 'CD8A')
 """)
 ```
 
@@ -81,15 +84,16 @@ t_cells = lazy_adata[lazy_adata.obs.cell_type == "T cells", :]
 # Switch to SQL for complex operations
 t_cells_slaf = t_cells.slaf  # Access underlying SLAFArray object
 complex_query_result = t_cells_slaf.query("""
-    SELECT gene_id,
+    SELECT g.gene_id,
            COUNT(*) as expressing_cells,
-           AVG(value) as mean_expression
-    FROM expression
-    WHERE cell_id IN (
-        SELECT cell_id FROM cells
+           AVG(e.value) as mean_expression
+    FROM expression e
+    JOIN genes g ON e.gene_integer_id = g.gene_integer_id
+    WHERE e.cell_integer_id IN (
+        SELECT cell_integer_id FROM cells
         WHERE cell_type = 'T cells'
     )
-    GROUP BY gene_id
+    GROUP BY g.gene_id
     HAVING expressing_cells >= 10
     ORDER BY mean_expression DESC
 """)

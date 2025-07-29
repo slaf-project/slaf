@@ -242,8 +242,7 @@ dataloader = SLAFDataLoader(
     slaf_array=slaf,
     tokenizer_type="geneformer",  # or "scgpt"
     batch_size=32,
-    max_genes=2048,
-    num_workers=4
+    max_genes=2048
 )
 
 # Use with PyTorch training

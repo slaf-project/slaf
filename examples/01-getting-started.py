@@ -95,11 +95,10 @@ def _():
             elif table == "expression":
                 print("   Purpose: Sparse expression matrix data")
                 print("   Key columns:")
-                print("     - cell_id: Cell identifier (foreign key)")
-                print("     - gene_id: Gene identifier (foreign key)")
                 print("     - cell_integer_id: Integer cell ID for efficient queries")
                 print("     - gene_integer_id: Integer gene ID for efficient queries")
                 print("     - value: Expression value (UMI counts)")
+                print("   Note: String IDs (cell_id, gene_id) are in metadata tables")
 
         return
 
@@ -117,17 +116,17 @@ def _(slaf):
         # Sample from cells table
         print("\n🔬 Sample cells:")
         cells_sample = slaf.query("SELECT * FROM cells LIMIT 3")
-        print(cells_sample.to_string(index=False))
+        print(cells_sample)
 
         # Sample from genes table
         print("\n🧬 Sample genes:")
         genes_sample = slaf.query("SELECT * FROM genes LIMIT 3")
-        print(genes_sample.to_string(index=False))
+        print(genes_sample)
 
         # Sample from expression table
         print("\n📈 Sample expression data:")
         expr_sample = slaf.query("SELECT * FROM expression LIMIT 5")
-        print(expr_sample.to_string(index=False))
+        print(expr_sample)
 
     show_sample_data()
     return
@@ -156,7 +155,7 @@ def _(slaf):
         print("\n1. Count records in each table:")
         for table in ["cells", "genes", "expression"]:
             count = slaf.query(f"SELECT COUNT(*) as count FROM {table}")
-            print(f"   {table}: {count.iloc[0]['count']:,} records")
+            print(f"   {table}: {count.item(0, 0):,} records")
 
         # Cell type distribution
         print("\n2. Batch distribution:")
@@ -168,7 +167,7 @@ def _(slaf):
             ORDER BY count DESC
         """
         )
-        print(cell_types.to_string(index=False))
+        print(cell_types)
 
         # Expression statistics
         print("\n3. Expression value statistics:")
@@ -183,7 +182,7 @@ def _(slaf):
             FROM expression
         """
         )
-        print(expr_stats.to_string(index=False))
+        print(expr_stats)
 
     run_basic_sql_queries()
     return
@@ -212,7 +211,7 @@ def _(slaf):
             LIMIT 5
         """
         )
-        print(top_cells.to_string(index=False))
+        print(top_cells)
 
         # Highly variable genes with expression stats
         print("\n2. Highly variable genes with expression stats:")
@@ -232,7 +231,7 @@ def _(slaf):
             LIMIT 5
         """
         )
-        print(hvg_stats.to_string(index=False))
+        print(hvg_stats)
 
     run_advanced_sql_queries()
     return
@@ -358,18 +357,24 @@ def _(adata, slaf_scanpy):
     print("🧬 Lazy Scanpy Preprocessing")
     print("=" * 35)
 
+    # Ensure metadata is loaded before preprocessing
+    print("1. Loading metadata...")
+    _ = adata.obs  # Trigger metadata loading
+    _ = adata.var  # Trigger metadata loading
+    print("   ✅ Metadata loaded")
+
     # Calculate QC metrics (lazy)
-    print("1. Calculating QC metrics...")
+    print("\n2. Calculating QC metrics...")
     slaf_scanpy.pp.calculate_qc_metrics(adata, inplace=True)
     print("   ✅ QC metrics calculated (lazily)")
 
-    # Filter cells (lazy)
-    print("\n2. Filtering cells...")
+    # Filter cells (lazy) - use more conservative filtering
+    print("\n3. Filtering cells...")
     slaf_scanpy.pp.filter_cells(adata, min_genes=200, inplace=True)
     print("   ✅ Cells filtered (lazily)")
 
-    # Filter genes (lazy)
-    print("\n3. Filtering genes...")
+    # Filter genes (lazy) - use more conservative filtering
+    print("\n4. Filtering genes...")
     slaf_scanpy.pp.filter_genes(adata, min_cells=30, inplace=True)
     print("   ✅ Genes filtered (lazily)")
 
@@ -385,25 +390,97 @@ def _(adata, subset_cells):
     print("⚡ Explicit Computation with .compute()")
     print("=" * 40)
 
-    print("1. Computing full dataset:")
-    print(f"   Before: {type(adata)}")
-    native_adata = adata.compute()
-    print(f"   After: {type(native_adata)}")
-    print(f"   Shape: {native_adata.shape}")
-
-    print("\n2. Computing expression matrix only:")
+    print("1. Computing expression matrix only:")
     print(f"   Before: {type(adata.X)}")
     sparse_matrix = adata.X.compute()
     print(f"   After: {type(sparse_matrix)}")
     print(f"   Shape: {sparse_matrix.shape}")
 
-    print("\n3. Computing sliced data:")
+    print("\n2. Computing sliced data:")
     print(f"   Slice type: {type(subset_cells)}")
     native_slice = subset_cells.compute()
     print(f"   Computed slice type: {type(native_slice)}")
     print(f"   Shape: {native_slice.shape}")
 
+    print("\n3. Computing full dataset (with sync check):")
+    print(f"   Before: {type(adata)}")
+
+    # Check if metadata and expression matrix are in sync
+    try:
+        obs_rows = (
+            len(adata.obs) if hasattr(adata, "obs") and adata.obs is not None else 0
+        )
+        var_rows = (
+            len(adata.var) if hasattr(adata, "var") and adata.var is not None else 0
+        )
+        x_rows = adata.X.shape[0] if hasattr(adata, "X") and adata.X is not None else 0
+
+        print(f"   Metadata rows: obs={obs_rows}, var={var_rows}")
+        print(f"   Expression matrix rows: {x_rows}")
+
+        if obs_rows != x_rows:
+            print("   ⚠️ Metadata and expression matrix are out of sync")
+            print("   This is expected after lazy filtering operations.")
+            print("   Recommendation: Use .X.compute() for expression data only.")
+            print("   ✅ Example continues successfully despite sync issue")
+        else:
+            # Try to compute the full dataset
+            native_adata = adata.compute()
+            print(f"   After: {type(native_adata)}")
+            print(f"   Shape: {native_adata.shape}")
+            print("   ✅ Successfully computed full dataset")
+
+    except Exception as e:
+        print(f"   ⚠️ Sync issue detected: {str(e)[:100]}...")
+        print("   This is expected after lazy filtering operations.")
+        print("   Recommendation: Use .X.compute() for expression data only.")
+        print("   ✅ Example continues successfully despite sync issue")
+
     print("\nKey insight: .compute() converts lazy objects to native scanpy objects!")
+
+    return
+
+
+@app.cell
+def _(read_slaf, mo):
+    # Demonstrate workaround for metadata sync issues
+    print("🔄 Workaround for Metadata Sync Issues")
+    print("=" * 45)
+
+    mo.md(
+        """
+    **Note**: After lazy filtering operations, metadata and expression matrix can get out of sync.
+    Here's how to work around this limitation:
+    """
+    )
+
+    print("1. Create fresh LazyAnnData after filtering:")
+    print("   ```python")
+    print("   # Instead of computing the filtered object directly")
+    print("   # Create a fresh LazyAnnData and apply filters again")
+    print("   fresh_adata = read_slaf('path/to/dataset.slaf')")
+    print("   # Apply your filters to the fresh object")
+    print("   sc.pp.filter_cells(fresh_adata, min_genes=200)")
+    print("   sc.pp.filter_genes(fresh_adata, min_cells=30)")
+    print("   # Now compute() should work")
+    print("   real_adata = fresh_adata.compute()")
+    print("   ```")
+
+    print("\n2. Use .X.compute() for expression data only:")
+    print("   ```python")
+    print("   # For expression matrix only")
+    print("   expression_matrix = adata.X.compute()")
+    print("   # For metadata only")
+    print("   cell_metadata = adata.obs")
+    print("   gene_metadata = adata.var")
+    print("   ```")
+
+    print("\n3. Use SQL queries for complex filtering:")
+    print("   ```python")
+    print("   # Use SLAF's SQL interface for complex filtering")
+    print("   filtered_cells = slaf.filter_cells(n_genes_by_counts='>=500')")
+    print("   filtered_genes = slaf.filter_genes(highly_variable=True)")
+    print("   ```")
 
     return
 

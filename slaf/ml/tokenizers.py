@@ -159,7 +159,9 @@ class SLAFTokenizer:
             ):
                 # Real SLAF array - build vocabulary from gene data
                 gene_vocab = {}
-                for _, row in var_df.iter_rows():
+
+                # Use Polars native iteration
+                for row in var_df.iter_rows(named=True):
                     gene_id = row["gene_id"]
                     gene_integer_id = row["gene_integer_id"]
 
@@ -269,6 +271,7 @@ class SLAFTokenizer:
         try:
             # Try to access the DataFrame properly
             var_df = self.slaf_array.var.reset_index()
+
             # Check if it's actually a DataFrame with the expected columns
             if (
                 hasattr(var_df, "columns")
