@@ -86,16 +86,16 @@ cluster_cells = slaf.filter_cells(leiden=["0", "1", "2"])
 
 | Scenario                | Traditional Total (ms) | SLAF Total (ms) | Total Speedup | Memory Efficiency | Description          |
 | ----------------------- | ---------------------- | --------------- | ------------- | ----------------- | -------------------- |
-| S1       |   39.8 |    8.8 |     4.5x |     4.9x | Cells with >=500 genes |
-| S2       |   22.4 |    8.1 |     2.8x |     4.6x | Cells with <=15% mitochondrial genes |
-| S3       |   18.6 |    8.2 |     2.3x |     4.6x | Cells with low mitochondrial content |
-| S4       |   19.4 |    8.7 |     2.2x |     5.0x | Cells in clusters 0,1,2 |
-| S5       |   18.5 |    9.1 |     2.0x |     5.6x | Cells in largest cluster (0) |
-| S6       |   19.2 |    9.2 |     2.1x |     5.5x | Cells from batch_1 |
-| S7       |   18.7 |    8.5 |     2.2x |     5.8x | Cells in clusters 0,1 from batch_1 |
-| S8       |   18.4 |    8.4 |     2.2x |     6.1x | High-quality cells (>=1000 genes, <=10% mt) |
-| S9       |   19.5 |    9.5 |     2.0x |     5.8x | Cells with 800-2000 total counts |
-| S10       |   19.1 |    9.6 |     2.0x |     4.9x | Cells with 200-1500 genes |
+| S1       |   29.6 |    2.2 |     13.5x |     9.5x | Cells with >=500 genes |
+| S2       |   20.1 |    1.7 |     11.6x |     9.4x | Cells with <=15% mitochondrial genes |
+| S3       |   20.1 |    2.0 |     10.2x |     9.4x | Cells with low mitochondrial content |
+| S4       |   20.8 |    2.4 |     8.8x |     9.7x | Cells in clusters 0,1,2 |
+| S5       |   19.2 |    1.8 |     10.7x |     11.0x | Cells in largest cluster (0) |
+| S6       |   20.1 |    1.9 |     10.9x |     10.8x | Cells from batch_1 |
+| S7       |   20.2 |    2.1 |     9.6x |     11.4x | Cells in clusters 0,1 from batch_1 |
+| S8       |   22.4 |    2.1 |     10.5x |     12.0x | High-quality cells (>=1000 genes, <=10% mt) |
+| S9       |   20.7 |    2.3 |     8.9x |     11.4x | Cells with 800-2000 total counts |
+| S10       |   19.9 |    2.4 |     8.4x |     9.4x | Cells with 200-1500 genes |
 
 
 **Key Insight**: The speedup comes from **faster metadata loading** (SLAF loads only metadata vs h5ad loading everything), while memory efficiency comes from **loading only the data you need**. This is similar to using Polars/DuckDB for structured data queries instead of pandas.
@@ -149,17 +149,17 @@ result = slaf.get_submatrix(
 
 | Scenario                 | Traditional Total (ms) | SLAF Total (ms) | Total Speedup | Memory Efficiency | Description          |
 | ------------------------ | ---------------------- | --------------- | ------------- | ----------------- | -------------------- |
-| S1       |   19.1 |    16.8 |     1.1x |     6.4x | Single cell expression |
-| S2       |   19.1 |    14.7 |     1.3x |     6.2x | Another single cell |
-| S3       |   18.6 |    15.1 |     1.2x |     6.1x | Two cells |
-| S4       |   18.4 |    15.8 |     1.2x |     5.9x | Three cells |
-| S5       |   19.1 |    19.0 |     1.0x |     6.4x | Single gene across all cells |
-| S6       |   18.7 |    21.1 |     0.9x |     6.3x | Another single gene |
-| S7       |   19.0 |    20.5 |     0.9x |     6.1x | Two genes |
-| S8       |   20.5 |    20.6 |     1.0x |     6.1x | Three genes |
-| S9       |   19.0 |    48.6 |     0.4x |     6.0x | 100x50 submatrix |
-| S10       |   18.8 |    48.8 |     0.4x |     3.6x | 500x100 submatrix |
-| S11       |   19.5 |    58.3 |     0.3x |     1.3x | 500x500 submatrix |
+| S1       |   20.1 |    8.9 |     2.3x |     12.9x | Single cell expression |
+| S2       |   21.4 |    8.5 |     2.5x |     12.8x | Another single cell |
+| S3       |   19.3 |    8.5 |     2.3x |     12.6x | Two cells |
+| S4       |   20.9 |    9.5 |     2.2x |     12.4x | Three cells |
+| S5       |   20.4 |    13.4 |     1.5x |     12.9x | Single gene across all cells |
+| S6       |   20.2 |    14.1 |     1.4x |     12.8x | Another single gene |
+| S7       |   20.2 |    14.3 |     1.4x |     12.7x | Two genes |
+| S8       |   21.1 |    14.6 |     1.4x |     12.7x | Three genes |
+| S9       |   18.7 |    42.3 |     0.4x |     12.6x | 100x50 submatrix |
+| S10       |   19.1 |    45.6 |     0.4x |     9.8x | 500x100 submatrix |
+| S11       |   19.1 |    56.3 |     0.3x |     4.9x | 500x500 submatrix |
 
 
 **Key Insight**: The primary advantage is **memory efficiency** - SLAF loads only the slice of interest rather than the entire dataset. Speed benefits depend on slice size vs dataset size. This is similar to Zarr's chunked array access patterns.
@@ -222,23 +222,23 @@ expression = adata.X[cell_ids, gene_ids].compute()  # LazyExpressionMatrix.compu
 
 | Operation                     | Traditional Total (ms) | SLAF Total (ms) | Total Speedup | Memory Efficiency | Description          |
 | ----------------------------- | ---------------------- | --------------- | ------------- | ----------------- | -------------------- |
-| S1       |   136.3 |    56.9 |     2.4x |     7.9x | Calculate QC metrics |
-| S2       |   22.4 |    133.9 |     0.2x |     0.2x | Filter cells (min_counts=500, min_genes=200) |
-| S3       |   83.8 |    134.3 |     0.6x |     1.0x | Filter cells (min_counts=100, min_genes=50) |
-| S4       |   30.3 |    124.9 |     0.2x |     1.0x | Filter cells (max_counts=10000, max_genes=3000) |
-| S5       |   30.8 |    123.4 |     0.2x |     1.0x | Filter genes (min_counts=10, min_cells=5) |
-| S6       |   30.0 |    120.9 |     0.2x |     1.0x | Filter genes (min_counts=20, min_cells=5) |
-| S7       |   24.5 |    150.0 |     0.2x |     1.0x | Normalize total (target_sum=1e4) |
-| S8       |   21.7 |    160.3 |     0.1x |     1.0x | Normalize total (target_sum=1e6) |
-| S9       |   21.7 |    111.0 |     0.2x |     0.2x | Log1p transformation |
-| S10       |   26.1 |    26.1 |     1.0x |     6.0x | Find highly variable genes |
-| S11       |   29.7 |    22.2 |     1.3x |     6.0x | Find top 2000 highly variable genes |
-| S12       |   44.0 |    194.8 |     0.2x |     0.2x | QC metrics + cell filtering + gene filtering |
-| S13       |   21.2 |    77.6 |     0.3x |     1.2x | Normalize total + slice 100x50 submatrix (lazy) |
-| S14       |   21.5 |    46.1 |     0.5x |     1.2x | Log1p + slice 200x100 submatrix (lazy) |
-| S15       |   23.5 |    84.6 |     0.3x |     1.1x | Normalize + Log1p + slice 500x250 submatrix (lazy) |
-| S16       |   22.8 |    43.3 |     0.5x |     1.1x | Normalize + Log1p + mean per gene (lazy) |
-| S17       |   21.5 |    42.9 |     0.5x |     1.1x | Normalize + Log1p + variance per cell (lazy) |
+| S1       |   134.8 |    34.4 |     3.9x |     15.8x | Calculate QC metrics |
+| S2       |   23.5 |    230.2 |     0.1x |     3.6x | Filter cells (min_counts=500, min_genes=200) |
+| S3       |   33.5 |    226.3 |     0.1x |     15.3x | Filter cells (min_counts=100, min_genes=50) |
+| S4       |   31.8 |    214.3 |     0.1x |     1.0x | Filter cells (max_counts=10000, max_genes=3000) |
+| S5       |   31.7 |    218.2 |     0.1x |     1.0x | Filter genes (min_counts=10, min_cells=5) |
+| S6       |   32.4 |    215.4 |     0.2x |     1.0x | Filter genes (min_counts=20, min_cells=5) |
+| S7       |   25.8 |    213.1 |     0.1x |     1.0x | Normalize total (target_sum=1e4) |
+| S8       |   22.0 |    218.1 |     0.1x |     1.0x | Normalize total (target_sum=1e6) |
+| S9       |   22.4 |    205.7 |     0.1x |     0.2x | Log1p transformation |
+| S10       |   27.7 |    124.3 |     0.2x |     9.7x | Find highly variable genes |
+| S11       |   32.1 |    22.4 |     1.4x |     9.7x | Find top 2000 highly variable genes |
+| S12       |   39.4 |    296.3 |     0.1x |     2.3x | QC metrics + cell filtering + gene filtering |
+| S13       |   21.9 |    49.4 |     0.4x |     2.3x | Normalize total + slice 100x50 submatrix (lazy) |
+| S14       |   23.0 |    41.4 |     0.6x |     2.2x | Log1p + slice 200x100 submatrix (lazy) |
+| S15       |   25.0 |    59.3 |     0.4x |     2.0x | Normalize + Log1p + slice 500x250 submatrix (lazy) |
+| S16       |   23.1 |    15.0 |     1.5x |     2.2x | Normalize + Log1p + mean per gene (lazy) |
+| S17       |   22.5 |    16.0 |     1.4x |     2.1x | Normalize + Log1p + variance per cell (lazy) |
 
 
 **Key Insight**: Lazy computation enables **complex preprocessing pipelines** that would cause memory explosions with traditional tools. The computation cost is paid when materializing results, but the memory efficiency enables workflows impossible with eager processing. This is similar to Dask's delayed computation patterns.
