@@ -195,13 +195,13 @@ def convert(
         help="Input format: h5ad, 10x_mtx, 10x_h5 (auto-detected if not specified)",
     ),
     chunked: bool = typer.Option(
-        False,
-        "--chunked",
+        True,  # Changed from False to True - make chunked the default
+        "--chunked/--no-chunked",  # Added --no-chunked option for users who want non-chunked
         "-c",
-        help="Use chunked processing for memory efficiency (supports all formats)",
+        help="Use chunked processing for memory efficiency (default: True, supports all formats)",
     ),
     chunk_size: int = typer.Option(
-        50000, "--chunk-size", help="Number of cells per chunk (when using --chunked)"
+        25000, "--chunk-size", help="Number of cells per chunk (default: 25000)"
     ),
     create_indices: bool = typer.Option(
         False,
@@ -251,12 +251,14 @@ def convert(
 
     if chunked:
         typer.echo(f"📦 Using chunked processing (chunk size: {chunk_size:,} cells)")
+    else:
+        typer.echo("📦 Using non-chunked processing (may use more memory)")
 
     try:
         converter = SLAFConverter(
             chunked=chunked,
             chunk_size=chunk_size,
-            create_indices=False,  # Default to False for CLI
+            create_indices=create_indices,  # Use the CLI parameter instead of hardcoding False
             optimize_storage=optimize_storage,
             use_optimized_dtypes=use_optimized_dtypes,
             enable_v2_manifest=enable_v2_manifest,

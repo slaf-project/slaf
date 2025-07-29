@@ -20,6 +20,7 @@ class SLAFConverter:
     SLAFConverter provides efficient conversion from various single-cell data formats
     (primarily AnnData/h5ad) to the SLAF format. It optimizes storage by using
     integer keys, COO-style expression tables, and efficient metadata handling.
+    Chunked conversion is now the default for optimal memory efficiency.
 
     Key Features:
         - AnnData/h5ad file conversion
@@ -27,9 +28,10 @@ class SLAFConverter:
         - COO-style sparse matrix storage
         - Automatic metadata type inference
         - Lance format for high-performance storage
+        - Chunked processing by default for memory efficiency
 
     Examples:
-        >>> # Basic conversion from h5ad file
+        >>> # Basic conversion from h5ad file (chunked is now the default)
         >>> converter = SLAFConverter()
         >>> converter.convert("data.h5ad", "output.slaf")
         Converting data.h5ad to SLAF format...
@@ -45,7 +47,7 @@ class SLAFConverter:
         Loaded: 1000 cells × 20000 genes
         Conversion complete! Saved to output_string_keys.slaf
 
-        >>> # Convert existing AnnData object
+        >>> # Convert existing AnnData object (chunked is now the default)
         >>> import scanpy as sc
         >>> adata = sc.read_h5ad("data.h5ad")
         >>> converter = SLAFConverter()
@@ -59,7 +61,7 @@ class SLAFConverter:
     def __init__(
         self,
         use_integer_keys: bool = True,
-        chunked: bool = False,
+        chunked: bool = True,  # Changed from False to True - make chunked the default
         chunk_size: int = 25000,  # Reduced from 50000 to prevent memory issues
         sort_metadata: bool = False,
         create_indices: bool = False,  # Disable indices by default for small datasets
@@ -75,8 +77,10 @@ class SLAFConverter:
             use_integer_keys: Use integer keys instead of strings in sparse data.
                              This saves significant memory and improves query performance.
                              Set to False only if you need to preserve original string IDs.
-            chunked: Use chunked processing for memory efficiency (no scanpy dependency).
-            chunk_size: Size of each chunk when chunked=True.
+            chunked: Use chunked processing for memory efficiency (default: True).
+                    Chunked processing is now the default for optimal memory efficiency.
+                    Set to False only for small datasets or debugging purposes.
+            chunk_size: Size of each chunk when chunked=True (default: 25000).
             create_indices: Whether to create indices for query performance.
                           Default: False for small datasets to reduce storage overhead.
                           Set to True for large datasets where query performance is important.
@@ -92,27 +96,18 @@ class SLAFConverter:
         Examples:
             >>> # Default optimization (recommended)
             >>> converter = SLAFConverter()
-            >>> print(f"Using integer keys: {converter.use_integer_keys}")
-            Using integer keys: True
+            >>> print(f"Using chunked processing: {converter.chunked}")
+            Using chunked processing: True
 
-            >>> # Chunked processing for large datasets
-            >>> converter = SLAFConverter(chunked=True, chunk_size=1000)
-            >>> print(f"Chunked processing: {converter.chunked}")
-            Chunked processing: True
+            >>> # Non-chunked processing for small datasets
+            >>> converter = SLAFConverter(chunked=False)
+            >>> print(f"Using chunked processing: {converter.chunked}")
+            Using chunked processing: False
 
-            >>> # Disable integer key optimization
-            >>> converter = SLAFConverter(use_integer_keys=False)
-            >>> print(f"Using integer keys: {converter.use_integer_keys}")
-            Using integer keys: False
-
-            >>> # Maximum compression for very large datasets
-            >>> converter = SLAFConverter(
-            ...     use_optimized_dtypes=True,
-            ...     enable_v2_manifest=True,
-            ...     compact_after_write=True
-            ... )
-            >>> print(f"Optimized dtypes: {converter.use_optimized_dtypes}")
-            Optimized dtypes: True
+            >>> # Custom chunk size for large datasets
+            >>> converter = SLAFConverter(chunk_size=100000)
+            >>> print(f"Chunk size: {converter.chunk_size}")
+            Chunk size: 100000
         """
         self.use_integer_keys = use_integer_keys
         self.chunked = chunked
@@ -393,11 +388,11 @@ class SLAFConverter:
         obs_df = reader.get_obs_metadata()
         var_df = reader.get_var_metadata()
 
-        # Ensure cell_id and gene_id columns exist
+        # Ensure cell_id and gene_id columns exist with actual names
         if "cell_id" not in obs_df.columns:
-            obs_df["cell_id"] = obs_df.index.astype(str)
+            obs_df["cell_id"] = reader.obs_names
         if "gene_id" not in var_df.columns:
-            var_df["gene_id"] = var_df.index.astype(str)
+            var_df["gene_id"] = reader.var_names
 
         # Note: Sorting is disabled in chunked mode to maintain consistency
         # between metadata and expression data ordering
@@ -467,44 +462,45 @@ class SLAFConverter:
 
         # Create empty dataset first
         print("Creating initial Lance dataset...")
+        schema = self._get_expression_schema()
+
+        # Create empty table with correct schema based on settings
         if self.optimize_storage:
-            # Only store integer IDs for maximum storage efficiency
             if self.use_optimized_dtypes:
                 empty_table = pa.table(
                     {
-                        "cell_integer_id": pa.array([], pa.uint32()),
-                        "gene_integer_id": pa.array([], pa.uint16()),
-                        "value": pa.array([], pa.uint16()),
+                        "cell_integer_id": pa.array([], type=pa.uint32()),
+                        "gene_integer_id": pa.array([], type=pa.uint16()),
+                        "value": pa.array([], type=pa.uint16()),
                     }
                 )
             else:
                 empty_table = pa.table(
                     {
-                        "cell_integer_id": pa.array([], pa.int32()),
-                        "gene_integer_id": pa.array([], pa.int32()),
-                        "value": pa.array([], pa.float32()),
+                        "cell_integer_id": pa.array([], type=pa.int32()),
+                        "gene_integer_id": pa.array([], type=pa.int32()),
+                        "value": pa.array([], type=pa.float32()),
                     }
                 )
         else:
-            # Store both string and integer IDs for compatibility
             if self.use_optimized_dtypes:
                 empty_table = pa.table(
                     {
-                        "cell_id": pa.array([], pa.string()),
-                        "gene_id": pa.array([], pa.string()),
-                        "cell_integer_id": pa.array([], pa.uint32()),
-                        "gene_integer_id": pa.array([], pa.uint16()),
-                        "value": pa.array([], pa.uint16()),
+                        "cell_id": pa.array([], type=pa.string()),
+                        "gene_id": pa.array([], type=pa.string()),
+                        "cell_integer_id": pa.array([], type=pa.uint32()),
+                        "gene_integer_id": pa.array([], type=pa.uint16()),
+                        "value": pa.array([], type=pa.uint16()),
                     }
                 )
             else:
                 empty_table = pa.table(
                     {
-                        "cell_id": pa.array([], pa.string()),
-                        "gene_id": pa.array([], pa.string()),
-                        "cell_integer_id": pa.array([], pa.int32()),
-                        "gene_integer_id": pa.array([], pa.int32()),
-                        "value": pa.array([], pa.float32()),
+                        "cell_id": pa.array([], type=pa.string()),
+                        "gene_id": pa.array([], type=pa.string()),
+                        "cell_integer_id": pa.array([], type=pa.int32()),
+                        "gene_integer_id": pa.array([], type=pa.int32()),
+                        "value": pa.array([], type=pa.float32()),
                     }
                 )
 
@@ -525,87 +521,59 @@ class SLAFConverter:
             enable_v2_manifest_paths=self.enable_v2_manifest,
         )
 
-        # Extract names once
-        cell_names = reader.obs_names
-        gene_names = reader.var_names
-
         # Process chunks sequentially
         print("Processing chunks sequentially...")
-        for chunk_idx, (chunk, obs_slice) in enumerate(
+        for chunk_idx, (chunk_table, obs_slice) in enumerate(
             reader.iter_chunks(chunk_size=self.chunk_size)
         ):
             print(f"Processing chunk {chunk_idx + 1}/{total_chunks} ({obs_slice})")
 
-            # Convert to COO format
-            if sparse.issparse(chunk):
-                coo_chunk = chunk.tocoo()
-            else:
-                coo_chunk = sparse.coo_matrix(chunk)
-
-            # Get cell names for this chunk
-            chunk_cell_names = cell_names[obs_slice]
-
-            # Create integer IDs
-            global_cell_offset = chunk_idx * self.chunk_size
-            if self.use_optimized_dtypes:
-                cell_integer_ids = (global_cell_offset + coo_chunk.row).astype(
-                    np.uint32
+            # Convert data types if needed
+            if not self.use_optimized_dtypes:
+                # Convert from optimized dtypes to standard dtypes
+                cell_integer_ids = (
+                    chunk_table.column("cell_integer_id").to_numpy().astype(np.int32)
                 )
-                gene_integer_ids = coo_chunk.col.astype(np.uint16)
-                # Convert values to uint16 (assuming they fit in 0-65535 range)
-                values = coo_chunk.data.astype(np.uint16)
-            else:
-                cell_integer_ids = (global_cell_offset + coo_chunk.row).astype(np.int32)
-                gene_integer_ids = coo_chunk.col.astype(np.int32)
-                values = coo_chunk.data.astype(np.float32)
+                gene_integer_ids = (
+                    chunk_table.column("gene_integer_id").to_numpy().astype(np.int32)
+                )
+                values = chunk_table.column("value").to_numpy().astype(np.float32)
 
-            # Create table based on storage optimization
-            if self.optimize_storage:
-                # Only store integer IDs for maximum storage efficiency
-                if self.use_optimized_dtypes:
-                    table = pa.table(
-                        {
-                            "cell_integer_id": pa.array(cell_integer_ids),
-                            "gene_integer_id": pa.array(gene_integer_ids),
-                            "value": pa.array(values),
-                        }
-                    )
-                else:
-                    table = pa.table(
-                        {
-                            "cell_integer_id": pa.array(cell_integer_ids),
-                            "gene_integer_id": pa.array(gene_integer_ids),
-                            "value": pa.array(values),
-                        }
-                    )
-            else:
-                # Store both string and integer IDs for compatibility
-                cell_ids = chunk_cell_names[coo_chunk.row].astype(str)
-                gene_ids = gene_names[coo_chunk.col].astype(str)
-                if self.use_optimized_dtypes:
-                    table = pa.table(
-                        {
-                            "cell_id": pa.array(cell_ids),
-                            "gene_id": pa.array(gene_ids),
-                            "cell_integer_id": pa.array(cell_integer_ids),
-                            "gene_integer_id": pa.array(gene_integer_ids),
-                            "value": pa.array(values),
-                        }
-                    )
-                else:
-                    table = pa.table(
-                        {
-                            "cell_id": pa.array(cell_ids),
-                            "gene_id": pa.array(gene_ids),
-                            "cell_integer_id": pa.array(cell_integer_ids),
-                            "gene_integer_id": pa.array(gene_integer_ids),
-                            "value": pa.array(values),
-                        }
-                    )
+                chunk_table = pa.table(
+                    {
+                        "cell_integer_id": pa.array(cell_integer_ids),
+                        "gene_integer_id": pa.array(gene_integer_ids),
+                        "value": pa.array(values),
+                    }
+                )
 
-            # Append to Lance dataset
+            # Add string IDs if optimize_storage=False
+            if not self.optimize_storage:
+                # Get cell and gene names
+                cell_names = reader.obs_names
+                gene_names = reader.var_names
+
+                # Create string ID arrays
+                cell_integer_ids = chunk_table.column("cell_integer_id").to_numpy()
+                gene_integer_ids = chunk_table.column("gene_integer_id").to_numpy()
+
+                cell_ids = cell_names[cell_integer_ids].astype(str)
+                gene_ids = gene_names[gene_integer_ids].astype(str)
+
+                # Create new table with string IDs
+                chunk_table = pa.table(
+                    {
+                        "cell_id": pa.array(cell_ids),
+                        "gene_id": pa.array(gene_ids),
+                        "cell_integer_id": chunk_table.column("cell_integer_id"),
+                        "gene_integer_id": chunk_table.column("gene_integer_id"),
+                        "value": chunk_table.column("value"),
+                    }
+                )
+
+            # Write to Lance
             lance.write_dataset(
-                table,
+                chunk_table,
                 str(expression_path),
                 mode="append",
                 max_rows_per_file=self._get_compression_settings("expression")[

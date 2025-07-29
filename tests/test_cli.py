@@ -1126,7 +1126,7 @@ class TestCLI:
                 )
                 mock_converter.assert_called_once_with(
                     chunked=True,
-                    chunk_size=50000,
+                    chunk_size=25000,
                     create_indices=False,
                     optimize_storage=True,
                     use_optimized_dtypes=True,

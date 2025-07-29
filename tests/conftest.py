@@ -334,7 +334,9 @@ def small_adata():
 def tiny_slaf(temp_dir, tiny_adata):
     """Create a tiny SLAFArray for testing."""
     # Convert to SLAF format
-    converter = SLAFConverter(use_optimized_dtypes=False, compact_after_write=False)
+    converter = SLAFConverter(
+        use_optimized_dtypes=False, compact_after_write=False, chunked=False
+    )
     slaf_path = Path(temp_dir) / "tiny_test_dataset.slaf"
     converter.convert_anndata(tiny_adata, str(slaf_path))
 
@@ -345,7 +347,9 @@ def tiny_slaf(temp_dir, tiny_adata):
 def small_slaf(temp_dir, small_adata):
     """Create a small SLAFArray for SLAFArray testing."""
     # Convert to SLAF format
-    converter = SLAFConverter(use_optimized_dtypes=False, compact_after_write=False)
+    converter = SLAFConverter(
+        use_optimized_dtypes=False, compact_after_write=False, chunked=False
+    )
     slaf_path = Path(temp_dir) / "small_test_dataset.slaf"
     converter.convert_anndata(small_adata, str(slaf_path))
 
@@ -413,7 +417,9 @@ def tiny_slaf_path(temp_dir):
     adata = sc.AnnData(X=sparse_matrix, obs=obs, var=var)
 
     # Convert to SLAF format
-    converter = SLAFConverter(use_optimized_dtypes=False, compact_after_write=False)
+    converter = SLAFConverter(
+        use_optimized_dtypes=False, compact_after_write=False, chunked=False
+    )
     slaf_path = Path(temp_dir) / "tiny_test_dataset.slaf"
     converter.convert_anndata(adata, str(slaf_path))
 

@@ -7,6 +7,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 from scipy import sparse
 
 
@@ -90,9 +91,9 @@ class BaseChunkedReader(ABC):
     @abstractmethod
     def iter_chunks(
         self, chunk_size: int = 1000, obs_chunk: bool = True
-    ) -> Iterator[tuple[np.ndarray | sparse.csr_matrix, slice]]:
+    ) -> Iterator[tuple[pa.Table, slice]]:
         """
-        Iterate over data in chunks.
+        Iterate over data in chunks, returning Arrow tables directly.
 
         Parameters:
         -----------
@@ -104,16 +105,19 @@ class BaseChunkedReader(ABC):
         Yields:
         -------
         tuple
-            (chunk_data, slice) where chunk_data is the data matrix and slice is the
-            slice object indicating the chunk boundaries
+            (chunk_table, slice) where chunk_table is an Arrow table with columns:
+            - cell_integer_id: uint32 array
+            - gene_integer_id: uint16 array
+            - value: uint16 array
+            and slice is the slice object indicating the chunk boundaries
         """
         pass
 
     def get_chunk(
         self, obs_slice: slice | None = None, var_slice: slice | None = None
-    ) -> np.ndarray | sparse.csr_matrix:
+    ) -> pa.Table:
         """
-        Get a specific chunk of data.
+        Get a specific chunk of data as an Arrow table.
 
         Parameters:
         -----------
@@ -124,8 +128,8 @@ class BaseChunkedReader(ABC):
 
         Returns:
         --------
-        np.ndarray or sparse.csr_matrix
-            The requested data chunk
+        pa.Table
+            Arrow table with the requested data chunk
         """
         if obs_slice is None:
             obs_slice = slice(0, self.n_obs)
@@ -135,9 +139,7 @@ class BaseChunkedReader(ABC):
         return self._get_chunk_impl(obs_slice, var_slice)
 
     @abstractmethod
-    def _get_chunk_impl(
-        self, obs_slice: slice, var_slice: slice
-    ) -> np.ndarray | sparse.csr_matrix:
+    def _get_chunk_impl(self, obs_slice: slice, var_slice: slice) -> pa.Table:
         """Implementation of chunk retrieval. Called by get_chunk."""
         pass
 
@@ -337,6 +339,8 @@ class ChunkedH5ADReader(BaseChunkedReader):
             return df
         else:
             df = pd.DataFrame(obs_data)
+            # Set the index to the actual cell names
+            df.index = self.obs_names
             return df
 
     def get_var_metadata(self) -> pd.DataFrame:
@@ -377,10 +381,58 @@ class ChunkedH5ADReader(BaseChunkedReader):
             return df
         else:
             df = pd.DataFrame(var_data)
+            # Set the index to the actual gene names
+            df.index = self.var_names
             return df
 
-    def _read_sparse_chunk(self, start_row: int, end_row: int) -> sparse.csr_matrix:
-        """Read a chunk from sparse matrix format"""
+    def _is_sparse(self) -> bool:
+        """Check if the data is stored in sparse format"""
+        if self.file is None:
+            raise RuntimeError("File not opened. Use context manager.")
+        X_group = self.file["X"]
+        return isinstance(X_group, h5py.Group) and "data" in X_group
+
+    def iter_chunks(
+        self, chunk_size: int = 1000, obs_chunk: bool = True
+    ) -> Iterator[tuple[pa.Table, slice]]:
+        """
+        Iterate over data in chunks, returning Arrow tables directly.
+
+        Parameters:
+        -----------
+        chunk_size : int
+            Number of observations per chunk
+        obs_chunk : bool
+            If True, chunk by observations (cells). If False, chunk by variables (genes).
+
+        Yields:
+        -------
+        tuple
+            (chunk_table, slice) where chunk_table is an Arrow table with columns:
+            - cell_integer_id: uint32 array
+            - gene_integer_id: uint16 array
+            - value: uint16 array
+            and slice is the slice object indicating the chunk boundaries
+        """
+        if obs_chunk:
+            total_obs = self.n_obs
+            for start in range(0, total_obs, chunk_size):
+                end = min(start + chunk_size, total_obs)
+                chunk_table = self._read_chunk_as_arrow(start, end)
+                yield chunk_table, slice(start, end)
+        else:
+            # Variable chunking not implemented for h5ad
+            raise NotImplementedError("Variable chunking not supported for h5ad files")
+
+    def _read_chunk_as_arrow(self, start_row: int, end_row: int) -> pa.Table:
+        """Read a chunk and return as Arrow table directly"""
+        if self._is_sparse():
+            return self._read_sparse_chunk_as_arrow(start_row, end_row)
+        else:
+            return self._read_dense_chunk_as_arrow(start_row, end_row)
+
+    def _read_sparse_chunk_as_arrow(self, start_row: int, end_row: int) -> pa.Table:
+        """Read a sparse chunk and return as Arrow table directly"""
         if self.file is None:
             raise RuntimeError("File not opened. Use context manager.")
         X_group = self.file["X"]
@@ -397,85 +449,97 @@ class ChunkedH5ADReader(BaseChunkedReader):
             # Adjust indptr to start from 0
             indptr = indptr - start_idx
 
-            chunk_shape = (end_row - start_row, self.n_vars)
-            return sparse.csr_matrix((data, indices, indptr), shape=chunk_shape)
+            # Convert to COO format for Arrow table
+            # Create row indices from indptr
+            row_indices = []
+            for i in range(len(indptr) - 1):
+                row_indices.extend([i] * (indptr[i + 1] - indptr[i]))
+
+            if row_indices:
+                # Create Arrow arrays directly
+                cell_integer_ids = np.array(row_indices, dtype=np.uint32) + start_row
+                gene_integer_ids = indices.astype(np.uint16)
+                values = data.astype(np.uint16)
+
+                return pa.table(
+                    {
+                        "cell_integer_id": pa.array(cell_integer_ids),
+                        "gene_integer_id": pa.array(gene_integer_ids),
+                        "value": pa.array(values),
+                    }
+                )
+            else:
+                # Empty chunk
+                return pa.table(
+                    {
+                        "cell_integer_id": pa.array([], type=pa.uint32()),
+                        "gene_integer_id": pa.array([], type=pa.uint16()),
+                        "value": pa.array([], type=pa.uint16()),
+                    }
+                )
         else:
             raise ValueError("Unsupported sparse matrix format")
 
-    def _read_dense_chunk(self, start_row: int, end_row: int) -> np.ndarray:
-        """Read a chunk from dense matrix format"""
+    def _read_dense_chunk_as_arrow(self, start_row: int, end_row: int) -> pa.Table:
+        """Read a dense chunk and return as Arrow table directly"""
         if self.file is None:
             raise RuntimeError("File not opened. Use context manager.")
         X_dataset = self.file["X"]
-        return X_dataset[start_row:end_row, :]
+        chunk_data = X_dataset[start_row:end_row, :]
 
-    def iter_chunks(
-        self, chunk_size: int = 1000, obs_chunk: bool = True
-    ) -> Iterator[tuple[np.ndarray | sparse.csr_matrix, slice]]:
-        """
-        Iterate over data in chunks.
+        # Convert dense matrix to COO format
+        coo = sparse.coo_matrix(chunk_data)
 
-        Parameters:
-        -----------
-        chunk_size : int
-            Number of observations per chunk
-        obs_chunk : bool
-            If True, chunk by observations (cells). If False, chunk by variables (genes).
+        if coo.nnz > 0:
+            # Create Arrow arrays directly
+            cell_integer_ids = coo.row.astype(np.uint32) + start_row
+            gene_integer_ids = coo.col.astype(np.uint16)
+            values = coo.data.astype(np.uint16)
 
-        Yields:
-        -------
-        tuple
-            (chunk_data, slice) where chunk_data is the data matrix and slice is the
-            slice object indicating the chunk boundaries
-        """
-        if obs_chunk:
-            total_obs = self.n_obs
-            for start in range(0, total_obs, chunk_size):
-                end = min(start + chunk_size, total_obs)
-                chunk = (
-                    self._read_sparse_chunk(start, end)
-                    if self._is_sparse()
-                    else self._read_dense_chunk(start, end)
-                )
-                yield chunk, slice(start, end)
+            return pa.table(
+                {
+                    "cell_integer_id": pa.array(cell_integer_ids),
+                    "gene_integer_id": pa.array(gene_integer_ids),
+                    "value": pa.array(values),
+                }
+            )
         else:
-            # Variable chunking not implemented for h5ad
-            raise NotImplementedError("Variable chunking not supported for h5ad files")
+            # Empty chunk
+            return pa.table(
+                {
+                    "cell_integer_id": pa.array([], type=pa.uint32()),
+                    "gene_integer_id": pa.array([], type=pa.uint16()),
+                    "value": pa.array([], type=pa.uint16()),
+                }
+            )
 
-    def _get_chunk_impl(
-        self, obs_slice: slice, var_slice: slice
-    ) -> np.ndarray | sparse.csr_matrix:
+    def _get_chunk_impl(self, obs_slice: slice, var_slice: slice) -> pa.Table:
         """Implementation of chunk retrieval for h5ad files"""
-        if self._is_sparse():
-            # For sparse matrices, we need to handle slicing differently
-            # This is a simplified implementation - in practice, you might want
-            # to implement proper sparse matrix slicing
-            start_row = obs_slice.start or 0
-            end_row = obs_slice.stop or self.n_obs
-            chunk = self._read_sparse_chunk(start_row, end_row)
+        start_row = obs_slice.start or 0
+        end_row = obs_slice.stop or self.n_obs
 
-            # Apply variable slicing if needed
-            if var_slice.start != 0 or var_slice.stop != self.n_vars:
-                chunk = chunk[:, var_slice]
+        # Get the full chunk first
+        chunk_table = self._read_chunk_as_arrow(start_row, end_row)
 
-            return chunk
-        else:
-            # For dense matrices, use direct slicing
-            start_row = obs_slice.start or 0
-            end_row = obs_slice.stop or self.n_obs
-            start_col = var_slice.start or 0
-            end_col = var_slice.stop or self.n_vars
+        # Apply variable slicing if needed
+        if var_slice.start != 0 or var_slice.stop != self.n_vars:
+            # Filter by gene_integer_id
+            gene_integer_ids = chunk_table.column("gene_integer_id").to_numpy()
+            mask = (gene_integer_ids >= var_slice.start) & (
+                gene_integer_ids < var_slice.stop
+            )
+            chunk_table = chunk_table.filter(pa.array(mask))
 
-            if self.file is None:
-                raise RuntimeError("File not opened")
-            return self.file["X"][start_row:end_row, start_col:end_col]
+            # Adjust gene_integer_id to be relative to the slice
+            if var_slice.start > 0:
+                gene_integer_ids = (
+                    chunk_table.column("gene_integer_id").to_numpy() - var_slice.start
+                )
+                chunk_table = chunk_table.set_column(
+                    1, "gene_integer_id", pa.array(gene_integer_ids)
+                )
 
-    def _is_sparse(self) -> bool:
-        """Check if the data is stored in sparse format"""
-        if self.file is None:
-            raise RuntimeError("File not opened. Use context manager.")
-        X_group = self.file["X"]
-        return isinstance(X_group, h5py.Group) and "data" in X_group
+        return chunk_table
 
     def get_gene_expression(
         self, gene_names: list, chunk_size: int = 1000
@@ -532,24 +596,46 @@ class ChunkedH5ADReader(BaseChunkedReader):
             return
 
         # Iterate over chunks and extract gene expression
-        for chunk, obs_slice in self.iter_chunks(chunk_size=chunk_size):
-            if self._is_sparse():
-                # For sparse matrices, extract the specific genes
-                chunk_slice = chunk[:, gene_indices]
-                if isinstance(chunk_slice, sparse.csr_matrix):
-                    chunk_genes = chunk_slice.toarray()
-                else:
-                    chunk_genes = chunk_slice
-            else:
-                chunk_genes = chunk[:, gene_indices]
+        for chunk_table, _obs_slice in self.iter_chunks(chunk_size=chunk_size):
+            # Convert Arrow table to DataFrame for gene extraction
+            chunk_df = chunk_table.to_pandas()
 
-            # Create DataFrame
-            chunk_df = pd.DataFrame(
-                chunk_genes,
-                index=self.obs_names[obs_slice],
-                columns=[gene_names[i] for i in range(len(gene_indices))],
-            )
-            yield chunk_df
+            # Filter for specific genes
+            gene_mask = chunk_df["gene_integer_id"].isin(gene_indices)
+            chunk_genes = chunk_df[gene_mask]
+
+            # Always yield a DataFrame for this chunk, even if empty
+            if not chunk_genes.empty:
+                # Pivot to get genes as columns
+                chunk_genes_pivot = chunk_genes.pivot(
+                    index="cell_integer_id", columns="gene_integer_id", values="value"
+                ).fillna(0)
+
+                # Create DataFrame with gene names as columns
+                chunk_df_final = pd.DataFrame(
+                    chunk_genes_pivot.values,
+                    index=[f"cell_{i}" for i in chunk_genes_pivot.index],
+                    columns=[
+                        gene_names[i]
+                        for i in gene_indices
+                        if i in chunk_genes_pivot.columns
+                    ],
+                )
+
+                # Ensure all requested genes are present (fill with zeros if missing)
+                for i, _gene_idx in enumerate(gene_indices):
+                    if gene_names[i] not in chunk_df_final.columns:
+                        chunk_df_final[gene_names[i]] = 0
+
+                # Reorder columns to match the requested gene order
+                chunk_df_final = chunk_df_final[[gene_names[i] for i in gene_indices]]
+            else:
+                # Create empty DataFrame with correct structure
+                chunk_df_final = pd.DataFrame(
+                    columns=[gene_names[i] for i in gene_indices]
+                )
+
+            yield chunk_df_final
 
 
 class Chunked10xMTXReader(BaseChunkedReader):
@@ -667,7 +753,7 @@ class Chunked10xMTXReader(BaseChunkedReader):
         return pd.DataFrame(index=self._genes)
 
     def iter_chunks(self, chunk_size: int = 1000, obs_chunk: bool = True):
-        """Iterate over chunks by reading MTX file directly"""
+        """Iterate over chunks by reading MTX file directly and returning Arrow tables"""
         if not obs_chunk:
             raise NotImplementedError("Variable chunking not supported for MTX files")
 
@@ -682,10 +768,12 @@ class Chunked10xMTXReader(BaseChunkedReader):
         for line in self._matrix_file:
             row, col, val = map(float, line.strip().split())
             # MTX is 1-indexed, convert to 0-indexed
-            entries.append((int(row) - 1, int(col) - 1, val))
+            # MTX stores (gene, cell, value) but matrix is transposed
+            # So we need to swap row and col to get (cell, gene, value)
+            entries.append((int(col) - 1, int(row) - 1, val))
 
         # Sort by column (cell) for efficient chunking
-        entries.sort(key=lambda x: x[1])
+        entries.sort(key=lambda x: x[0])
 
         # Yield chunks
         n_obs = self._n_obs
@@ -697,21 +785,37 @@ class Chunked10xMTXReader(BaseChunkedReader):
 
             # Filter entries for this chunk
             chunk_entries = [
-                (row, col - start, val)
+                (row - start, col, val)
                 for row, col, val in entries
-                if start <= col < end
+                if start <= row < end
             ]
 
-            # Convert to sparse matrix
+            # Convert to Arrow table directly
             if chunk_entries:
                 rows, cols, vals = zip(*chunk_entries, strict=False)
-                chunk = sparse.csr_matrix(
-                    (vals, (rows, cols)), shape=(self._n_vars, end - start)
-                ).T  # Transpose to get (cells, genes)
-            else:
-                chunk = sparse.csr_matrix((end - start, self._n_vars))
+                # Create Arrow arrays directly
+                cell_integer_ids = np.array(rows, dtype=np.uint32) + start
+                gene_integer_ids = np.array(cols, dtype=np.uint16)
+                values = np.array(vals, dtype=np.uint16)
 
-            yield chunk, slice(start, end)
+                chunk_table = pa.table(
+                    {
+                        "cell_integer_id": pa.array(cell_integer_ids),
+                        "gene_integer_id": pa.array(gene_integer_ids),
+                        "value": pa.array(values),
+                    }
+                )
+            else:
+                # Empty chunk
+                chunk_table = pa.table(
+                    {
+                        "cell_integer_id": pa.array([], type=pa.uint32()),
+                        "gene_integer_id": pa.array([], type=pa.uint16()),
+                        "value": pa.array([], type=pa.uint16()),
+                    }
+                )
+
+            yield chunk_table, slice(start, end)
 
     def _get_chunk_impl(self, obs_slice: slice, var_slice: slice):
         """Get a specific chunk by reading the entire file and filtering"""
@@ -730,31 +834,63 @@ class Chunked10xMTXReader(BaseChunkedReader):
         entries = []
         for line in self._matrix_file:
             row, col, val = map(float, line.strip().split())
-            row_idx, col_idx = int(row) - 1, int(col) - 1
-            if start_row <= col_idx < end_row:
-                entries.append((row_idx, col_idx - start_row, val))
+            # MTX stores (gene, cell, value) but matrix is transposed
+            # So we need to swap row and col to get (cell, gene, value)
+            cell_idx, gene_idx = int(col) - 1, int(row) - 1
+            if start_row <= cell_idx < end_row:
+                entries.append((cell_idx - start_row, gene_idx, val))
 
-        # Convert to sparse matrix
+        # Convert to Arrow table directly
         n_vars = self._n_vars
         if n_vars is None:
             raise RuntimeError("n_vars not initialized")
 
         if entries:
             rows, cols, vals = zip(*entries, strict=False)
-            chunk = sparse.csr_matrix(
-                (vals, (rows, cols)), shape=(n_vars, end_row - start_row)
-            ).T
+            # Create Arrow arrays directly
+            cell_integer_ids = np.array(rows, dtype=np.uint32) + start_row
+            gene_integer_ids = np.array(cols, dtype=np.uint16)
+            values = np.array(vals, dtype=np.uint16)
+
+            chunk_table = pa.table(
+                {
+                    "cell_integer_id": pa.array(cell_integer_ids),
+                    "gene_integer_id": pa.array(gene_integer_ids),
+                    "value": pa.array(values),
+                }
+            )
         else:
-            chunk = sparse.csr_matrix((end_row - start_row, n_vars))
+            # Empty chunk
+            chunk_table = pa.table(
+                {
+                    "cell_integer_id": pa.array([], type=pa.uint32()),
+                    "gene_integer_id": pa.array([], type=pa.uint16()),
+                    "value": pa.array([], type=pa.uint16()),
+                }
+            )
 
         # Apply variable slicing if needed
         n_vars = self._n_vars
         if n_vars is None:
             raise RuntimeError("n_vars not initialized")
         if var_slice.start != 0 or var_slice.stop != n_vars:
-            chunk = chunk[:, var_slice]
+            # Filter by gene_integer_id
+            gene_integer_ids = chunk_table.column("gene_integer_id").to_numpy()
+            mask = (gene_integer_ids >= var_slice.start) & (
+                gene_integer_ids < var_slice.stop
+            )
+            chunk_table = chunk_table.filter(pa.array(mask))
 
-        return chunk
+            # Adjust gene_integer_id to be relative to the slice
+            if var_slice.start > 0:
+                gene_integer_ids = (
+                    chunk_table.column("gene_integer_id").to_numpy() - var_slice.start
+                )
+                chunk_table = chunk_table.set_column(
+                    1, "gene_integer_id", pa.array(gene_integer_ids)
+                )
+
+        return chunk_table
 
 
 class Chunked10xH5Reader(BaseChunkedReader):
@@ -953,7 +1089,7 @@ class Chunked10xH5Reader(BaseChunkedReader):
         return pd.DataFrame(metadata, index=self.var_names)
 
     def iter_chunks(self, chunk_size: int = 1000, obs_chunk: bool = True):
-        """Iterate over chunks by reading directly from H5 dataset"""
+        """Iterate over chunks by reading directly from H5 dataset and returning Arrow tables"""
         if not obs_chunk:
             raise NotImplementedError("Variable chunking not supported for H5 files")
 
@@ -963,9 +1099,35 @@ class Chunked10xH5Reader(BaseChunkedReader):
         total_obs = self.n_obs
         for start in range(0, total_obs, chunk_size):
             end = min(start + chunk_size, total_obs)
+
             if hasattr(self._matrix_dataset, "shape"):
                 # Dense
-                chunk = self._matrix_dataset[start:end, :]
+                chunk_data = self._matrix_dataset[start:end, :]
+                # Convert dense matrix to COO format
+                coo = sparse.coo_matrix(chunk_data)
+
+                if coo.nnz > 0:
+                    # Create Arrow arrays directly
+                    cell_integer_ids = coo.row.astype(np.uint32) + start
+                    gene_integer_ids = coo.col.astype(np.uint16)
+                    values = coo.data.astype(np.uint16)
+
+                    chunk_table = pa.table(
+                        {
+                            "cell_integer_id": pa.array(cell_integer_ids),
+                            "gene_integer_id": pa.array(gene_integer_ids),
+                            "value": pa.array(values),
+                        }
+                    )
+                else:
+                    # Empty chunk
+                    chunk_table = pa.table(
+                        {
+                            "cell_integer_id": pa.array([], type=pa.uint32()),
+                            "gene_integer_id": pa.array([], type=pa.uint16()),
+                            "value": pa.array([], type=pa.uint16()),
+                        }
+                    )
             elif isinstance(self._matrix_dataset, h5py.Group):
                 # Sparse CSR
                 indptr = self._matrix_dataset["indptr"][start : end + 1]
@@ -974,13 +1136,39 @@ class Chunked10xH5Reader(BaseChunkedReader):
                 data = self._matrix_dataset["data"][start_idx:end_idx]
                 indices = self._matrix_dataset["indices"][start_idx:end_idx]
                 indptr = indptr - start_idx
-                chunk_shape = (end - start, self.n_vars)
-                from scipy import sparse
 
-                chunk = sparse.csr_matrix((data, indices, indptr), shape=chunk_shape)
+                # Convert to COO format for Arrow table
+                # Create row indices from indptr
+                row_indices = []
+                for i in range(len(indptr) - 1):
+                    row_indices.extend([i] * (indptr[i + 1] - indptr[i]))
+
+                if row_indices:
+                    # Create Arrow arrays directly
+                    cell_integer_ids = np.array(row_indices, dtype=np.uint32) + start
+                    gene_integer_ids = indices.astype(np.uint16)
+                    values = data.astype(np.uint16)
+
+                    chunk_table = pa.table(
+                        {
+                            "cell_integer_id": pa.array(cell_integer_ids),
+                            "gene_integer_id": pa.array(gene_integer_ids),
+                            "value": pa.array(values),
+                        }
+                    )
+                else:
+                    # Empty chunk
+                    chunk_table = pa.table(
+                        {
+                            "cell_integer_id": pa.array([], type=pa.uint32()),
+                            "gene_integer_id": pa.array([], type=pa.uint16()),
+                            "value": pa.array([], type=pa.uint16()),
+                        }
+                    )
             else:
                 raise ValueError("Unknown matrix dataset type for chunking")
-            yield chunk, slice(start, end)
+
+            yield chunk_table, slice(start, end)
 
     def _get_chunk_impl(self, obs_slice: slice, var_slice: slice):
         """Get a specific chunk by reading directly from H5 dataset"""
@@ -990,9 +1178,35 @@ class Chunked10xH5Reader(BaseChunkedReader):
         end_row = obs_slice.stop or self.n_obs
         start_col = var_slice.start or 0
         end_col = var_slice.stop or self.n_vars
+
         if hasattr(self._matrix_dataset, "shape"):
             # Dense
-            chunk = self._matrix_dataset[start_row:end_row, start_col:end_col]
+            chunk_data = self._matrix_dataset[start_row:end_row, start_col:end_col]
+            # Convert dense matrix to COO format
+            coo = sparse.coo_matrix(chunk_data)
+
+            if coo.nnz > 0:
+                # Create Arrow arrays directly
+                cell_integer_ids = coo.row.astype(np.uint32) + start_row
+                gene_integer_ids = coo.col.astype(np.uint16) + start_col
+                values = coo.data.astype(np.uint16)
+
+                chunk_table = pa.table(
+                    {
+                        "cell_integer_id": pa.array(cell_integer_ids),
+                        "gene_integer_id": pa.array(gene_integer_ids),
+                        "value": pa.array(values),
+                    }
+                )
+            else:
+                # Empty chunk
+                chunk_table = pa.table(
+                    {
+                        "cell_integer_id": pa.array([], type=pa.uint32()),
+                        "gene_integer_id": pa.array([], type=pa.uint16()),
+                        "value": pa.array([], type=pa.uint16()),
+                    }
+                )
         elif isinstance(self._matrix_dataset, h5py.Group):
             # Sparse CSR
             indptr = self._matrix_dataset["indptr"][start_row : end_row + 1]
@@ -1001,15 +1215,57 @@ class Chunked10xH5Reader(BaseChunkedReader):
             data = self._matrix_dataset["data"][start_idx:end_idx]
             indices = self._matrix_dataset["indices"][start_idx:end_idx]
             indptr = indptr - start_idx
-            chunk_shape = (end_row - start_row, self.n_vars)
-            from scipy import sparse
 
-            chunk = sparse.csr_matrix((data, indices, indptr), shape=chunk_shape)
-            if start_col != 0 or end_col != self.n_vars:
-                chunk = chunk[:, start_col:end_col]
+            # Convert to COO format for Arrow table
+            # Create row indices from indptr
+            row_indices = []
+            for i in range(len(indptr) - 1):
+                row_indices.extend([i] * (indptr[i + 1] - indptr[i]))
+
+            if row_indices:
+                # Create Arrow arrays directly
+                cell_integer_ids = np.array(row_indices, dtype=np.uint32) + start_row
+                gene_integer_ids = indices.astype(np.uint16)
+                values = data.astype(np.uint16)
+
+                chunk_table = pa.table(
+                    {
+                        "cell_integer_id": pa.array(cell_integer_ids),
+                        "gene_integer_id": pa.array(gene_integer_ids),
+                        "value": pa.array(values),
+                    }
+                )
+
+                # Apply variable slicing if needed
+                if start_col != 0 or end_col != self.n_vars:
+                    # Filter by gene_integer_id
+                    gene_integer_ids = chunk_table.column("gene_integer_id").to_numpy()
+                    mask = (gene_integer_ids >= start_col) & (
+                        gene_integer_ids < end_col
+                    )
+                    chunk_table = chunk_table.filter(pa.array(mask))
+
+                    # Adjust gene_integer_id to be relative to the slice
+                    if start_col > 0:
+                        gene_integer_ids = (
+                            chunk_table.column("gene_integer_id").to_numpy() - start_col
+                        )
+                        chunk_table = chunk_table.set_column(
+                            1, "gene_integer_id", pa.array(gene_integer_ids)
+                        )
+            else:
+                # Empty chunk
+                chunk_table = pa.table(
+                    {
+                        "cell_integer_id": pa.array([], type=pa.uint32()),
+                        "gene_integer_id": pa.array([], type=pa.uint16()),
+                        "value": pa.array([], type=pa.uint16()),
+                    }
+                )
         else:
             raise ValueError("Unknown matrix dataset type for chunking")
-        return chunk
+
+        return chunk_table
 
 
 def create_chunked_reader(file_path: str) -> BaseChunkedReader:
