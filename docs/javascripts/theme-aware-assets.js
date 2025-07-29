@@ -75,10 +75,16 @@
     return 'light';
   }
 
+  // Function to get the correct asset path from any page depth
+  function getAssetPath(assetName) {
+    // Use absolute path from site root, accounting for the /slaf/ subdirectory
+    return '/slaf/assets/' + assetName;
+  }
+
   // Function to update favicon based on theme
   function updateFavicon() {
     // Always use dark monochrome for favicon - no theme switching
-    const faviconPath = 'assets/slaf-icon-transparent-dark-mono.svg';
+    const faviconPath = getAssetPath('slaf-icon-transparent-dark-mono.svg');
     setFavicon(faviconPath);
   }
 
@@ -88,7 +94,7 @@
     const headerIcon = document.querySelector('.md-header__button.md-logo img');
 
     if (headerIcon) {
-      const iconPath = 'assets/slaf-icon-transparent-dark-mono.svg';
+      const iconPath = getAssetPath('slaf-icon-transparent-dark-mono.svg');
       headerIcon.src = iconPath;
     }
   }
