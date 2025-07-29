@@ -228,11 +228,22 @@ Available benchmark types include:
 - `gene_filtering`: Gene filtering and selection
 - `expression_queries`: Expression matrix slicing and queries
 - `scanpy_preprocessing`: Scanpy preprocessing pipeline operations
-- `tokenizers`: Tokenizer throughput for ML training
-- `dataloaders`: Dataloader overhead measurements
 - `anndata_ops`: Basic AnnData operations
-- `multi_process_scaling`: Multi-process scaling tests
-- `data_vs_tokenization_timing`: Timing breakdown analysis
+
+### ML Benchmarks (Standalone)
+
+For ML-specific benchmarks, run the standalone scripts:
+
+```bash
+# External dataloader comparisons
+uv run python benchmarks/benchmark_dataloaders_external.py
+
+# Internal tokenization strategies
+uv run python benchmarks/benchmark_dataloaders_internal.py
+
+# Prefetcher performance analysis
+uv run python benchmarks/benchmark_prefetcher.py
+```
 
 For detailed information about the benchmark system, including advanced usage, troubleshooting, and contributing new benchmarks, see the [Benchmarks Guide](benchmarks.md).
 

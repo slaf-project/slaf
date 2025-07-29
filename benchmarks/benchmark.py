@@ -115,77 +115,26 @@ def run_benchmark_suite(
             # Run the specific benchmark
             benchmark_func = all_benchmark_types[benchmark_type]
 
-            # Handle different benchmark return types
-            if benchmark_type == "multi_process_scaling":
-                results = benchmark_func(
-                    h5ad_path=h5ad_path,
-                    slaf_path=slaf_path,
-                    max_processes=8,
-                    verbose=verbose,
+            # Run the benchmark function
+            results = benchmark_func(
+                h5ad_path=h5ad_path,
+                slaf_path=slaf_path,
+                include_memory=True,
+                verbose=verbose,
+            )
+
+            if results:
+                all_results[benchmark_type] = results
+
+                # Display results for this benchmark type
+                print_benchmark_table(results, Path(h5ad_path).stem, benchmark_type)
+
+                # Calculate summary for this type
+                _ = np.mean(
+                    [r["total_speedup"] for r in results if r["total_speedup"] > 0]
                 )
-                # Convert multi-process results to standard format for summary
-                if results:
-                    all_results[benchmark_type] = results
-                    print(
-                        f"✅ {benchmark_type}: Multi-process scaling results generated"
-                    )
-                else:
-                    print(f"⚠️  {benchmark_type}: No results generated")
-            elif benchmark_type == "data_vs_tokenization_timing":
-                # Timing breakdown returns a dictionary with h5ad/slaf breakdowns
-                results = benchmark_func(
-                    h5ad_path=h5ad_path,
-                    slaf_path=slaf_path,
-                    verbose=verbose,
-                )
-                if results:
-                    all_results[benchmark_type] = results
-                    print(f"✅ {benchmark_type}: Timing breakdown analysis completed")
-                else:
-                    print(f"⚠️  {benchmark_type}: No results generated")
-            elif benchmark_type == "dataloaders":
-                results = benchmark_func(
-                    h5ad_path=h5ad_path,
-                    slaf_path=slaf_path,
-                    include_memory=True,
-                    verbose=verbose,
-                    print_table=False,
-                )
-
-                if results:
-                    all_results[benchmark_type] = results
-
-                    # Use custom table for dataloaders benchmark
-                    from benchmark_dataloaders import print_dataloader_results_table
-
-                    print_dataloader_results_table(results)
-
-                    # Calculate summary for this type
-                    _ = np.mean(
-                        [r["total_speedup"] for r in results if r["total_speedup"] > 0]
-                    )
-                else:
-                    print(f"⚠️  {benchmark_type}: No results generated")
             else:
-                results = benchmark_func(
-                    h5ad_path=h5ad_path,
-                    slaf_path=slaf_path,
-                    include_memory=True,
-                    verbose=verbose,
-                )
-
-                if results:
-                    all_results[benchmark_type] = results
-
-                    # Display results for this benchmark type
-                    print_benchmark_table(results, Path(h5ad_path).stem, benchmark_type)
-
-                    # Calculate summary for this type
-                    _ = np.mean(
-                        [r["total_speedup"] for r in results if r["total_speedup"] > 0]
-                    )
-                else:
-                    print(f"⚠️  {benchmark_type}: No results generated")
+                print(f"⚠️  {benchmark_type}: No results generated")
 
         except Exception as e:
             print(f"❌ {benchmark_type} failed: {e}")

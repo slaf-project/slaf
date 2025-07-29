@@ -24,10 +24,20 @@ class BaseChunkedReader(ABC):
         """
         Initialize the chunked reader.
 
-        Parameters:
-        -----------
-        file_path : str
-            Path to the data file or directory
+        Args:
+            file_path: Path to the data file or directory. Can be a single file
+                      (h5ad, h5) or directory (10x MTX format).
+
+        Examples:
+            >>> # Initialize with h5ad file
+            >>> reader = BaseChunkedReader("data.h5ad")
+            >>> print(f"File path: {reader.file_path}")
+            File path: data.h5ad
+
+            >>> # Initialize with 10x MTX directory
+            >>> reader = BaseChunkedReader("10x_data/")
+            >>> print(f"File path: {reader.file_path}")
+            File path: 10x_data/
         """
         self.file_path = file_path
         self._n_obs: int | None = None
@@ -57,35 +67,65 @@ class BaseChunkedReader(ABC):
     @property
     @abstractmethod
     def n_obs(self) -> int:
-        """Number of observations (cells)"""
+        """
+        Number of observations (cells) in the dataset.
+
+        Returns:
+            Total number of cells in the dataset.
+        """
         pass
 
     @property
     @abstractmethod
     def n_vars(self) -> int:
-        """Number of variables (genes)"""
+        """
+        Number of variables (genes) in the dataset.
+
+        Returns:
+            Total number of genes in the dataset.
+        """
         pass
 
     @property
     @abstractmethod
     def obs_names(self) -> np.ndarray:
-        """Get observation names (cell barcodes)"""
+        """
+        Get observation names (cell barcodes).
+
+        Returns:
+            Array of cell barcode strings.
+        """
         pass
 
     @property
     @abstractmethod
     def var_names(self) -> np.ndarray:
-        """Get variable names (gene names)"""
+        """
+        Get variable names (gene names).
+
+        Returns:
+            Array of gene name strings.
+        """
         pass
 
     @abstractmethod
     def get_obs_metadata(self) -> pd.DataFrame:
-        """Get observation metadata as pandas DataFrame"""
+        """
+        Get observation metadata as pandas DataFrame.
+
+        Returns:
+            DataFrame containing cell metadata with cell barcodes as index.
+        """
         pass
 
     @abstractmethod
     def get_var_metadata(self) -> pd.DataFrame:
-        """Get variable metadata as pandas DataFrame"""
+        """
+        Get variable metadata as pandas DataFrame.
+
+        Returns:
+            DataFrame containing gene metadata with gene names as index.
+        """
         pass
 
     @abstractmethod
@@ -95,21 +135,27 @@ class BaseChunkedReader(ABC):
         """
         Iterate over data in chunks, returning Arrow tables directly.
 
-        Parameters:
-        -----------
-        chunk_size : int
-            Number of observations per chunk
-        obs_chunk : bool
-            If True, chunk by observations (cells). If False, chunk by variables (genes).
+        Args:
+            chunk_size: Number of observations per chunk. Default: 1000.
+            obs_chunk: If True, chunk by observations (cells). If False, chunk by
+                      variables (genes). Default: True.
 
         Yields:
-        -------
-        tuple
-            (chunk_table, slice) where chunk_table is an Arrow table with columns:
-            - cell_integer_id: uint32 array
-            - gene_integer_id: uint16 array
-            - value: uint16 array
-            and slice is the slice object indicating the chunk boundaries
+            Tuple of (chunk_table, slice) where:
+                - chunk_table: Arrow table with columns:
+                    - cell_integer_id: uint32 array
+                    - gene_integer_id: uint16 array
+                    - value: uint16 array
+                - slice: Slice object indicating the chunk boundaries
+
+        Examples:
+            >>> # Iterate over cells in chunks
+            >>> reader = ChunkedH5ADReader("data.h5ad")
+            >>> for chunk, slice_obj in reader.iter_chunks(chunk_size=500):
+            ...     print(f"Chunk shape: {chunk.shape}")
+            ...     print(f"Slice: {slice_obj}")
+            Chunk shape: (500, 3)
+            Slice: slice(0, 500, None)
         """
         pass
 
@@ -119,17 +165,30 @@ class BaseChunkedReader(ABC):
         """
         Get a specific chunk of data as an Arrow table.
 
-        Parameters:
-        -----------
-        obs_slice : slice, optional
-            Slice for observations (cells)
-        var_slice : slice, optional
-            Slice for variables (genes)
+        Args:
+            obs_slice: Slice for observations (cells). If None, returns all cells.
+            var_slice: Slice for variables (genes). If None, returns all genes.
 
         Returns:
-        --------
-        pa.Table
-            Arrow table with the requested data chunk
+            Arrow table with the requested data chunk containing columns:
+                - cell_integer_id: uint32 array
+                - gene_integer_id: uint16 array
+                - value: uint16 array
+
+        Examples:
+            >>> # Get first 100 cells, all genes
+            >>> reader = ChunkedH5ADReader("data.h5ad")
+            >>> chunk = reader.get_chunk(obs_slice=slice(0, 100))
+            >>> print(f"Chunk shape: {chunk.shape}")
+            Chunk shape: (100, 3)
+
+            >>> # Get specific cell and gene ranges
+            >>> chunk = reader.get_chunk(
+            ...     obs_slice=slice(50, 150),
+            ...     var_slice=slice(1000, 2000)
+            ... )
+            >>> print(f"Chunk shape: {chunk.shape}")
+            Chunk shape: (100, 3)
         """
         if obs_slice is None:
             obs_slice = slice(0, self.n_obs)
@@ -147,16 +206,58 @@ class BaseChunkedReader(ABC):
 class ChunkedH5ADReader(BaseChunkedReader):
     """
     A chunked reader for h5ad files using h5py for memory-efficient processing.
+
+    This reader provides memory-efficient access to h5ad files by reading data
+    in chunks rather than loading the entire dataset into memory. It supports
+    both sparse and dense expression matrices.
+
+    Key Features:
+        - Memory-efficient chunked reading
+        - Support for sparse and dense matrices
+        - Automatic metadata extraction
+        - Context manager support
+        - Arrow table output format
+
+    Examples:
+        >>> # Basic usage with context manager
+        >>> with ChunkedH5ADReader("data.h5ad") as reader:
+        ...     print(f"Dataset shape: {reader.n_obs} cells × {reader.n_vars} genes")
+        ...     for chunk, slice_obj in reader.iter_chunks(chunk_size=500):
+        ...         print(f"Processing chunk: {slice_obj}")
+        Dataset shape: 2700 cells × 32738 genes
+        Processing chunk: slice(0, 500, None)
+
+        >>> # Access metadata
+        >>> reader = ChunkedH5ADReader("data.h5ad")
+        >>> obs_meta = reader.get_obs_metadata()
+        >>> print(f"Cell metadata columns: {list(obs_meta.columns)}")
+        Cell metadata columns: ['cell_type', 'total_counts', 'batch']
     """
 
     def __init__(self, filename: str):
         """
-        Initialize the chunked reader.
+        Initialize the chunked h5ad reader.
 
-        Parameters:
-        -----------
-        filename : str
-            Path to the h5ad file
+        Args:
+            filename: Path to the h5ad file. Must be a valid h5ad file with
+                     proper AnnData structure.
+
+        Raises:
+            FileNotFoundError: If the h5ad file doesn't exist.
+            ValueError: If the file is not a valid h5ad format.
+
+        Examples:
+            >>> # Initialize with existing file
+            >>> reader = ChunkedH5ADReader("pbmc3k.h5ad")
+            >>> print(f"File path: {reader.file_path}")
+            File path: pbmc3k.h5ad
+
+            >>> # Error handling for missing file
+            >>> try:
+            ...     reader = ChunkedH5ADReader("nonexistent.h5ad")
+            ... except FileNotFoundError as e:
+            ...     print(f"Error: {e}")
+            Error: [Errno 2] No such file or directory: 'nonexistent.h5ad'
         """
         super().__init__(filename)
         self.file: h5py.File | None = None
@@ -173,7 +274,16 @@ class ChunkedH5ADReader(BaseChunkedReader):
 
     @property
     def n_obs(self) -> int:
-        """Number of observations (cells)"""
+        """
+        Number of observations (cells) in the h5ad dataset.
+
+        Returns:
+            Total number of cells in the dataset.
+
+        Raises:
+            RuntimeError: If the file is not opened (use context manager).
+            ValueError: If the dataset structure is invalid.
+        """
         if self._n_obs is None:
             if self.file is None:
                 raise RuntimeError("File not opened. Use context manager.")
@@ -196,7 +306,16 @@ class ChunkedH5ADReader(BaseChunkedReader):
 
     @property
     def n_vars(self) -> int:
-        """Number of variables (genes)"""
+        """
+        Number of variables (genes) in the h5ad dataset.
+
+        Returns:
+            Total number of genes in the dataset.
+
+        Raises:
+            RuntimeError: If the file is not opened (use context manager).
+            ValueError: If the dataset structure is invalid.
+        """
         if self._n_vars is None:
             if self.file is None:
                 raise RuntimeError("File not opened. Use context manager.")
