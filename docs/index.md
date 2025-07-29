@@ -1,6 +1,14 @@
 # **SLAF (Sparse Lazy Array Format)**
 
-**SLAF** is a high-performance format for single-cell data that combines the power of SQL with lazy evaluation, built on top of [Lance](https://lancedb.github.io/lance/) and [DuckDB](https://duckdb.org/).
+<div class="hero-section">
+  <div class="logo-container">
+    <img src="assets/slaf-logo-light.svg" alt="SLAF Logo" class="light-logo"/>
+    <img src="assets/slaf-logo-dark.svg" alt="SLAF Logo" class="dark-logo"/>
+  </div>
+  <div class="hero-text">
+    <strong>SLAF</strong> is a high-performance format for single-cell data that combines the power of SQL with lazy evaluation, built on top of the <a href="https://lancedb.github.io/lance/">Lance</a> table format, <a href="https://duckdb.org/">DuckDB</a> and <a href="pola.rs">Polars</a>.
+  </div>
+</div>
 
 <div class="grid cards" markdown>
 
@@ -30,22 +38,22 @@ See our detailed [benchmarks](benchmarks/performance.md).
 
 ## **Why SLAF?**
 
-_Single-cell datasets have scaled **2,000-fold** in less than a decade._
+!!! quote "_Single-cell datasets have scaled **2,000-fold** in less than a decade._"
 
-> A typical study used to have 50k cells that could easily be copied from object store to a SSD across the network. It could then be read entirely into memory and processed with in-memory operations. At the 100M-cell scale: network, storage, and memory become bottlenecks.
+    A typical study used to have 50k cells that could easily be copied from object store to a SSD across the network. It could then be read entirely into memory and processed with in-memory operations. At the 100M-cell scale: network, storage, and memory become bottlenecks.
 
-_The analytic workload is stuck in in-memory single-node operations._
+!!! quote "_The analytic workload is stuck in in-memory single-node operations._"
 
-> Traditional bioinformatics workflows comprised cell and gene filtering, count normalization, visualization via PCA or UMAP, interactive cell typing, and statistical analysis of differential expression. Today, we need to do all those things at **2000x the scale**.
+    Traditional bioinformatics workflows comprised cell and gene filtering, count normalization, visualization via PCA or UMAP, interactive cell typing, and statistical analysis of differential expression. Today, we need to do all those things at **2000x the scale**.
 
-_New fundamentally different **AI-native workflows** have arrived._
+!!! quote "_New fundamentally different **AI-native workflows** have arrived._"
 
-> Unlike before, we want to:
+    Unlike before, we want to:
 
-> - Scale cell typing using nearest neighbor search on cell embeddings
-> - Rank gene-gene relationships using nearest neighbor search on gene embeddings
-> - Train transformer-like foundation models with efficient tokenization
-> - Distribute workloads across nodes or GPUs by streaming random batches concurrently
+    - Scale cell typing using nearest neighbor search on cell embeddings
+    - Rank gene-gene relationships using nearest neighbor search on gene embeddings
+    - Train transformer-like foundation models with efficient tokenization
+    - Distribute workloads across nodes or GPUs by streaming random batches concurrently
 
 _We need **cloud-native, zero-copy, query-in-place storage systems**, rather than maintaining multiple copies of massive datasets per embedding model, node or experiment while continuing to experience the endorphins of numpy-like sparse matrix slicing, and the scanpy pipelines we've built over the years._
 
@@ -55,29 +63,41 @@ _We need **cloud-native, zero-copy, query-in-place storage systems**, rather tha
 
 SLAF is designed for the modern single-cell ecosystem facing scale challenges:
 
-### **Bioinformaticians**
+<div class="grid" markdown>
 
-Struggling with OOM errors and data transfer issues on 10M+ cell datasets. Can't do self-service analysis without infrastructure engineers. **SLAF eliminates the human bottleneck** with lazy evaluation.
+<div markdown>
 
-### **Foundation Model Builders**
+!!! tip "**Bioinformaticians**"
 
-Need to maximize experiments per unit time and resource. Currently copying data per node on attached storage. **SLAF enables cloud-native streaming** to eliminate data duplication.
+    Struggling with OOM errors and data transfer issues on 10M+ cell datasets. Can't do self-service analysis without infrastructure engineers. **SLAF eliminates the human bottleneck** with lazy evaluation.
 
-### **Tech Leaders & Architects**
+!!! success "**Foundation Model Builders**"
 
-Managing storage/compute infrastructure for teams. 5 bioinformaticians × 500GB dataset = 2.5TB of duplicated data. **SLAF provides zero-copy, query-in-place storage**.
+    Need to maximize experiments per unit time and resource. Currently copying data per node on attached storage. **SLAF enables cloud-native streaming** to eliminate data duplication.
 
-### **Tool Builders**
+!!! warning "**Tech Leaders & Architects**"
 
-Want to deliver better interactive experiences on massive datasets using commodity web services. **SLAF enables concurrent, cloud-scale access** with high QPS.
+    Managing storage/compute infrastructure for teams. 5 bioinformaticians × 500GB dataset = 2.5TB of duplicated data. **SLAF provides zero-copy, query-in-place storage**.
 
-### **Atlas Builders**
+</div>
 
-Need to serve massive datasets to the research community. **SLAF provides cloud-native, zero-copy storage** for global distribution.
+<div markdown>
 
-### **Data Integrators**
+!!! note "**Tool Builders**"
 
-Harmonizing PB-scale datasets across atlases. **SLAF's SQL-native design** enables complex data integration with pushdown optimization.
+    Want to deliver better interactive experiences on massive datasets using commodity web services. **SLAF enables concurrent, cloud-scale access** with high QPS.
+
+!!! info "**Atlas Builders**"
+
+    Need to serve massive datasets to the research community. **SLAF provides cloud-native, zero-copy storage** for global distribution.
+
+!!! example "**Data Integrators**"
+
+    Harmonizing PB-scale datasets across atlases. **SLAF's SQL-native design** enables complex data integration with pushdown optimization.
+
+</div>
+
+</div>
 
 ---
 

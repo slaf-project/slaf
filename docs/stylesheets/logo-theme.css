@@ -1,0 +1,76 @@
+/* Theme-aware logo switching for SLAF documentation */
+
+
+
+
+
+/* Ensure header icon has proper sizing */
+.md-header__button.md-logo img {
+  height: 2rem;
+  width: auto;
+}
+
+
+
+/* Theme-aware logo display in content */
+[data-md-color-scheme="default"] .light-logo {
+  display: inline-block !important;
+}
+
+[data-md-color-scheme="default"] .dark-logo {
+  display: none !important;
+}
+
+[data-md-color-scheme="slate"] .light-logo {
+  display: none !important;
+}
+
+[data-md-color-scheme="slate"] .dark-logo {
+  display: inline-block !important;
+}
+
+/* Sticky header - keep header fixed when scrolling */
+.md-header {
+  position: fixed !important;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  transition: transform 400ms cubic-bezier(0.1, 0.7, 0.1, 1);
+  backdrop-filter: blur(10px);
+  background-color: var(--md-primary-fg-color);
+}
+
+/* Adjust main content to account for fixed header */
+.md-main {
+  margin-top: 3.6rem; /* Height of the header */
+}
+
+/* Ensure proper spacing for content */
+.md-content {
+  padding-top: 1rem;
+}
+
+/* Smooth transitions for header */
+.md-header[data-md-state=hidden] {
+  transform: translateY(-100%);
+}
+
+.md-header[data-md-state=hidden] + .md-main {
+  margin-top: 0;
+}
+
+/* Ensure header stays visible during scroll */
+.md-header[data-md-state=hidden] {
+  transform: translateY(-100%);
+}
+
+/* Improve header appearance */
+.md-header__title {
+  font-weight: 600;
+}
+
+/* Ensure proper header height */
+.md-header__button.md-logo {
+  margin: 0.2rem 0;
+}

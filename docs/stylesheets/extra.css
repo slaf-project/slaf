@@ -789,3 +789,213 @@ iframe {
     display: block !important;
   }
 }
+
+/* Additional styles for SLAF documentation */
+
+
+
+/* Improve sticky header behavior */
+.md-header {
+  box-shadow: 0 0 0.2rem rgba(0,0,0,.1), 0 0.2rem 0.4rem rgba(0,0,0,.1);
+}
+
+/* Ensure proper spacing for fixed header */
+body {
+  padding-top: 0;
+}
+
+/* Improve header icon appearance */
+.md-header__button.md-logo {
+  padding: 0.2rem;
+}
+
+.md-header__button.md-logo img {
+  border-radius: 4px;
+  transition: opacity 0.2s ease;
+}
+
+.md-header__button.md-logo img:hover {
+  opacity: 0.8;
+}
+
+/* Ensure content doesn't overlap with fixed header */
+.md-content {
+  scroll-margin-top: 4rem;
+}
+
+/* Smooth scrolling for anchor links */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Responsive layout optimizations for index page */
+@media (max-width: 768px) {
+  .grid.cards {
+    grid-template-columns: 1fr !important;
+    gap: 1rem !important;
+  }
+
+  .grid {
+    grid-template-columns: 1fr !important;
+    gap: 1rem !important;
+  }
+
+  h1 {
+    font-size: 2rem !important;
+    margin-bottom: 1rem !important;
+  }
+
+  h2 {
+    font-size: 1.5rem !important;
+    margin-top: 2rem !important;
+    margin-bottom: 1rem !important;
+  }
+
+  h3 {
+    font-size: 1.25rem !important;
+    margin-top: 1.5rem !important;
+    margin-bottom: 0.75rem !important;
+  }
+
+  p {
+    margin-bottom: 1rem !important;
+  }
+
+  .md-content {
+    padding-top: 0.5rem !important;
+  }
+
+  /* Compact spacing for mobile */
+  .grid.cards {
+    margin: 1rem 0 !important;
+  }
+
+  .grid.cards .card {
+    margin-bottom: 0.75rem !important;
+    padding: 0.75rem !important;
+  }
+
+  /* Reduce blockquote spacing */
+  blockquote {
+    margin: 0.75rem 0 !important;
+    padding: 0.5rem 0.75rem !important;
+  }
+
+  /* Compact code blocks */
+  .md-typeset pre {
+    margin: 0.75rem 0 !important;
+  }
+}
+
+/* Compact spacing for desktop */
+@media (min-width: 769px) {
+  .grid.cards {
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)) !important;
+    gap: 1rem !important;
+  }
+
+  .grid {
+    gap: 1.5rem !important;
+  }
+
+  h1 {
+    margin-bottom: 1.5rem !important;
+  }
+
+  h2 {
+    margin-top: 2.5rem !important;
+    margin-bottom: 1rem !important;
+  }
+
+  h3 {
+    margin-top: 2rem !important;
+    margin-bottom: 0.75rem !important;
+  }
+}
+
+/* Optimize card layout */
+.grid.cards {
+  margin: 1.5rem 0 !important;
+}
+
+.grid.cards .card {
+  margin-bottom: 1rem !important;
+  padding: 1rem !important;
+}
+
+/* Reduce excessive whitespace */
+.md-content {
+  padding-top: 0.5rem !important;
+}
+
+/* Compact blockquotes */
+blockquote {
+  margin: 1rem 0 !important;
+  padding: 0.75rem 1rem !important;
+}
+
+/* Optimize code blocks */
+.md-typeset pre {
+  margin: 1rem 0 !important;
+}
+
+/* Hero section responsive layout */
+.hero-section {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  margin: 2rem 0;
+  flex-wrap: wrap;
+}
+
+.logo-container {
+  flex-shrink: 0;
+}
+
+.hero-text {
+  flex: 1;
+  min-width: 300px;
+  font-size: 1.2rem;
+  line-height: 1.6;
+}
+
+/* Responsive logo sizing */
+.light-logo, .dark-logo {
+  width: 350px;
+  height: auto;
+  transition: width 0.3s ease;
+}
+
+/* Mobile layout - stack vertically */
+@media (max-width: 768px) {
+  .hero-section {
+    flex-direction: column;
+    text-align: center;
+    gap: 1rem;
+  }
+
+  .logo-container {
+    order: 1;
+  }
+
+  .hero-text {
+    order: 2;
+    min-width: auto;
+    font-size: 1.1rem;
+  }
+
+  .light-logo, .dark-logo {
+    width: 300px !important;
+  }
+}
+
+/* Small mobile - smaller logo */
+@media (max-width: 480px) {
+  .light-logo, .dark-logo {
+    width: 250px !important;
+  }
+
+  .hero-text {
+    font-size: 1rem;
+  }
+}

@@ -1,5 +1,9 @@
 # SLAF (Sparse Lazy Array Format)
 
+<div align="center">
+  <img src="docs/assets/slaf-logo-light.svg" alt="SLAF Logo" width="400"/>
+</div>
+
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://img.shields.io/github/actions/workflow/status/slaf-project/slaf/ci.yml?branch=main&label=tests)](https://github.com/slaf-project/slaf/actions)

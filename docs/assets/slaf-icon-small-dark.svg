@@ -1,0 +1,16 @@
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <rect width="64" height="64" fill="#0f172a" rx="8"/>
+
+  <!-- Cool ASCII Sloth pattern - perfectly centered with harmonized style -->
+  <g transform="translate(8, 10)">
+    <!-- ASCII Sloth with uniform colors -->
+    <text x="0" y="0" font-family="'Courier New', 'Fira Code', 'JetBrains Mono', monospace" font-size="8" font-weight="bold" fill="#4c46d6" text-anchor="start">
+      <tspan x="0" dy="0">  z Z</tspan>
+      <tspan x="0" dy="1.3em"> ( - . - )</tspan>
+      <tspan x="0" dy="1.3em">/   ^   \    </tspan>
+      <tspan x="0" dy="1.3em">(  (_)  (_) )</tspan>
+      <tspan x="0" dy="1.3em"> \_______/ </tspan>
+    </text>
+    <text x="32" y="20" font-family="monospace" font-size="6" font-weight="bold" fill="#60a5fa" text-anchor="middle">⚡</text>
+  </g>
+</svg>
