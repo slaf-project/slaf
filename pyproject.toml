@@ -75,7 +75,15 @@ docs = [
     "mkdocs-redirects>=1.2.0",
 ]
 
-test = ["pytest>=8.0.0", "pytest-cov>=6.2.0", "coverage>=7.9.1"]
+test = [
+    "pytest>=8.0.0",
+    "pytest-cov>=6.2.0",
+    "coverage>=7.9.1",
+    "scanpy>=1.11.2",
+    "h5py>=3.10.0",
+    "psutil>=6.0.0",
+    "torch>=2.7.1",
+]
 
 # Full installation includes all optional dependencies
 full = ["slafdb[convert,ml,advanced]"]
