@@ -8,6 +8,7 @@ from typing import Any, Union
 
 import polars as pl
 import torch
+from loguru import logger
 from rich.console import Console
 from rich.panel import Panel
 
@@ -30,7 +31,7 @@ try:
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
-    print("Warning: PyTorch not available. Tensor operations will be disabled.")
+    logger.warning("PyTorch not available. Tensor operations will be disabled.")
 
 # Try to import Lance, but make it optional
 try:
@@ -39,7 +40,7 @@ try:
     LANCE_AVAILABLE = True
 except ImportError:
     LANCE_AVAILABLE = False
-    print("Warning: Lance not available. Fragment loading will be disabled.")
+    logger.warning("Lance not available. Fragment loading will be disabled.")
 
 # Try to import Polars, but make it optional
 try:
@@ -48,7 +49,7 @@ try:
     POLARS_AVAILABLE = True
 except ImportError:
     POLARS_AVAILABLE = False
-    print("Warning: Polars not available. Fragment loading will be disabled.")
+    logger.warning("Polars not available. Fragment loading will be disabled.")
 
 from slaf.core.slaf import SLAFArray
 from slaf.ml.aggregators import Window
@@ -91,7 +92,7 @@ def print_prefetch(message: str, verbose: bool = True):
     if RICH_AVAILABLE and console is not None:
         console.print(Panel(message, border_style="cyan"))
     else:
-        print(f"🔍 {message}")
+        logger.info(f"🔍 {message}")
 
 
 def print_training(message: str, verbose: bool = True):
@@ -126,7 +127,7 @@ def print_training(message: str, verbose: bool = True):
     if RICH_AVAILABLE and console is not None:
         console.print(Panel(message, border_style="green"))
     else:
-        print(f"📊 {message}")
+        logger.info(f"📊 {message}")
 
 
 def print_epoch_transition(message: str, verbose: bool = True):
@@ -161,7 +162,7 @@ def print_epoch_transition(message: str, verbose: bool = True):
     if RICH_AVAILABLE and console is not None:
         console.print(f"[yellow]🔄 {message}[/yellow]")
     else:
-        print(f"🔄 {message}")
+        logger.info(f"🔄 {message}")
 
 
 def print_completion(message: str, verbose: bool = True):
@@ -196,7 +197,7 @@ def print_completion(message: str, verbose: bool = True):
     if RICH_AVAILABLE and console is not None:
         console.print(Panel(message, border_style="bright_green"))
     else:
-        print(f"✅ {message}")
+        logger.info(f"✅ {message}")
 
 
 def print_warning(message: str, verbose: bool = True):
@@ -231,7 +232,7 @@ def print_warning(message: str, verbose: bool = True):
     if RICH_AVAILABLE and console is not None:
         console.print(f"[orange3]⚠️ {message}[/orange3]")
     else:
-        print(f"⚠️ {message}")
+        logger.info(f"⚠️ {message}")
 
 
 @dataclass
@@ -905,10 +906,10 @@ class AsyncPrefetcher:
                         self.batch_processor.verbose,
                     )
                 else:
-                    print("Reached end of batches")
+                    logger.info("Reached end of batches")
                 break
             except Exception as e:
-                print(f"Error loading batch: {e}")
+                logger.info(f"Error loading batch: {e}")
                 break
 
     def get_batch(self) -> PrefetchBatch | None:

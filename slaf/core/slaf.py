@@ -6,6 +6,7 @@ from typing import Any
 import duckdb
 import lance
 import polars as pl
+from loguru import logger
 
 from .query_optimizer import QueryOptimizer
 
@@ -18,7 +19,7 @@ def display_ascii_art():
  /  ^ \\ ⚡
 (  (_)  (_) )
  \\_______/ """
-    print(ascii_art)
+    logger.info(ascii_art)
 
 
 class SLAFArray:
@@ -145,7 +146,7 @@ class SLAFArray:
         """Display helpful initialization message with basic metadata"""
         # Display ASCII art
         display_ascii_art()
-        print()
+        logger.info("")
 
         n_cells, n_genes = self.shape
 
@@ -160,9 +161,9 @@ class SLAFArray:
         dataset_name = self.slaf_path.name
 
         # Display message
-        print(f"📊 SLAF Dataset Loaded: {dataset_name}")
-        print(f"   • Shape: {cells_str} cells × {genes_str} genes")
-        print(f"   • Format: SLAF v{format_version}")
+        logger.info(f"📊 SLAF Dataset Loaded: {dataset_name}")
+        logger.info(f"   • Shape: {cells_str} cells × {genes_str} genes")
+        logger.info(f"   • Format: SLAF v{format_version}")
 
         # Add metadata info if available
         if "metadata" in self.config:
@@ -170,21 +171,21 @@ class SLAFArray:
             if "expression_count" in metadata:
                 expr_count = metadata["expression_count"]
                 expr_str = f"{expr_count:,}" if expr_count >= 1000 else str(expr_count)
-                print(f"   • Expression records: {expr_str}")
+                logger.info(f"   • Expression records: {expr_str}")
 
             if "sparsity" in metadata:
                 sparsity = metadata["sparsity"]
-                print(f"   • Sparsity: {sparsity:.1%}")
+                logger.info(f"   • Sparsity: {sparsity:.1%}")
 
         # Add optimization info if available
         optimizations = self.config.get("optimizations", {})
         if optimizations:
             opt_info = ", ".join([f"{k}: {v}" for k, v in optimizations.items()])
-            print(f"   • Optimizations: {opt_info}")
+            logger.info(f"   • Optimizations: {opt_info}")
 
         # Status message
-        print("   • Status: Ready for queries (metadata loading in background)")
-        print()
+        logger.info("   • Status: Ready for queries (metadata loading in background)")
+        logger.info("")
 
     def _start_async_metadata_loading(self):
         """Start async metadata loading in background thread"""
@@ -204,7 +205,7 @@ class SLAFArray:
             self._metadata_loaded = True
         except Exception as e:
             # Log error but don't crash the background thread
-            print(f"Warning: Async metadata loading failed: {e}")
+            logger.warning(f"Async metadata loading failed: {e}")
         finally:
             self._metadata_loading = False
 
@@ -228,7 +229,9 @@ class SLAFArray:
                 self._metadata_loading_thread
                 and self._metadata_loading_thread.is_alive()
             ):
-                print("Loading metadata in background... (this may take a few seconds)")
+                logger.info(
+                    "Loading metadata in background... (this may take a few seconds)"
+                )
                 self._metadata_loading_thread.join()
 
         if not self._metadata_loaded:
@@ -956,30 +959,35 @@ class SLAFArray:
 
     def info(self):
         """Print information about the SLAF dataset"""
-        print("SLAF Dataset")
-        print(f"  Shape: {self.shape[0]} cells × {self.shape[1]} genes")
-        print(f"  Format version: {self.config.get('format_version', 'unknown')}")
+        # Build output string for both logging and printing
+        output_lines = []
+
+        output_lines.append("SLAF Dataset")
+        output_lines.append(f"  Shape: {self.shape[0]} cells × {self.shape[1]} genes")
+        output_lines.append(
+            f"  Format version: {self.config.get('format_version', 'unknown')}"
+        )
 
         # Cell metadata columns
         cell_cols = self.obs.columns
-        print(f"  Cell metadata columns: {len(cell_cols)}")
+        output_lines.append(f"  Cell metadata columns: {len(cell_cols)}")
         if cell_cols:
-            print(
+            output_lines.append(
                 f"    {', '.join(cell_cols[:5])}{'...' if len(cell_cols) > 5 else ''}"
             )
 
         # Gene metadata columns
         gene_cols = self.var.columns
-        print(f"  Gene metadata columns: {len(gene_cols)}")
+        output_lines.append(f"  Gene metadata columns: {len(gene_cols)}")
         if gene_cols:
-            print(
+            output_lines.append(
                 f"    {', '.join(gene_cols[:5])}{'...' if len(gene_cols) > 5 else ''}"
             )
 
         # Record counts
-        print("  Record counts:")
-        print(f"    Cells: {len(self.obs):,}")
-        print(f"    Genes: {len(self.var):,}")
+        output_lines.append("  Record counts:")
+        output_lines.append(f"    Cells: {len(self.obs):,}")
+        output_lines.append(f"    Genes: {len(self.var):,}")
 
         # Expression metadata - use pre-computed if available, otherwise query
         format_version = self.config.get("format_version", "0.1")
@@ -990,27 +998,36 @@ class SLAFArray:
             sparsity = metadata["sparsity"]
             density = metadata["density"]
 
-            print(f"    Expression records: {expression_count:,}")
-            print(f"    Sparsity: {sparsity:.1%}")
-            print(f"    Density: {density:.1%}")
+            output_lines.append(f"    Expression records: {expression_count:,}")
+            output_lines.append(f"    Sparsity: {sparsity:.1%}")
+            output_lines.append(f"    Density: {density:.1%}")
 
             # Show expression statistics if available
             if "expression_stats" in metadata:
                 stats = metadata["expression_stats"]
-                print("  Expression statistics:")
-                print(f"    Min value: {stats['min_value']:.3f}")
-                print(f"    Max value: {stats['max_value']:.3f}")
-                print(f"    Mean value: {stats['mean_value']:.3f}")
-                print(f"    Std value: {stats['std_value']:.3f}")
+                output_lines.append("  Expression statistics:")
+                output_lines.append(f"    Min value: {stats['min_value']:.3f}")
+                output_lines.append(f"    Max value: {stats['max_value']:.3f}")
+                output_lines.append(f"    Mean value: {stats['mean_value']:.3f}")
+                output_lines.append(f"    Std value: {stats['std_value']:.3f}")
         else:
             # Backward compatibility: query expression count for older format versions
-            print("    Expression records: computing...")
+            output_lines.append("    Expression records: computing...")
             expression_count = self.query("SELECT COUNT(*) as count FROM expression")
-            print(f"    Expression records: {expression_count.item(0, 0):,}")
+            output_lines.append(
+                f"    Expression records: {expression_count.item(0, 0):,}"
+            )
 
         # Optimization info
         optimizations = self.config.get("optimizations", {})
         if optimizations:
-            print("  Optimizations:")
+            output_lines.append("  Optimizations:")
             for opt, value in optimizations.items():
-                print(f"    {opt}: {value}")
+                output_lines.append(f"    {opt}: {value}")
+
+        # Print to stdout for backward compatibility
+        output = "\n".join(output_lines)
+        print(output)
+
+        # Also log for consistency with other methods
+        logger.info("SLAF Dataset info displayed")

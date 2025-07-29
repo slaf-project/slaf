@@ -6,6 +6,7 @@ import lance
 import numpy as np
 import pandas as pd
 import pyarrow as pa
+from loguru import logger
 from scipy import sparse
 
 # Optional imports for data conversion
@@ -15,7 +16,7 @@ try:
     SCANPY_AVAILABLE = True
 except ImportError:
     SCANPY_AVAILABLE = False
-    print("Warning: Scanpy not available. Install with: pip install slafdb[convert]")
+    logger.warning("Scanpy not available. Install with: pip install slafdb[convert]")
 
 from .chunked_reader import create_chunked_reader
 from .utils import detect_format
@@ -230,9 +231,9 @@ class SLAFConverter:
                 "Use convert() with file path instead."
             )
 
-        print("Converting AnnData object to SLAF format...")
-        print(f"Optimizations: int_keys={self.use_integer_keys}")
-        print(f"Loaded: {adata.n_obs} cells × {adata.n_vars} genes")
+        logger.info("Converting AnnData object to SLAF format...")
+        logger.info(f"Optimizations: int_keys={self.use_integer_keys}")
+        logger.info(f"Loaded: {adata.n_obs} cells × {adata.n_vars} genes")
 
         # Validate optimized data types
         if not self._validate_optimized_dtypes_anndata(adata):
@@ -243,8 +244,8 @@ class SLAFConverter:
 
     def _convert_h5ad(self, h5ad_path: str, output_path: str):
         """Convert h5ad file to SLAF format (existing logic)"""
-        print(f"Converting {h5ad_path} to SLAF format...")
-        print(
+        logger.info(f"Converting {h5ad_path} to SLAF format...")
+        logger.info(
             f"Optimizations: int_keys={self.use_integer_keys}, chunked={self.chunked}, sort_metadata={self.sort_metadata}"
         )
 
@@ -253,44 +254,44 @@ class SLAFConverter:
         else:
             # Load h5ad using scanpy
             adata = sc.read_h5ad(h5ad_path)
-            print(f"Loaded: {adata.n_obs} cells × {adata.n_vars} genes")
+            logger.info(f"Loaded: {adata.n_obs} cells × {adata.n_vars} genes")
 
             # Convert the loaded AnnData object
             self._convert_anndata(adata, output_path)
 
     def _convert_10x_mtx(self, mtx_dir: str, output_path: str):
         """Convert 10x MTX directory to SLAF format"""
-        print(f"Converting 10x MTX directory {mtx_dir} to SLAF format...")
+        logger.info(f"Converting 10x MTX directory {mtx_dir} to SLAF format...")
 
         if self.chunked:
             # Use native chunked reader for 10x MTX
-            print("Using native chunked reader for 10x MTX...")
+            logger.info("Using native chunked reader for 10x MTX...")
             self._convert_chunked(mtx_dir, output_path)
         else:
             # Use scanpy to read MTX files
             try:
                 adata = sc.read_10x_mtx(mtx_dir)
             except Exception as e:
-                print(f"Error reading 10x MTX files: {e}")
-                print(
+                logger.error(f"Error reading 10x MTX files: {e}")
+                logger.error(
                     "Please ensure the directory contains matrix.mtx and either genes.tsv or features.tsv files"
                 )
                 raise ValueError(
                     f"Failed to read 10x MTX format from {mtx_dir}: {e}"
                 ) from e
 
-            print(f"Loaded: {adata.n_obs} cells × {adata.n_vars} genes")
+            logger.info(f"Loaded: {adata.n_obs} cells × {adata.n_vars} genes")
 
             # Convert using existing AnnData conversion logic
             self._convert_anndata(adata, output_path)
 
     def _convert_10x_h5(self, h5_path: str, output_path: str):
         """Convert 10x H5 file to SLAF format"""
-        print(f"Converting 10x H5 file {h5_path} to SLAF format...")
+        logger.info(f"Converting 10x H5 file {h5_path} to SLAF format...")
 
         if self.chunked:
             # Use native chunked reader for 10x H5
-            print("Using native chunked reader for 10x H5...")
+            logger.info("Using native chunked reader for 10x H5...")
             self._convert_chunked(h5_path, output_path)
         else:
             # Try to read as 10x H5 first, fall back to regular h5ad
@@ -298,10 +299,10 @@ class SLAFConverter:
                 adata = sc.read_10x_h5(h5_path, genome="X")
             except Exception:
                 # Fall back to reading as regular h5ad
-                print("Reading as regular h5ad file...")
+                logger.info("Reading as regular h5ad file...")
                 adata = sc.read_h5ad(h5_path)
 
-            print(f"Loaded: {adata.n_obs} cells × {adata.n_vars} genes")
+            logger.info(f"Loaded: {adata.n_obs} cells × {adata.n_vars} genes")
 
             # Convert using existing AnnData conversion logic
             self._convert_anndata(adata, output_path)
@@ -317,12 +318,12 @@ class SLAFConverter:
         gene_id_mapping = None
 
         if self.use_integer_keys:
-            print("Creating integer key mappings...")
+            logger.info("Creating integer key mappings...")
             cell_id_mapping = self._create_id_mapping(adata.obs.index, "cell")
             gene_id_mapping = self._create_id_mapping(adata.var.index, "gene")
 
         # Convert expression data to COO format
-        print("Converting expression data to COO format...")
+        logger.info("Converting expression data to COO format...")
         expression_table = self._sparse_to_coo_table(
             sparse_matrix=adata.X,
             cell_ids=adata.obs.index,
@@ -330,7 +331,7 @@ class SLAFConverter:
         )
 
         # Convert metadata
-        print("Converting metadata...")
+        logger.info("Converting metadata...")
 
         # Note: Sorting is disabled to maintain consistency between metadata and expression data ordering
         # TODO: Implement proper sorting that affects both metadata and expression data
@@ -345,7 +346,7 @@ class SLAFConverter:
         )
 
         # Write all Lance tables
-        print("Writing Lance tables...")
+        logger.info("Writing Lance tables...")
         table_configs = [
             ("expression", expression_table),
             ("cells", cell_metadata_table),
@@ -359,14 +360,14 @@ class SLAFConverter:
 
         # Save config
         self._save_config(output_path_obj, adata.shape)
-        print(f"Conversion complete! Saved to {output_path}")
+        logger.info(f"Conversion complete! Saved to {output_path}")
 
     def _convert_chunked(self, h5ad_path: str, output_path: str):
         """Convert h5ad file using chunked processing with sorted-by-construction approach"""
-        print(f"Processing in chunks of {self.chunk_size} cells...")
+        logger.info(f"Processing in chunks of {self.chunk_size} cells...")
 
         with create_chunked_reader(h5ad_path) as reader:
-            print(f"Loaded: {reader.n_obs:,} cells × {reader.n_vars:,} genes")
+            logger.info(f"Loaded: {reader.n_obs:,} cells × {reader.n_vars:,} genes")
 
             # Validate optimized data types
             if not self._validate_optimized_dtypes(reader):
@@ -391,11 +392,11 @@ class SLAFConverter:
 
             # Save config
             self._save_config(output_path_obj, (reader.n_obs, reader.n_vars))
-            print(f"Conversion complete! Saved to {output_path}")
+            logger.info(f"Conversion complete! Saved to {output_path}")
 
     def _write_metadata_efficiently(self, reader, output_path_obj: Path):
         """Write metadata tables efficiently while preserving all columns"""
-        print("Writing metadata tables...")
+        logger.info("Writing metadata tables...")
 
         # Get full metadata from reader (this loads all columns)
         obs_df = reader.get_obs_metadata()
@@ -447,15 +448,15 @@ class SLAFConverter:
             enable_v2_manifest_paths=self.enable_v2_manifest,
         )
 
-        print("Metadata tables written!")
+        logger.info("Metadata tables written!")
 
     def _process_expression(self, reader, output_path_obj: Path):
         """Process expression data in single-threaded mode with large chunks"""
-        print("Processing expression data in single-threaded mode...")
+        logger.info("Processing expression data in single-threaded mode...")
 
         # Calculate total chunks
         total_chunks = (reader.n_obs + self.chunk_size - 1) // self.chunk_size
-        print(
+        logger.info(
             f"Processing {total_chunks} chunks with chunk size {self.chunk_size:,}..."
         )
 
@@ -465,16 +466,16 @@ class SLAFConverter:
 
             process = psutil.Process()
             initial_memory = process.memory_info().rss / 1024 / 1024  # MB
-            print(f"Initial memory usage: {initial_memory:.1f} MB")
+            logger.info(f"Initial memory usage: {initial_memory:.1f} MB")
         except ImportError:
-            print("Install psutil for memory monitoring: pip install psutil")
+            logger.info("Install psutil for memory monitoring: pip install psutil")
 
         # Create Lance dataset with schema
         expression_path = output_path_obj / "expression.lance"
         schema = self._get_expression_schema()
 
         # Create empty dataset first
-        print("Creating initial Lance dataset...")
+        logger.info("Creating initial Lance dataset...")
         schema = self._get_expression_schema()
 
         # Create empty table with correct schema based on settings
@@ -535,11 +536,13 @@ class SLAFConverter:
         )
 
         # Process chunks sequentially
-        print("Processing chunks sequentially...")
+        logger.info("Processing chunks sequentially...")
         for chunk_idx, (chunk_table, obs_slice) in enumerate(
             reader.iter_chunks(chunk_size=self.chunk_size)
         ):
-            print(f"Processing chunk {chunk_idx + 1}/{total_chunks} ({obs_slice})")
+            logger.info(
+                f"Processing chunk {chunk_idx + 1}/{total_chunks} ({obs_slice})"
+            )
 
             # Convert data types if needed
             if not self.use_optimized_dtypes:
@@ -601,43 +604,45 @@ class SLAFConverter:
                 enable_v2_manifest_paths=self.enable_v2_manifest,
             )
 
-            print(f"Completed chunk {chunk_idx + 1}/{total_chunks}")
+            logger.info(f"Completed chunk {chunk_idx + 1}/{total_chunks}")
 
         # Final memory report
         try:
             final_memory = process.memory_info().rss / 1024 / 1024  # MB
             memory_increase = final_memory - initial_memory
-            print(
+            logger.info(
                 f"Final memory usage: {final_memory:.1f} MB (change: {memory_increase:+.1f} MB)"
             )
         except ImportError:
             pass
 
-        print("Expression data processing complete!")
+        logger.info("Expression data processing complete!")
 
     def _validate_optimized_dtypes(self, reader):
         """Validate that data fits in optimized data types"""
         if not self.use_optimized_dtypes:
             return True
 
-        print("Validating data fits in optimized data types...")
+        logger.info("Validating data fits in optimized data types...")
 
         # Check if gene count fits in uint16 (0-65535)
         if reader.n_vars > 65535:
-            print(f"Warning: {reader.n_vars:,} genes exceeds uint16 limit (65535)")
-            print("Falling back to standard data types")
+            logger.info(
+                f"Warning: {reader.n_vars:,} genes exceeds uint16 limit (65535)"
+            )
+            logger.info("Falling back to standard data types")
             return False
 
         # Check if cell count fits in uint32 (0-4,294,967,295)
         if reader.n_obs > 4294967295:
-            print(
+            logger.info(
                 f"Warning: {reader.n_obs:,} cells exceeds uint32 limit (4,294,967,295)"
             )
-            print("Falling back to standard data types")
+            logger.info("Falling back to standard data types")
             return False
 
         # Sample some values to check if they fit in uint16
-        print("Sampling expression values to validate uint16 range...")
+        logger.info("Sampling expression values to validate uint16 range...")
         sample_size = min(100000, reader.n_obs)  # Sample up to 100K cells
         sample_chunks = list(reader.iter_chunks(chunk_size=sample_size))
 
@@ -652,15 +657,17 @@ class SLAFConverter:
             min_value = np.min(sample_data)
 
             if max_value > 65535 or min_value < 0:
-                print(
+                logger.info(
                     f"Warning: Expression values range [{min_value}, {max_value}] exceeds uint16 range [0, 65535]"
                 )
-                print("Falling back to standard data types")
+                logger.info("Falling back to standard data types")
                 return False
 
-            print(f"Expression values fit in uint16 range: [{min_value}, {max_value}]")
+            logger.info(
+                f"Expression values fit in uint16 range: [{min_value}, {max_value}]"
+            )
 
-        print("Data validation passed - using optimized data types")
+        logger.info("Data validation passed - using optimized data types")
         return True
 
     def _validate_optimized_dtypes_anndata(self, adata):
@@ -668,41 +675,43 @@ class SLAFConverter:
         if not self.use_optimized_dtypes:
             return True
 
-        print(
+        logger.info(
             "Validating AnnData object's expression data fits in optimized data types..."
         )
 
         # Check if gene count fits in uint16 (0-65535)
         if adata.n_vars > 65535:
-            print(f"Warning: {adata.n_vars:,} genes exceeds uint16 limit (65535)")
-            print("Falling back to standard data types")
+            logger.info(f"Warning: {adata.n_vars:,} genes exceeds uint16 limit (65535)")
+            logger.info("Falling back to standard data types")
             return False
 
         # Check if cell count fits in uint32 (0-4,294,967,295)
         if adata.n_obs > 4294967295:
-            print(
-                f"Warning: {adata.n_obs:,} cells exceeds uint32 limit (4,294,967,295)"
+            logger.warning(
+                f"{adata.n_obs:,} cells exceeds uint32 limit (4,294,967,295)"
             )
-            print("Falling back to standard data types")
+            logger.info("Falling back to standard data types")
             return False
 
         # Sample some values to check if they fit in uint16
-        print("Sampling expression values to validate uint16 range...")
+        logger.info("Sampling expression values to validate uint16 range...")
         sample_data = adata.X.data[:100000]
 
         max_value = np.max(sample_data)
         min_value = np.min(sample_data)
 
         if max_value > 65535 or min_value < 0:
-            print(
-                f"Warning: Expression values range [{min_value}, {max_value}] exceeds uint16 range [0, 65535]"
+            logger.warning(
+                f"Expression values range [{min_value}, {max_value}] exceeds uint16 range [0, 65535]"
             )
-            print("Falling back to standard data types")
+            logger.info("Falling back to standard data types")
             return False
 
-        print(f"Expression values fit in uint16 range: [{min_value}, {max_value}]")
+        logger.info(
+            f"Expression values fit in uint16 range: [{min_value}, {max_value}]"
+        )
 
-        print(
+        logger.info(
             "AnnData object's expression data validation passed - using optimized data types"
         )
         return True
@@ -712,30 +721,30 @@ class SLAFConverter:
         if not self.compact_after_write:
             return
 
-        print("Compacting dataset for optimal storage...")
+        logger.info("Compacting dataset for optimal storage...")
 
         # Compact expression table
         expression_path = output_path_obj / "expression.lance"
         if expression_path.exists():
-            print("  Compacting expression table...")
+            logger.info("  Compacting expression table...")
             dataset = lance.dataset(str(expression_path))
             dataset.optimize.compact_files(
                 target_rows_per_fragment=1024 * 1024
             )  # 1M rows per fragment
-            print("  Expression table compacted!")
+            logger.info("  Expression table compacted!")
 
         # Compact metadata tables
         for table_name in ["cells", "genes"]:
             table_path = output_path_obj / f"{table_name}.lance"
             if table_path.exists():
-                print(f"  Compacting {table_name} table...")
+                logger.info(f"  Compacting {table_name} table...")
                 dataset = lance.dataset(str(table_path))
                 dataset.optimize.compact_files(
                     target_rows_per_fragment=100000
                 )  # 100K rows per fragment for metadata
-                print(f"  {table_name} table compacted!")
+                logger.info(f"  {table_name} table compacted!")
 
-        print("Dataset compaction complete!")
+        logger.info("Dataset compaction complete!")
 
     def _get_expression_schema(self):
         """Get the schema for expression table"""
@@ -798,7 +807,7 @@ class SLAFConverter:
     ):
         """Convert scipy sparse matrix to COO format PyArrow table with integer IDs"""
         coo_matrix = sparse_matrix.tocoo()
-        print(f"Processing {len(coo_matrix.data):,} non-zero elements...")
+        logger.info(f"Processing {len(coo_matrix.data):,} non-zero elements...")
 
         # Create integer ID arrays for efficient range queries
         if self.use_optimized_dtypes:
@@ -982,8 +991,6 @@ class SLAFConverter:
 
         table = pa.table(result_df)
 
-        # Note: Removed debug print for production
-
         return table
 
     def _write_lance_tables(
@@ -1020,7 +1027,7 @@ class SLAFConverter:
 
     def _create_indices(self, output_path: Path):
         """Create optimal indices for SLAF tables with column existence checks"""
-        print("Creating indices for optimal query performance...")
+        logger.info("Creating indices for optimal query performance...")
 
         # Define desired indices for each table
         # For small datasets, create fewer indices to reduce overhead
@@ -1046,10 +1053,10 @@ class SLAFConverter:
 
                 for column in desired_columns:
                     if column in schema.names:
-                        print(f"  Creating index on {table_name}.{column}")
+                        logger.info(f"  Creating index on {table_name}.{column}")
                         dataset.create_scalar_index(column, "BTREE")
 
-        print("Index creation complete!")
+        logger.info("Index creation complete!")
 
     def _compute_expression_statistics(self, expression_dataset) -> dict:
         """Compute basic statistics from expression dataset using SQL"""
@@ -1087,7 +1094,7 @@ class SLAFConverter:
         n_genes = int(shape[1])
 
         # Compute additional metadata for faster info() method
-        print("Computing dataset statistics...")
+        logger.info("Computing dataset statistics...")
 
         # Get expression count and compute sparsity using SQL
         import duckdb

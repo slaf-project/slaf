@@ -43,7 +43,9 @@ def check_dependencies() -> None:
 def version():
     """Show SLAF version."""
     display_ascii_art()
-    print()
+    from loguru import logger
+
+    logger.info("")
     try:
         import slaf
 

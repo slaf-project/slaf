@@ -1,5 +1,7 @@
 from typing import Optional
 
+from loguru import logger
+
 from slaf.core.slaf import SLAFArray
 
 from .tokenizers import SLAFTokenizer
@@ -11,7 +13,7 @@ try:
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
-    print("Warning: PyTorch not available. Tensor operations will be disabled.")
+    logger.warning("PyTorch not available. Tensor operations will be disabled.")
 
 # Try to import the dataset
 try:
@@ -20,8 +22,8 @@ try:
     DATASETS_AVAILABLE = True
 except ImportError:
     DATASETS_AVAILABLE = False
-    print(
-        "Warning: Datasets not available. DataLoader will not work without datasets module."
+    logger.warning(
+        "Datasets not available. DataLoader will not work without datasets module."
     )
 
 
