@@ -45,6 +45,21 @@ uv sync --dev
 
 ## 🚀 Quick Start
 
+### Converting Your Data
+
+First, convert your existing single-cell data to SLAF format:
+
+```bash
+# Convert AnnData (.h5ad) to SLAF
+slaf convert input.h5ad output.slaf
+
+# Convert HDF5 to SLAF
+slaf convert input.h5 output.slaf
+
+# Convert 10x Genomics data
+slaf convert path/to/10x/filtered_feature_bc_matrix output.slaf
+```
+
 ### Basic Usage
 
 ```python
@@ -184,26 +199,36 @@ SLAF provides efficient tokenization and dataloaders for training foundation mod
 ```python
 from slaf.ml import SLAFTokenizer
 
-# Create tokenizer
+# Create tokenizer for GeneFormer style tokenization
 tokenizer = SLAFTokenizer(
     slaf_array=slaf,
+    tokenizer_type="geneformer",
     vocab_size=50000,
-    n_expression_bins=10,
-    chunk_size=2048
+    n_expression_bins=10
 )
 
-# Geneformer tokenization (gene sequence)
-geneformer_tokens = tokenizer.tokenize_geneformer(
-    cell_integer_id_range=(0, 100),
-    max_genes=2048,
-    min_percentile=10
+# Geneformer tokenization (gene sequence only)
+gene_sequences = [[1, 2, 3], [4, 5, 6]]  # Example gene IDs
+input_ids, attention_mask = tokenizer.tokenize(
+    gene_sequences,
+    max_genes=2048
+)
+
+# Create tokenizer for scGPT style tokenization
+tokenizer = SLAFTokenizer(
+    slaf_array=slaf,
+    tokenizer_type="scgpt",
+    vocab_size=50000,
+    n_expression_bins=10
 )
 
 # scGPT tokenization (gene-expression pairs)
-scgpt_tokens = tokenizer.tokenize_scgpt(
-    cell_integer_id_range=(0, 100),
-    max_genes=1024,
-    use_sql_binning=True
+gene_sequences = [[1, 2, 3], [4, 5, 6]]  # Gene IDs
+expr_sequences = [[0.5, 0.8, 0.2], [0.9, 0.1, 0.7]]  # Expression values
+input_ids, attention_mask = tokenizer.tokenize(
+    gene_sequences,
+    expr_sequences=expr_sequences,
+    max_genes=1024
 )
 ```
 
@@ -274,6 +299,6 @@ slaf info dataset.slaf
 
 Built on top of
 
-- [DuckDB](https://duckdb.org/) for fast SQL queries
 - [Lance](https://lancedb.github.io/lance/) for cloud-native, efficient columnar storage
-- [Scanpy](https://scanpy.readthedocs.io/) and [Anndata](https://github.com/scverse/anndata) ecosystem
+- [DuckDB](https://duckdb.org/) for lazy, composable OLAP queries pushed down to Lance
+- [Polars](https://pola.rs/) for lazy, composable, in-memory, zero-copy data processing
