@@ -27,6 +27,10 @@
 
 ## 📦 Installation
 
+### Default Installation (Batteries Included)
+
+The default installation includes core functionality plus CLI tools:
+
 ```bash
 # Using uv (recommended)
 uv add slafdb
@@ -36,11 +40,106 @@ pip install slafdb
 
 # Or conda
 conda install -c conda-forge slafdb
+```
 
-# Development installation
+**What's included by default:**
+
+- ✅ Core SLAF functionality (SQL queries, data structures)
+- ✅ CLI tools (`slaf convert`, `slaf query`, etc.)
+- ✅ Rich console output and progress bars
+- ✅ Cross-platform compatibility
+
+**What's NOT included by default:**
+
+Dependencies for:
+
+- ❌ Data conversion tools (scanpy, h5py)
+- ❌ Machine learning features (PyTorch tokenizers)
+- ❌ Advanced single-cell tools (igraph, leidenalg)
+
+### Platform-Specific Notes
+
+**Polars Compatibility:**
+
+- **Linux/Windows**: Works with standard `polars`
+- **macOS (Apple Silicon)**: May require `polars-lts-cpu` for compatibility
+
+If you encounter polars-related issues on macOS, you have several options:
+
+**Option 1: Manual platform-specific installation**
+
+```bash
+# For macOS Apple Silicon
+pip install "polars-lts-cpu>=1.31.0"
+pip install slafdb
+
+# For Linux/Windows
+pip install slafdb
+```
+
+**Option 2: Use uv with manual polars specification**
+
+```bash
+# For macOS Apple Silicon
+uv add "polars-lts-cpu>=1.31.0"
+uv add slafdb
+
+# For Linux/Windows
+uv add slafdb
+```
+
+**Option 3: Use conda with manual polars specification**
+
+```bash
+# For macOS Apple Silicon
+conda install -c conda-forge polars-lts-cpu
+conda install -c conda-forge slafdb
+
+# For Linux/Windows
+conda install -c conda-forge slafdb
+```
+
+**Note**: Package managers don't automatically choose between `polars` and `polars-lts-cpu` - you may need to specify the correct version for your platform.
+
+### Optional Dependencies
+
+Add specific features as needed:
+
+**Using uv:**
+
+```bash
+uv add "slafdb[convert]"
+uv add "slafdb[ml]"
+uv add "slafdb[advanced]"
+uv add "slafdb[full]"
+uv add "slafdb[dev]"
+```
+
+**Using pip:**
+
+```bash
+pip install slafdb[convert]
+pip install slafdb[ml]
+pip install slafdb[advanced]
+pip install slafdb[full]
+pip install slafdb[dev]
+```
+
+**Using conda:**
+
+```bash
+# Note: conda may not support all optional dependency groups
+# You may need to install additional packages manually
+conda install -c conda-forge slafdb
+pip install slafdb[convert]  # For optional dependencies
+```
+
+### Development Installation
+
+```bash
 git clone https://github.com/slaf-project/slaf.git
 cd slaf
-uv sync --dev
+uv add --extra dev --extra test --extra docs
 ```
 
 ## 🚀 Quick Start

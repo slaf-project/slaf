@@ -117,9 +117,8 @@ class SLAFArray:
         # Initialize shape
         self.shape = tuple(self.config["array_shape"])
 
-        # Setup Lance datasets and LanceDB connection
+        # Setup Lance datasets
         self._setup_datasets()
-        self._setup_lancedb()
 
         # Lazy metadata loading - don't load until first access
         self._obs = None
@@ -208,12 +207,6 @@ class SLAFArray:
             print(f"Warning: Async metadata loading failed: {e}")
         finally:
             self._metadata_loading = False
-
-    def _setup_lancedb(self):
-        """Setup LanceDB connection for metadata loading"""
-        import lancedb
-
-        self.lancedb_conn = lancedb.connect(str(self.slaf_path))
 
     def _setup_datasets(self):
         """Setup Lance datasets for the new table structure"""

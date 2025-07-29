@@ -6,8 +6,16 @@ import lance
 import numpy as np
 import pandas as pd
 import pyarrow as pa
-import scanpy as sc
 from scipy import sparse
+
+# Optional imports for data conversion
+try:
+    import scanpy as sc
+
+    SCANPY_AVAILABLE = True
+except ImportError:
+    SCANPY_AVAILABLE = False
+    print("Warning: Scanpy not available. Install with: pip install slafdb[convert]")
 
 from .chunked_reader import create_chunked_reader
 from .utils import detect_format
@@ -201,6 +209,11 @@ class SLAFConverter:
             input_format = detect_format(input_path)
 
         if input_format == "h5ad":
+            if not SCANPY_AVAILABLE:
+                raise ImportError(
+                    "Scanpy is required for h5ad conversion. "
+                    "Install with: pip install slafdb[convert]"
+                )
             self._convert_h5ad(input_path, output_path)
         elif input_format == "10x_mtx":
             self._convert_10x_mtx(input_path, output_path)
