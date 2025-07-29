@@ -1,5 +1,70 @@
 # Changelog
 
-## [0.1.2] - 2025-07-15
+## [0.2.0] - 2025-07-29
 
 ### Added
+- 7f79615 missed test dependencies
+- d6d8b8a logger with loguru
+- d7a8517 optimize pyproject.toml for dependencies
+- ed2fd67 docstring and developer docs cleanup
+- 83f2029 fix icon path
+- c8fae49 update bioinformatics benchmarks after loading speedups
+- 5416641 minor clean up of docs and examples
+- 86935c8 correct tokenizers and dataloaders API in README
+- 00d94b2 ascii art
+- 01c9e1a logo and styling for docs pages and README
+- c473dee simplify converter to output arrow tables directly; simplify migration docs
+- d57212c fix failing test and mypy issue
+- 0a425fd import and initialization feels instantaneous
+- f425142 make benchmarks measure polar dataframe memory correctly + fix polars API in benchmarks
+- e5b7f3a handle polars warnings for map_elements
+- a265f60 refactor to transact all metadata filtering in polars instead of pandas
+- 1c1e734 update developer docs on benchmarks
+- 123bab9 fix mypy errors on cli
+- 577d167 update bioinformatics benchmarks
+- 4dd1736 init for benchmarks module
+- 7b5005b subsumed by dataloaders_internal and dataloader_external
+- 1b12141 fix benchmarks to run in backed mode, remove joins from some queries
+- 23d13c5 ML benchmarks and supporting scripts
+- 72232e6 more efficient data loading by moving chunking into prefetcher
+- 4e588f7 shuffle and chunk at once for raw data prefetching
+- c837416 raw mode dataloader that returns sparse csr tensor to match AnnDataLoader outputs
+- 31343e7 shuffling should transact in polars dataframes, more efficient, less bookkeeping
+- 787efd2 carve out benchmarks into bioinformatics and ml
+- 29b7c0f clean up getting started ml section and refresh html versions
+- e9d332b update ml training example
+- ec9d0f4 fix bug in tokenizer decoding
+- 1e75124 refresh docstrings
+- 2311ffb testing for multi epoch training
+- ec3706f multi epoch training support
+- 7783b1d skip a few tests temporarily
+- 03cf6bf window function tests pass
+- 47f2815 refresh init files
+- 6c2cd97 refresh docstrings
+- 2021785 refactoring tokenizers + designing prefetcher to process chunks of streaming arrow batches
+- 8e349a7 comprehensive overhaul of tokenizers and dataloaders based on processing of in-memory lance fragments
+- 328341c lock file
+- eae6ab3 add polars dependency
+- a913dff bring datafusion to the rescue
+- 9f13b88 some tests still fail
+- 03e91d1 make best effort for tests to pass with revised integer only schema; some still fail
+- 757b1da update cli, docs, tests for converter
+- 1d812d5 only integer primary keys + better compression friendly defaults + v2 manifest
+- 043d647 optimizations for storage
+- 0f171df update tests, cli, docs
+- d728544 better defaults for compression and optional indices
+- c91bcc2 fix some mypy errors found in CI
+- b6c46b8 puts more metadata into *.slaf/config.json for easier retrieval
+- af020b6 increase test coverage
+- 08b5bd8 refresh docs again for conversion
+- fba85fd refresh docs in cli and docs pages
+- 97f2cfb refactored chunked readers for different formats
+- 3ae0b2c refresh migration docs
+- 89a34a0 expand cli tests for convert command
+- 9805a85 expanded support for cli based conversion
+- 8b6d10f tests for expanded conversion support
+- 0498645 support conversion for h5 and 10x mtx formats
+- 5b86945 download or convert utils for 10x mtx and h5 formats
+- 5fcb481 cli should be able to write in chunked mode
+- a771395 h5py-based chunked i/o for conversion
+- b4c73f2 copy button for codeblocks in docs
