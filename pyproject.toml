@@ -1,6 +1,6 @@
 [project]
 name = "slafdb"
-version = "0.2.0"
+version = "0.2.1"
 description = "Sparse Lazy Array Format - MVP for single-cell data"
 authors = [{ name = "Pavan Ramkumar", email = "pavan.ramkumar@gmail.com" }]
 readme = "README.md"
