@@ -12,9 +12,6 @@ uv add slafdb
 
 # Or pip
 pip install slafdb
-
-# Or conda
-conda install -c conda-forge slafdb
 ```
 
 For development dependencies (including documentation):

@@ -16,7 +16,7 @@ try:
     SCANPY_AVAILABLE = True
 except ImportError:
     SCANPY_AVAILABLE = False
-    logger.warning("Scanpy not available. Install with: pip install slafdb[convert]")
+    logger.warning("Scanpy not available. Install with: pip install scanpy")
 
 from .chunked_reader import create_chunked_reader
 from .utils import detect_format
@@ -213,7 +213,7 @@ class SLAFConverter:
             if not SCANPY_AVAILABLE:
                 raise ImportError(
                     "Scanpy is required for h5ad conversion. "
-                    "Install with: pip install slafdb[convert]"
+                    "Install with: pip install scanpy"
                 )
             self._convert_h5ad(input_path, output_path)
         elif input_format == "10x_mtx":

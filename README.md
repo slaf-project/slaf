@@ -29,7 +29,7 @@
 
 ### Default Installation (Batteries Included)
 
-The default installation includes core functionality plus CLI tools:
+The default installation includes core functionality, CLI tools, and data conversion capabilities:
 
 ```bash
 # Using uv (recommended)
@@ -37,15 +37,13 @@ uv add slafdb
 
 # Or pip
 pip install slafdb
-
-# Or conda
-conda install -c conda-forge slafdb
 ```
 
 **What's included by default:**
 
 - ✅ Core SLAF functionality (SQL queries, data structures)
 - ✅ CLI tools (`slaf convert`, `slaf query`, etc.)
+- ✅ Data conversion tools (scanpy, h5py for h5ad files)
 - ✅ Rich console output and progress bars
 - ✅ Cross-platform compatibility
 
@@ -53,7 +51,6 @@ conda install -c conda-forge slafdb
 
 Dependencies for:
 
-- ❌ Data conversion tools (scanpy, h5py)
 - ❌ Machine learning features (PyTorch tokenizers)
 - ❌ Advanced single-cell tools (igraph, leidenalg)
 
@@ -88,17 +85,6 @@ uv add slafdb
 uv add slafdb
 ```
 
-**Option 3: Use conda with manual polars specification**
-
-```bash
-# For macOS Apple Silicon
-conda install -c conda-forge polars-lts-cpu
-conda install -c conda-forge slafdb
-
-# For Linux/Windows
-conda install -c conda-forge slafdb
-```
-
 **Note**: Package managers don't automatically choose between `polars` and `polars-lts-cpu` - you may need to specify the correct version for your platform.
 
 ### Optional Dependencies
@@ -108,7 +94,6 @@ Add specific features as needed:
 **Using uv:**
 
 ```bash
-uv add "slafdb[convert]"
 uv add "slafdb[ml]"
 uv add "slafdb[advanced]"
 uv add "slafdb[full]"
@@ -118,20 +103,10 @@ uv add "slafdb[dev]"
 **Using pip:**
 
 ```bash
-pip install slafdb[convert]
 pip install slafdb[ml]
 pip install slafdb[advanced]
 pip install slafdb[full]
 pip install slafdb[dev]
-```
-
-**Using conda:**
-
-```bash
-# Note: conda may not support all optional dependency groups
-# You may need to install additional packages manually
-conda install -c conda-forge slafdb
-pip install slafdb[convert]  # For optional dependencies
 ```
 
 ### Development Installation
@@ -146,7 +121,7 @@ uv add --extra dev --extra test --extra docs
 
 ### Converting Your Data
 
-First, convert your existing single-cell data to SLAF format:
+Convert your existing single-cell data to SLAF format - **no extra dependencies required!**
 
 ```bash
 # Convert AnnData (.h5ad) to SLAF
@@ -360,7 +335,7 @@ for batch in dataloader:
 ### Data Conversion
 
 ```bash
-# Convert AnnData to SLAF
+# Convert AnnData to SLAF (included by default)
 slaf convert input.h5ad output.slaf
 
 # Convert HDF5 to SLAF
