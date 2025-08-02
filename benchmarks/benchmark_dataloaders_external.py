@@ -29,6 +29,12 @@ from slaf.core.slaf import SLAFArray
 from slaf.ml.dataloaders import SLAFDataLoader
 
 
+# Define the fetch_transform callback for AnnData at module level
+def fetch_transform_adata(batch):
+    """Callback function to transform scDataset batches to AnnData format."""
+    return batch.to_adata()
+
+
 @dataclass
 class ExternalBenchmarkResult:
     """Results from external dataloader benchmark."""
@@ -57,9 +63,9 @@ class ExternalDataloaderBenchmark:
 
         # Load AnnData object once to avoid repeated loading
         self.console.print(f"Loading AnnData from {h5ad_path}...")
-        import scanpy as sc
+        import anndata as ad
 
-        self.adata = sc.read_h5ad(h5ad_path, backed="r")
+        self.adata = ad.read_h5ad(h5ad_path, backed="r")
         self.console.print(
             f"Loaded {self.adata.n_obs:,} cells, {self.adata.n_vars:,} genes"
         )
@@ -78,7 +84,7 @@ class ExternalDataloaderBenchmark:
                     "raw_mode": True,
                     "batch_size": self.batch_size,
                 },  # No tokenization
-                "processes": 4,  # Multiprocessing
+                "processes": 0,  # Multiprocessing with anndata-loaded objects
                 "claimed_performance": 4000,  # cells/sec from paper
             },
             "BioNeMo SCDL": {
@@ -460,13 +466,23 @@ class ExternalDataloaderBenchmark:
 
             # Use the shared AnnData object
             collection = AnnCollection([self.adata])
+
+            # Create scDataset with optimal parameters from the paper
             sc_dataset = scDataset(
                 data_collection=collection,
                 batch_size=self.batch_size,
                 block_size=4,
                 fetch_factor=16,
+                fetch_transform=fetch_transform_adata,  # Use module-level callback
             )
-            dataloader = DataLoader(sc_dataset, batch_size=None)
+
+            # Create DataLoader with single worker
+            dataloader = DataLoader(
+                sc_dataset,
+                batch_size=None,
+                num_workers=0,
+                prefetch_factor=None,
+            )
         except Exception as e:
             self.console.print(f"[red]Error setting up scDataset: {e}[/red]")
             return None
@@ -506,7 +522,7 @@ class ExternalDataloaderBenchmark:
             throughput_cells_per_sec=throughput_cells_per_sec,
             memory_usage_gb=peak_memory,
             output_type="raw",
-            processes=1,  # We're running single process
+            processes=0,  # Single worker
             measurement_time=elapsed_time,
             total_cells=total_cells,
         )
