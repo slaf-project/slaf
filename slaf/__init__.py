@@ -1,7 +1,7 @@
 try:
     from importlib.metadata import version
 
-    __version__ = version("slaf")
+    __version__ = version("slafdb")
 except ImportError:
     __version__ = "unknown"
 

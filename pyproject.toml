@@ -17,6 +17,10 @@ dependencies = [
     "pyarrow>=20.0.0", # Data conversion in data/converter.py
     "scipy>=1.15.0",   # Sparse operations in core and data
     "loguru>=0.7.0",   # Logging functionality across all modules
+    # Data conversion - essential for CLI functionality
+    "scanpy>=1.11.2",   # For h5ad file conversion
+    "h5py>=3.10.0",     # For chunked H5AD reading
+    "requests>=2.32.4", # For downloading datasets
     # CLI and utilities
     "typer>=0.9.0", # CLI framework
     "rich>=14.0.0", # Rich console output
@@ -24,13 +28,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Data conversion - for converting data formats
-convert = [
-    "scanpy>=1.11.2",
-    "h5py>=3.10.0",     # For chunked H5AD reading
-    "requests>=2.32.4", # For downloading datasets
-]
-
 # Machine learning - for ML modules
 ml = ["torch>=2.7.1"]
 
@@ -86,7 +83,7 @@ test = [
 ]
 
 # Full installation includes all optional dependencies
-full = ["slafdb[convert,ml,advanced]"]
+full = ["slafdb[ml,advanced]"]
 
 [project.scripts]
 slaf = "slaf.cli:app"
@@ -97,7 +94,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["slaf"]
+include = ["slaf*"]
 
 [tool.ruff]
 target-version = "py312"
