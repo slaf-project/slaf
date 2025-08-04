@@ -461,6 +461,8 @@ class SLAFConverter:
         )
 
         # Memory monitoring
+        process = None
+        initial_memory = None
         try:
             import psutil
 
@@ -607,14 +609,15 @@ class SLAFConverter:
             logger.info(f"Completed chunk {chunk_idx + 1}/{total_chunks}")
 
         # Final memory report
-        try:
-            final_memory = process.memory_info().rss / 1024 / 1024  # MB
-            memory_increase = final_memory - initial_memory
-            logger.info(
-                f"Final memory usage: {final_memory:.1f} MB (change: {memory_increase:+.1f} MB)"
-            )
-        except ImportError:
-            pass
+        if process is not None and initial_memory is not None:
+            try:
+                final_memory = process.memory_info().rss / 1024 / 1024  # MB
+                memory_increase = final_memory - initial_memory
+                logger.info(
+                    f"Final memory usage: {final_memory:.1f} MB (change: {memory_increase:+.1f} MB)"
+                )
+            except Exception:
+                pass
 
         logger.info("Expression data processing complete!")
 
