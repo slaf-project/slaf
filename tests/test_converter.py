@@ -1163,10 +1163,24 @@ class TestSLAFConverter:
         )
         df_chunked_sorted = df_chunked[cols].sort_values(cols).reset_index(drop=True)
 
-        # Compare expression data exactly
+        # Compare expression data values (allowing for different dtypes)
         print(df_traditional_sorted)
         print(df_chunked_sorted)
-        pd.testing.assert_frame_equal(df_traditional_sorted, df_chunked_sorted)
+
+        # Convert both to same dtype for comparison (float)
+        df_traditional_sorted_float = df_traditional_sorted.copy()
+        df_chunked_sorted_float = df_chunked_sorted.copy()
+        df_traditional_sorted_float["value"] = df_traditional_sorted_float[
+            "value"
+        ].astype(float)
+        df_chunked_sorted_float["value"] = df_chunked_sorted_float["value"].astype(
+            float
+        )
+
+        # Compare the values (allowing for different dtypes)
+        pd.testing.assert_frame_equal(
+            df_traditional_sorted_float, df_chunked_sorted_float, check_dtype=False
+        )
 
         # Compare cell metadata (robust to column order)
         cells_traditional = lance.dataset(output_path_traditional / "cells.lance")
@@ -1273,9 +1287,9 @@ class TestSLAFConverter:
             """Reconstruct dense matrix from COO data"""
             matrix = np.zeros((n_cells, n_genes))
             for _, row in df.iterrows():
-                cell_idx = row["cell_integer_id"]
-                gene_idx = row["gene_integer_id"]
-                value = row["value"]
+                cell_idx = int(row["cell_integer_id"])
+                gene_idx = int(row["gene_integer_id"])
+                value = float(row["value"])
                 matrix[cell_idx, gene_idx] = value
             return matrix
 

@@ -313,6 +313,11 @@ class SLAFConverter:
         output_path_obj = Path(output_path)
         output_path_obj.mkdir(exist_ok=True)
 
+        # Validate optimized data types and determine value type
+        validation_result, value_type = self._validate_optimized_dtypes_anndata(adata)
+        if not validation_result:
+            self.use_optimized_dtypes = False
+
         # Create integer key mappings if needed
         cell_id_mapping = None
         gene_id_mapping = None
@@ -328,6 +333,7 @@ class SLAFConverter:
             sparse_matrix=adata.X,
             cell_ids=adata.obs.index,
             gene_ids=adata.var.index,
+            value_type=value_type,
         )
 
         # Convert metadata
@@ -369,8 +375,9 @@ class SLAFConverter:
         with create_chunked_reader(h5ad_path) as reader:
             logger.info(f"Loaded: {reader.n_obs:,} cells × {reader.n_vars:,} genes")
 
-            # Validate optimized data types
-            if not self._validate_optimized_dtypes(reader):
+            # Validate optimized data types and determine value type
+            validation_result, value_type = self._validate_optimized_dtypes(reader)
+            if not validation_result:
                 self.use_optimized_dtypes = False
 
             # Create output directory
@@ -381,7 +388,7 @@ class SLAFConverter:
             self._write_metadata_efficiently(reader, output_path_obj)
 
             # Process expression data
-            self._process_expression(reader, output_path_obj)
+            self._process_expression(reader, output_path_obj, value_type)
 
             # Create indices (if enabled)
             if self.create_indices:
@@ -450,7 +457,7 @@ class SLAFConverter:
 
         logger.info("Metadata tables written!")
 
-    def _process_expression(self, reader, output_path_obj: Path):
+    def _process_expression(self, reader, output_path_obj: Path, value_type="uint16"):
         """Process expression data in single-threaded mode with large chunks"""
         logger.info("Processing expression data in single-threaded mode...")
 
@@ -474,20 +481,27 @@ class SLAFConverter:
 
         # Create Lance dataset with schema
         expression_path = output_path_obj / "expression.lance"
-        schema = self._get_expression_schema()
+        schema = self._get_expression_schema(value_type)
 
         # Create empty dataset first
         logger.info("Creating initial Lance dataset...")
-        schema = self._get_expression_schema()
+        schema = self._get_expression_schema(value_type)
 
         # Create empty table with correct schema based on settings
+        if value_type == "uint16":
+            value_pa_type = pa.uint16()
+        elif value_type == "float32":
+            value_pa_type = pa.float32()
+        else:
+            raise ValueError(f"Unsupported value type: {value_type}")
+
         if self.optimize_storage:
             if self.use_optimized_dtypes:
                 empty_table = pa.table(
                     {
                         "cell_integer_id": pa.array([], type=pa.uint32()),
                         "gene_integer_id": pa.array([], type=pa.uint16()),
-                        "value": pa.array([], type=pa.uint16()),
+                        "value": pa.array([], type=value_pa_type),
                     }
                 )
             else:
@@ -495,7 +509,7 @@ class SLAFConverter:
                     {
                         "cell_integer_id": pa.array([], type=pa.int32()),
                         "gene_integer_id": pa.array([], type=pa.int32()),
-                        "value": pa.array([], type=pa.float32()),
+                        "value": pa.array([], type=value_pa_type),
                     }
                 )
         else:
@@ -506,7 +520,7 @@ class SLAFConverter:
                         "gene_id": pa.array([], type=pa.string()),
                         "cell_integer_id": pa.array([], type=pa.uint32()),
                         "gene_integer_id": pa.array([], type=pa.uint16()),
-                        "value": pa.array([], type=pa.uint16()),
+                        "value": pa.array([], type=value_pa_type),
                     }
                 )
             else:
@@ -516,7 +530,7 @@ class SLAFConverter:
                         "gene_id": pa.array([], type=pa.string()),
                         "cell_integer_id": pa.array([], type=pa.int32()),
                         "gene_integer_id": pa.array([], type=pa.int32()),
-                        "value": pa.array([], type=pa.float32()),
+                        "value": pa.array([], type=value_pa_type),
                     }
                 )
 
@@ -622,9 +636,9 @@ class SLAFConverter:
         logger.info("Expression data processing complete!")
 
     def _validate_optimized_dtypes(self, reader):
-        """Validate that data fits in optimized data types"""
+        """Validate that data fits in optimized data types and determine appropriate value type"""
         if not self.use_optimized_dtypes:
-            return True
+            return True, "float32"
 
         logger.info("Validating data fits in optimized data types...")
 
@@ -634,7 +648,7 @@ class SLAFConverter:
                 f"Warning: {reader.n_vars:,} genes exceeds uint16 limit (65535)"
             )
             logger.info("Falling back to standard data types")
-            return False
+            return False, "float32"
 
         # Check if cell count fits in uint32 (0-4,294,967,295)
         if reader.n_obs > 4294967295:
@@ -642,41 +656,122 @@ class SLAFConverter:
                 f"Warning: {reader.n_obs:,} cells exceeds uint32 limit (4,294,967,295)"
             )
             logger.info("Falling back to standard data types")
-            return False
+            return False, "float32"
 
-        # Sample some values to check if they fit in uint16
-        logger.info("Sampling expression values to validate uint16 range...")
-        sample_size = min(100000, reader.n_obs)  # Sample up to 100K cells
-        sample_chunks = list(reader.iter_chunks(chunk_size=sample_size))
+        # Sample original data from the file to determine data type
+        logger.info("Sampling original expression values to determine data type...")
 
-        if sample_chunks:
-            sample_chunk = sample_chunks[0][0]
-            if sparse.issparse(sample_chunk):
-                sample_data = sample_chunk.data
+        # For chunked readers, we need to check the original data type from the file
+        if hasattr(reader, "file") and reader.file is not None:
+            # Check the original data type from the h5ad file
+            X_group = reader.file["X"]
+            if "data" in X_group:
+                # Sample some original data
+                data = X_group["data"]
+                sample_size = min(10000, len(data))
+                # Use sequential sampling instead of random to avoid indexing issues
+                sample_data = data[:sample_size]
+
+                # Check if original data is integer or float
+                is_integer = np.issubdtype(sample_data.dtype, np.integer)
+                max_value = np.max(sample_data)
+                min_value = np.min(sample_data)
+
+                if is_integer and max_value <= 65535 and min_value >= 0:
+                    logger.info(
+                        f"Original integer expression values fit in uint16 range: [{min_value}, {max_value}]"
+                    )
+                    logger.info("Using uint16 for integer count data")
+                    return True, "uint16"
+                elif not is_integer:
+                    # Check if float data contains only integer values
+                    # Round to nearest integer and check if it's the same
+                    rounded_data = np.round(sample_data)
+                    is_integer_values = np.allclose(
+                        sample_data, rounded_data, rtol=1e-10
+                    )
+
+                    if is_integer_values and max_value <= 65535 and min_value >= 0:
+                        logger.info(
+                            f"Float data contains only integer values: [{min_value}, {max_value}]"
+                        )
+                        logger.info("Converting to uint16 for count data")
+                        return True, "uint16"
+                    else:
+                        logger.info(
+                            f"Float data contains fractional values: [{min_value}, {max_value}]"
+                        )
+                        logger.info("Keeping as float32 for normalized/float data")
+                        return False, "float32"
+                else:
+                    logger.info(
+                        f"Warning: Original integer values range [{min_value}, {max_value}] exceeds uint16 range [0, 65535]"
+                    )
+                    logger.info("Falling back to float32")
+                    return False, "float32"
             else:
-                sample_data = sample_chunk.flatten()
+                # Fallback to checking processed data
+                sample_size = min(100000, reader.n_obs)
+                sample_chunks = list(reader.iter_chunks(chunk_size=sample_size))
 
-            max_value = np.max(sample_data)
-            min_value = np.min(sample_data)
+                if sample_chunks:
+                    sample_chunk = sample_chunks[0][0]
 
-            if max_value > 65535 or min_value < 0:
-                logger.info(
-                    f"Warning: Expression values range [{min_value}, {max_value}] exceeds uint16 range [0, 65535]"
-                )
-                logger.info("Falling back to standard data types")
-                return False
+                    # Handle different data types from chunked reader
+                    if hasattr(sample_chunk, "column"):  # PyArrow Table
+                        # Get the value column from the PyArrow table
+                        value_column = sample_chunk.column("value")
+                        sample_data = value_column.to_numpy()
+                    elif sparse.issparse(sample_chunk):
+                        sample_data = sample_chunk.data
+                    else:
+                        sample_data = sample_chunk.flatten()
 
-            logger.info(
-                f"Expression values fit in uint16 range: [{min_value}, {max_value}]"
-            )
+                    # Check if data is integer or float
+                    is_integer = np.issubdtype(sample_data.dtype, np.integer)
+                    max_value = np.max(sample_data)
+                    min_value = np.min(sample_data)
+
+                    if is_integer and max_value <= 65535 and min_value >= 0:
+                        logger.info(
+                            f"Integer expression values fit in uint16 range: [{min_value}, {max_value}]"
+                        )
+                        logger.info("Using uint16 for integer count data")
+                        return True, "uint16"
+                    elif not is_integer:
+                        # Check if float data contains only integer values
+                        # Round to nearest integer and check if it's the same
+                        rounded_data = np.round(sample_data)
+                        is_integer_values = np.allclose(
+                            sample_data, rounded_data, rtol=1e-10
+                        )
+
+                        if is_integer_values and max_value <= 65535 and min_value >= 0:
+                            logger.info(
+                                f"Float data contains only integer values: [{min_value}, {max_value}]"
+                            )
+                            logger.info("Converting to uint16 for count data")
+                            return True, "uint16"
+                        else:
+                            logger.info(
+                                f"Float data contains fractional values: [{min_value}, {max_value}]"
+                            )
+                            logger.info("Keeping as float32 for normalized/float data")
+                            return False, "float32"
+                    else:
+                        logger.info(
+                            f"Warning: Integer values range [{min_value}, {max_value}] exceeds uint16 range [0, 65535]"
+                        )
+                        logger.info("Falling back to float32")
+                        return False, "float32"
 
         logger.info("Data validation passed - using optimized data types")
-        return True
+        return True, "uint16"  # Default to uint16 for integer data
 
     def _validate_optimized_dtypes_anndata(self, adata):
-        """Validate that AnnData object's expression data fits in optimized data types"""
+        """Validate that AnnData object's expression data fits in optimized data types and determine appropriate value type"""
         if not self.use_optimized_dtypes:
-            return True
+            return True, "float32"
 
         logger.info(
             "Validating AnnData object's expression data fits in optimized data types..."
@@ -686,7 +781,7 @@ class SLAFConverter:
         if adata.n_vars > 65535:
             logger.info(f"Warning: {adata.n_vars:,} genes exceeds uint16 limit (65535)")
             logger.info("Falling back to standard data types")
-            return False
+            return False, "float32"
 
         # Check if cell count fits in uint32 (0-4,294,967,295)
         if adata.n_obs > 4294967295:
@@ -694,30 +789,38 @@ class SLAFConverter:
                 f"{adata.n_obs:,} cells exceeds uint32 limit (4,294,967,295)"
             )
             logger.info("Falling back to standard data types")
-            return False
+            return False, "float32"
 
-        # Sample some values to check if they fit in uint16
-        logger.info("Sampling expression values to validate uint16 range...")
+        # Sample some values to check data type and range
+        logger.info("Sampling expression values to determine data type...")
         sample_data = adata.X.data[:100000]
 
+        # Check if data is integer or float
+        is_integer = np.issubdtype(sample_data.dtype, np.integer)
         max_value = np.max(sample_data)
         min_value = np.min(sample_data)
 
-        if max_value > 65535 or min_value < 0:
-            logger.warning(
-                f"Expression values range [{min_value}, {max_value}] exceeds uint16 range [0, 65535]"
+        if is_integer and max_value <= 65535 and min_value >= 0:
+            logger.info(
+                f"Integer expression values fit in uint16 range: [{min_value}, {max_value}]"
             )
-            logger.info("Falling back to standard data types")
-            return False
-
-        logger.info(
-            f"Expression values fit in uint16 range: [{min_value}, {max_value}]"
-        )
+            logger.info("Using uint16 for integer count data")
+            return True, "uint16"
+        elif not is_integer:
+            logger.info(f"Float expression values detected: [{min_value}, {max_value}]")
+            logger.info("Using float32 for normalized/float data")
+            return True, "float32"
+        else:
+            logger.info(
+                f"Warning: Integer values range [{min_value}, {max_value}] exceeds uint16 range [0, 65535]"
+            )
+            logger.info("Falling back to float32")
+            return False, "float32"
 
         logger.info(
             "AnnData object's expression data validation passed - using optimized data types"
         )
-        return True
+        return True, "uint16"  # Default to uint16 for integer data
 
     def _compact_dataset(self, output_path_obj: Path):
         """Compact the dataset to optimize storage after writing"""
@@ -749,8 +852,16 @@ class SLAFConverter:
 
         logger.info("Dataset compaction complete!")
 
-    def _get_expression_schema(self):
+    def _get_expression_schema(self, value_type="uint16"):
         """Get the schema for expression table"""
+        # Determine the appropriate value type
+        if value_type == "uint16":
+            value_pa_type = pa.uint16()
+        elif value_type == "float32":
+            value_pa_type = pa.float32()
+        else:
+            raise ValueError(f"Unsupported value type: {value_type}")
+
         if self.optimize_storage:
             # Only store integer IDs for maximum storage efficiency
             if self.use_optimized_dtypes:
@@ -759,7 +870,7 @@ class SLAFConverter:
                     [
                         ("cell_integer_id", pa.uint32()),
                         ("gene_integer_id", pa.uint16()),
-                        ("value", pa.uint16()),
+                        ("value", value_pa_type),
                     ]
                 )
             else:
@@ -768,7 +879,7 @@ class SLAFConverter:
                     [
                         ("cell_integer_id", pa.int32()),
                         ("gene_integer_id", pa.int32()),
-                        ("value", pa.float32()),
+                        ("value", value_pa_type),
                     ]
                 )
         else:
@@ -780,7 +891,7 @@ class SLAFConverter:
                         ("gene_id", pa.string()),
                         ("cell_integer_id", pa.uint32()),
                         ("gene_integer_id", pa.uint16()),
-                        ("value", pa.uint16()),
+                        ("value", value_pa_type),
                     ]
                 )
             else:
@@ -790,7 +901,7 @@ class SLAFConverter:
                         ("gene_id", pa.string()),
                         ("cell_integer_id", pa.int32()),
                         ("gene_integer_id", pa.int32()),
-                        ("value", pa.float32()),
+                        ("value", value_pa_type),
                     ]
                 )
 
@@ -807,6 +918,7 @@ class SLAFConverter:
         sparse_matrix,
         cell_ids,
         gene_ids,
+        value_type="uint16",
     ):
         """Convert scipy sparse matrix to COO format PyArrow table with integer IDs"""
         coo_matrix = sparse_matrix.tocoo()
@@ -817,17 +929,27 @@ class SLAFConverter:
         if self.use_optimized_dtypes:
             cell_integer_id_array = coo_matrix.row.astype(np.uint32)
             gene_integer_id_array = coo_matrix.col.astype(np.uint16)
-            # Convert values to uint16 (assuming they fit in 0-65535 range)
-            value_array = coo_matrix.data.astype(np.uint16)
-            value_dtype = np.uint16
-            value_type = pa.uint16()
+            # Convert values based on the determined type
+            if value_type == "uint16":
+                value_array = coo_matrix.data.astype(np.uint16)
+                value_dtype = np.uint16
+            elif value_type == "float32":
+                value_array = coo_matrix.data.astype(np.float32)
+                value_dtype = np.float32
+            else:
+                raise ValueError(f"Unsupported value type: {value_type}")
         else:
             cell_integer_id_array = coo_matrix.row.astype(np.int32)
             gene_integer_id_array = coo_matrix.col.astype(np.int32)
-            # Expression values - always use float32
-            value_array = coo_matrix.data
-            value_dtype = np.float32
-            value_type = pa.float32()
+            # Expression values - use the determined type
+            if value_type == "uint16":
+                value_array = coo_matrix.data.astype(np.uint16)
+                value_dtype = np.uint16
+            elif value_type == "float32":
+                value_array = coo_matrix.data.astype(np.float32)
+                value_dtype = np.float32
+            else:
+                raise ValueError(f"Unsupported value type: {value_type}")
 
         # Create string ID arrays
         cell_id_array = np.array(cell_ids)[coo_matrix.row].astype(str)
