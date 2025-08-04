@@ -633,11 +633,22 @@ def query(
         results = slaf_array.query(sql)
 
         if output:
-            results.to_csv(output, index=False)
+            # Handle both pandas and polars DataFrames
+            if hasattr(results, "to_csv"):
+                results.to_csv(output, index=False)
+            else:
+                # Polars DataFrame
+                results.write_csv(output)
             typer.echo(f"✅ Results saved to {output}")
         else:
             typer.echo("📊 Query results:")
-            typer.echo(results.to_string(index=False))
+            # Handle both pandas and polars DataFrames
+            if hasattr(results, "to_string"):
+                # Pandas DataFrame
+                typer.echo(results.to_string(index=False))
+            else:
+                # Polars DataFrame
+                typer.echo(str(results))
 
     except Exception as e:
         typer.echo(f"❌ Query failed: {e}")
