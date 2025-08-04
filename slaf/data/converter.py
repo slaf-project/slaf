@@ -810,6 +810,7 @@ class SLAFConverter:
     ):
         """Convert scipy sparse matrix to COO format PyArrow table with integer IDs"""
         coo_matrix = sparse_matrix.tocoo()
+
         logger.info(f"Processing {len(coo_matrix.data):,} non-zero elements...")
 
         # Create integer ID arrays for efficient range queries

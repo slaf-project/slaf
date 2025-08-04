@@ -2087,3 +2087,21 @@ class TestSLAFConverter:
 
         # Compare the sets (order-independent)
         assert chunked_tuples == non_chunked_tuples
+
+    def test_convert_process_variable_fix(self, small_sample_adata, tmp_path):
+        """Test that the process variable fix works correctly."""
+        # Save sample data as h5ad
+        h5ad_path = tmp_path / "test.h5ad"
+        small_sample_adata.write(h5ad_path)
+
+        # Convert to SLAF - this should not raise the process variable error
+        output_path = tmp_path / "test.slaf"
+        converter = SLAFConverter(chunked=True)
+
+        # This should not raise an error about process variable
+        # The fix ensures that process variable is properly initialized
+        converter.convert(str(h5ad_path), str(output_path))
+
+        # Verify conversion completed successfully
+        assert output_path.exists()
+        assert (output_path / "expression.lance").exists()

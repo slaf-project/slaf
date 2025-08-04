@@ -822,6 +822,94 @@ class TestCLI:
                 mock_result.to_csv.assert_called_once_with("results.csv", index=False)
 
     @patch("slaf.cli.check_dependencies")
+    def test_query_with_polars_dataframe(self, mock_check_deps, runner):
+        """Test query command with Polars DataFrame (simulating the new behavior)."""
+        with patch("slaf.cli.Path") as mock_path:
+            mock_path_instance = Mock()
+            mock_path_instance.exists.return_value = True
+            mock_path.return_value = mock_path_instance
+            with patch("slaf.SLAFArray", create=True) as mock_slaf:
+                mock_dataset = Mock()
+                # Simulate a Polars DataFrame (no to_csv method, has write_csv)
+                mock_result = Mock()
+                # Remove to_csv method to simulate Polars DataFrame
+                del mock_result.to_csv
+                mock_result.write_csv = Mock()
+                mock_dataset.query.return_value = mock_result
+                mock_slaf.return_value = mock_dataset
+
+                result = runner.invoke(
+                    app,
+                    [
+                        "query",
+                        "test_dataset",
+                        "SELECT * FROM expression",
+                        "--output",
+                        "results.csv",
+                    ],
+                )
+                assert result.exit_code == 0
+                assert "Results saved to results.csv" in result.stdout
+                mock_result.write_csv.assert_called_once_with("results.csv")
+
+    @patch("slaf.cli.check_dependencies")
+    def test_query_with_pandas_dataframe(self, mock_check_deps, runner):
+        """Test query command with Pandas DataFrame (backward compatibility)."""
+        with patch("slaf.cli.Path") as mock_path:
+            mock_path_instance = Mock()
+            mock_path_instance.exists.return_value = True
+            mock_path.return_value = mock_path_instance
+            with patch("slaf.SLAFArray", create=True) as mock_slaf:
+                mock_dataset = Mock()
+                # Simulate a Pandas DataFrame (has to_string method)
+                mock_result = Mock()
+                mock_result.to_string = Mock(return_value="pandas output")
+                mock_result.to_csv = Mock()
+                mock_dataset.query.return_value = mock_result
+                mock_slaf.return_value = mock_dataset
+
+                result = runner.invoke(
+                    app,
+                    [
+                        "query",
+                        "test_dataset",
+                        "SELECT * FROM expression",
+                    ],
+                )
+                assert result.exit_code == 0
+                assert "Query results:" in result.stdout
+                mock_result.to_string.assert_called_once_with(index=False)
+
+    @patch("slaf.cli.check_dependencies")
+    def test_query_display_polars_dataframe(self, mock_check_deps, runner):
+        """Test query command display with Polars DataFrame."""
+        with patch("slaf.cli.Path") as mock_path:
+            mock_path_instance = Mock()
+            mock_path_instance.exists.return_value = True
+            mock_path.return_value = mock_path_instance
+            with patch("slaf.SLAFArray", create=True) as mock_slaf:
+                mock_dataset = Mock()
+                # Simulate a Polars DataFrame
+                mock_result = Mock()
+                # Remove to_string method to simulate Polars DataFrame
+                del mock_result.to_string
+                mock_result.__str__ = Mock(return_value="polars output")
+                mock_dataset.query.return_value = mock_result
+                mock_slaf.return_value = mock_dataset
+
+                result = runner.invoke(
+                    app,
+                    [
+                        "query",
+                        "test_dataset",
+                        "SELECT * FROM expression",
+                    ],
+                )
+                assert result.exit_code == 0
+                assert "Query results:" in result.stdout
+                assert "polars output" in result.stdout
+
+    @patch("slaf.cli.check_dependencies")
     def test_query_with_limit(self, mock_check_deps, runner):
         """Test query command with custom limit."""
         with patch("slaf.cli.Path") as mock_path:
