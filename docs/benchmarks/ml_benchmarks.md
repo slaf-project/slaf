@@ -1,6 +1,6 @@
 # ML Benchmarks: SLAF vs State-of-the-Art Dataloaders
 
-SLAF provides state-of-the-art (SOTA) performance in data loading throughput for machine learning workflows, reaching **up to 40x speedups** relative to current standards, particularly for training transformer-based single-cell foundation models. What follows are comprehensive benchmarks comparing SLAF against state-of-the-art dataloaders including scDataset, AnnDataLoader, and AnnLoader.
+SLAF provides state-of-the-art (SOTA) performance in data loading throughput for machine learning workflows, reaching **2x speedups** relative to current standards, particularly for training transformer-based single-cell foundation models. What follows are comprehensive benchmarks comparing SLAF against state-of-the-art dataloaders including scDataset, AnnDataLoader, and AnnLoader.
 
 ## **Motivation**
 
@@ -88,13 +88,27 @@ Raw data loading performance measures the base throughput of each system without
 | System        | Throughput (cells/sec) |
 | ------------- | ---------------------- |
 | **SLAF**      | **23,053**             |
-| scDataset     | 570                    |
+| scDataset     | 10,976                 |
 | AnnDataLoader | 372                    |
 | AnnLoader     | 206                    |
 
 !!! success "SOTA Performance"
 
-    SLAF achieves **40x higher throughput** than scDataset and **62x higher throughput** than AnnDataLoader in raw data loading.
+    SLAF achieves **2.1x higher throughput** than scDataset and **62x higher throughput** than AnnDataLoader in raw data loading.
+
+!!! info "scDataset Performance Analysis"
+
+    Our comprehensive benchmarks reveal that scDataset can achieve excellent performance with proper parameter tuning. We observed **10,976 cells/sec** with optimal parameters (`block_size=8, fetch_factor=64`), which is **5.5x higher** than the paper's reported ~2,000 cells/sec, even without using multiprocessing. Note that these are completely different systems though (M1 Max vs NVIDIA DGX CPU).
+
+    However, we found significant limitations with multiprocessing due to pickling issues with h5py-backed AnnData objects. See our [detailed scDataset benchmarks](scdataset_benchmarks.md) for complete analysis including parameter scaling and multiprocessing limitations.
+
+!!! info "Parameter Scaling Validation"
+
+    Our parameter sweeps confirm scDataset's strong scaling behavior: **23.1x improvement** from worst to best configuration. The `fetch_factor` parameter shows the strongest scaling (20x+ improvement), while `block_size` shows more moderate effects. This validates the design approach described in their paper, though optimal parameters may vary by hardware.
+
+!!! info "Multiprocessing Limitations"
+
+    We were unable to test `num_workers > 0` due to pickling errors with h5py objects. We're still working with the scDataset team to figure out implementation differences.
 
 ### **Tier 2: GPU-Ready Output Comparison**
 
@@ -124,13 +138,9 @@ Even though SLAF's tokenizing dataloaders do more work, we find that their throu
 
 !!! info "In-memory formats matter"
 
-    The performance difference between AnnDataLoader (372 cells/sec) and scDataset (570 cells/sec) is notable. While scDataset is smarter at batching and randomization, since our benchmark tests them on loading from h5ad, it's important to compare apples to apples dataloader outputs. AnnDataLoader and AnnLoader return `torch.sparse_csr` tensors whereas returns `scipy.sparse.csr_matrix`.
+    The performance difference between AnnDataLoader (372 cells/sec) and scDataset (10,976 cells/sec) is dramatic. While scDataset is smarter at batching and randomization, since our benchmark tests them on loading from h5ad, it's important to compare apples to apples dataloader outputs. AnnDataLoader and AnnLoader return `torch.sparse_csr` tensors whereas scDataset returns `scipy.sparse.csr_matrix`.
 
     In our work, we noticed different overheads for conversion from polars dataframe (SLAF's preferred format for raw data) to torch and scipy sparse formats, and ultimately decided to keep raw outputs in polars. The performance of AnnLoader and AnnDataLoader relative to scDataset is almost certainly due to the overhead of conversion from scipy sparse arrays to torch arrays and worth benchmarking more carefully to identify low-hanging fruit for optimizations in both AnnLoader and AnnDataLoader.
-
-!!! question "Reported vs Observed Discrepancy in `block_size` and `fetch_factor`"
-
-    We performed the same parameter sweeps as in the [scDataset paper](https://arxiv.org/pdf/2506.01883): `block_size` values of [1, 2, 4, 8, 16, 32, 64] and `fetch_factor` values of [1, 2, 4, 8, 16, 32, 64]. However, throughput remained constant at around 550-600 cells/sec, significantly below the paper's reported 2,000 cells/sec. This suggests we may need to better match the benchmark setup with what the scDataset team did to achieve the reported performance.
 
 ## **Conclusion**
 
