@@ -50,26 +50,21 @@ We tested scDataset performance across different combinations of `block_size` an
 - **Medium block_size (8-16)**: Optimal performance
 - **Large block_size (32-64)**: Slightly reduced performance
 
-#### **3. Memory Usage Patterns**
-
-- **Low fetch_factor**: Higher memory usage (5GB+)
-- **High fetch_factor**: Lower memory usage (1-2GB)
-- **Optimal configuration**: ~2.7GB peak memory
-
 ### **Detailed Results Table**
 
-| Block Size | Fetch Factor | Throughput (cells/sec) | Memory (GB) |
-| ---------- | ------------ | ---------------------- | ----------- |
-| 1          | 1            | 474                    | 5.0         |
-| 1          | 64           | 10,093                 | 2.4         |
-| 4          | 16           | 5,103                  | 1.6         |
-| 8          | 64           | **10,976**             | 2.7         |
-| 16         | 64           | 10,484                 | 2.4         |
-| 32         | 64           | 9,382                  | 2.4         |
-| 64         | 64           | 10,159                 | 2.7         |
+| Block Size | Fetch Factor | Throughput (cells/sec) |
+| ---------- | ------------ | ---------------------- |
+| 1          | 1            | 474                    |
+| 1          | 64           | 10,093                 |
+| 4          | 16           | 5,103                  |
+| 8          | 64           | **10,976**             |
+| 16         | 64           | 10,484                 |
+| 32         | 64           | 9,382                  |
+| 64         | 64           | 10,159                 |
 
 !!! success "Parameter Optimization"
-The optimal configuration for scDataset on our hardware is `block_size=8, fetch_factor=64`, achieving **10,976 cells/sec** with reasonable memory usage.
+
+    The optimal configuration for scDataset on our hardware is `block_size=8, fetch_factor=64`, achieving **10,976 cells/sec**.
 
 ## **Multiprocessing Benchmarks**
 
@@ -101,7 +96,8 @@ We tested scDataset's multiprocessing capabilities using the optimal parameters 
 - **No multiprocessing scaling**: Unable to test due to pickling limitations
 
 !!! warning "Multiprocessing Limitation"
-scDataset's multiprocessing capabilities are limited by pickling issues with h5py-backed AnnData objects. This prevents the scaling benefits reported in their paper.
+
+    scDataset's multiprocessing capabilities are limited by pickling issues with h5py-backed AnnData objects. This prevents the scaling benefits reported in their paper.
 
 ## **Comparison with Paper Results**
 
@@ -121,7 +117,8 @@ scDataset's multiprocessing capabilities are limited by pickling issues with h5p
 4. **Measurement methodology**: Different benchmark setups
 
 !!! info "Performance Validation"
-Our results show that scDataset can achieve excellent performance with proper parameter tuning, even exceeding the paper's reported numbers on modern hardware.
+
+    Our results show that scDataset can achieve excellent performance with proper parameter tuning, even exceeding the paper's reported numbers on modern hardware.
 
 ## **Technical Challenges**
 
@@ -137,27 +134,19 @@ Our results show that scDataset can achieve excellent performance with proper pa
 - **Impact**: Requires careful tuning for optimal performance
 - **Solution**: Systematic parameter sweeps
 
-### **3. Memory Usage**
-
-- **Problem**: High memory usage with low fetch_factor
-- **Impact**: May limit batch sizes on memory-constrained systems
-- **Solution**: Use higher fetch_factor values
-
 ## **Recommendations**
 
 ### **For scDataset Users**
 
 1. **Parameter Tuning**: Always test different `block_size` and `fetch_factor` combinations
 2. **Single Worker**: Use `num_workers=0` to avoid pickling issues
-3. **Memory Monitoring**: Monitor memory usage, especially with low fetch_factor
-4. **Hardware Testing**: Test on your specific hardware for optimal parameters
+3. **Hardware Testing**: Test on your specific hardware for optimal parameters
 
 ### **For Developers**
 
 1. **Pickling Fix**: Address h5py pickling issues for multiprocessing support
 2. **Parameter Documentation**: Provide clearer guidance on parameter selection
-3. **Memory Optimization**: Reduce memory usage with low fetch_factor values
-4. **Benchmark Suite**: Include comprehensive benchmark tools
+3. **Benchmark Suite**: Include comprehensive benchmark tools
 
 ## **Conclusion**
 
