@@ -32,7 +32,7 @@
 
 </div>
 
-See our detailed [benchmarks](benchmarks/performance.md).
+See our detailed benchmarks for [bioinformaticians](benchmarks/bioinformatics_benchmarks.md) and [ML engineers](benchmarks/ml_benchmarks.md).
 
 ---
 
