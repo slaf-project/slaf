@@ -106,6 +106,10 @@ class SLAFArray:
         """
         self.slaf_path = Path(slaf_path)
 
+        # Validate dataset exists
+        if not self.slaf_path.exists():
+            raise FileNotFoundError(f"SLAF dataset not found: {self.slaf_path}")
+
         # Load configuration
         config_path = self.slaf_path / "config.json"
         if not config_path.exists():
@@ -117,31 +121,21 @@ class SLAFArray:
         # Initialize shape
         self.shape = tuple(self.config["array_shape"])
 
-        # Setup Lance datasets
+        # Setup datasets
         self._setup_datasets()
 
-        # Lazy metadata loading - don't load until first access
+        # Initialize metadata loading
         self._obs = None
         self._var = None
         self._metadata_loaded = False
         self._metadata_loading = False
-        self._metadata_loading_thread = None
+        self._metadata_thread = None
+        self._metadata_error = None
 
-        # Pre-compute metadata paths for faster loading
-        self._cells_path = str(self.slaf_path / self.config["tables"]["cells"])
-        self._genes_path = str(self.slaf_path / self.config["tables"]["genes"])
-
-        # Cache for metadata column info (lightweight)
-        self._obs_columns = None
-        self._var_columns = None
-
-        # Initialize RowIndexMapper for efficient Lance row access
-        from .query_optimizer import RowIndexMapper
+        # Initialize row mapper for cell-based queries
+        from slaf.core.query_optimizer import RowIndexMapper
 
         self.row_mapper = RowIndexMapper(self)
-
-        # Build cell start indices during metadata loading
-        self._cell_start_index = None
 
         # Start async metadata loading in background
         self._start_async_metadata_loading()
@@ -196,23 +190,23 @@ class SLAFArray:
 
     def _start_async_metadata_loading(self):
         """Start async metadata loading in background thread"""
-        if self._metadata_loading or self._metadata_loaded:
-            return
+        if self._metadata_thread and self._metadata_thread.is_alive():
+            return  # Already loading
 
         self._metadata_loading = True
-        self._metadata_loading_thread = threading.Thread(
+        self._metadata_thread = threading.Thread(
             target=self._load_metadata_async, daemon=True
         )
-        self._metadata_loading_thread.start()
+        self._metadata_thread.start()
 
     def _load_metadata_async(self):
-        """Load metadata asynchronously in background thread"""
+        """Load metadata in background thread"""
         try:
             self._load_metadata()
             self._metadata_loaded = True
         except Exception as e:
-            # Log error but don't crash the background thread
-            logger.warning(f"Async metadata loading failed: {e}")
+            self._metadata_error = e
+            logger.error(f"Error loading metadata: {e}")
         finally:
             self._metadata_loading = False
 
@@ -232,14 +226,11 @@ class SLAFArray:
 
         if self._metadata_loading:
             # Wait for async loading to complete
-            if (
-                self._metadata_loading_thread
-                and self._metadata_loading_thread.is_alive()
-            ):
+            if self._metadata_thread and self._metadata_thread.is_alive():
                 logger.info(
                     "Loading metadata in background... (this may take a few seconds)"
                 )
-                self._metadata_loading_thread.join()
+                self._metadata_thread.join()
 
         if not self._metadata_loaded:
             # Fallback to synchronous loading if async failed
@@ -271,11 +262,11 @@ class SLAFArray:
         if self._metadata_loaded:
             return
 
-        if self._metadata_loading and self._metadata_loading_thread:
+        if self._metadata_loading and self._metadata_thread:
             if timeout:
-                self._metadata_loading_thread.join(timeout=timeout)
+                self._metadata_thread.join(timeout=timeout)
             else:
-                self._metadata_loading_thread.join()
+                self._metadata_thread.join()
 
         if not self._metadata_loaded:
             # Fallback to synchronous loading
@@ -285,24 +276,20 @@ class SLAFArray:
     def _load_metadata(self):
         """Load cell and gene metadata into polars DataFrames for fast operations"""
         # Load cell metadata using optimized Lance operations
-        cells_lance = lance.dataset(self._cells_path)
-
         # Use more efficient loading strategy for large datasets
         # Load in chunks if dataset is very large
         if self.shape[0] > 1000000:  # 1M+ cells
             # Use scan() for large datasets to avoid loading everything at once
-            cells_df = pl.from_arrow(cells_lance.scanner().to_table())
+            cells_df = pl.from_arrow(self.cells.scanner().to_table())
         else:
             # Use direct to_table() for smaller datasets
-            cells_df = pl.from_arrow(cells_lance.to_table())
+            cells_df = pl.from_arrow(self.cells.to_table())
 
         self._obs = cells_df.sort("cell_integer_id")
 
         # Load gene metadata using optimized Lance operations
-        genes_lance = lance.dataset(self._genes_path)
-
         # Genes are typically smaller, so use direct loading
-        genes_df = pl.from_arrow(genes_lance.to_table())
+        genes_df = pl.from_arrow(self.genes.to_table())
         self._var = genes_df.sort("gene_integer_id")
 
         # Cache column information for faster access
@@ -857,15 +844,13 @@ class SLAFArray:
 
     def get_gene_expression(self, gene_ids: str | list[str]) -> pl.DataFrame:
         """
-        Get expression data for specific genes using Lance take() and Polars.
+        Get gene expression data for specified genes.
 
-        Retrieves expression data for specified genes using efficient Lance row access
-        and Polars for in-memory operations. This method provides significant
-        performance improvements over SQL-based queries.
+        This method uses QueryOptimizer to generate optimal SQL queries based on the
+        gene ID distribution (consecutive ranges use BETWEEN, scattered values use IN).
 
         Args:
-            gene_ids: Single gene ID (string) or list of gene IDs to retrieve.
-                     Can be string identifiers or integer IDs.
+            gene_ids: Gene ID(s) to query. Can be a single gene ID string or list of gene IDs.
 
         Returns:
             Polars DataFrame containing expression data for the specified genes.
@@ -879,35 +864,34 @@ class SLAFArray:
             >>> # Get expression for a single gene
             >>> slaf_array = SLAFArray("path/to/data.slaf")
             >>> expression = slaf_array.get_gene_expression("GENE1")
-            >>> print(f"Expression data shape: {expression.shape}")
-            Expression data shape: (800, 3)
-
-            >>> # Get expression for multiple genes
-            >>> expression = slaf_array.get_gene_expression(["GENE1", "GENE2", "GENE3"])
-            >>> print(f"Expression data shape: {expression.shape}")
-            Expression data shape: (2400, 3)
-
-            >>> # Error handling for invalid gene ID
-            >>> try:
-            ...     expression = slaf_array.get_gene_expression("invalid_gene")
-            ... except ValueError as e:
-            ...     print(f"Error: {e}")
-            Error: gene ID 'invalid_gene' not found
         """
-        # Convert to integer IDs
+
+        # Convert to list if single gene ID
+        if isinstance(gene_ids, str):
+            gene_ids = [gene_ids]
+
+        # Convert string gene IDs to integer IDs
         integer_ids = self._normalize_entity_ids(gene_ids, "gene")
 
         if not integer_ids:
             return pl.DataFrame({"cell_id": [], "gene_id": [], "value": []})
 
-            # For gene-based queries, use Lance table scan with Polars SQL
+        # Use QueryOptimizer for optimal performance
+        from slaf.core.query_optimizer import QueryOptimizer
+
+        # Build optimized SQL query using QueryOptimizer
+        sql_query = QueryOptimizer.build_optimized_query(
+            entity_ids=integer_ids,
+            entity_type="gene",
+            use_adaptive_batching=True,
+            max_batch_size=100,
+        )
+
+        # Fix the table name for Polars scan (use 'self' instead of 'expression')
+        sql_query = sql_query.replace("expression", "self")
+
+        # Execute the optimized query
         ldf = pl.scan_pyarrow_dataset(self.expression)
-
-        # Build SQL query for gene filtering
-        gene_ids_str = ",".join(map(str, integer_ids))
-        sql_query = f"SELECT * FROM self WHERE gene_integer_id IN ({gene_ids_str})"
-
-        # Execute query and collect results
         expression_df = ldf.sql(sql_query).collect()
 
         # Join with metadata using Polars

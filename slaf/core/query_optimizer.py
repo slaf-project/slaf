@@ -6,6 +6,7 @@ This module contains optimized query strategies including:
 - Range vs IN clause optimization
 - CTE optimization for complex queries
 - Selector-based query building for submatrix operations
+- Histogram-based gene indexing for efficient gene queries
 """
 
 from typing import Any
