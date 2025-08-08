@@ -5,10 +5,9 @@ from typing import Any
 
 import duckdb
 import lance
+import numpy as np
 import polars as pl
 from loguru import logger
-
-from .query_optimizer import QueryOptimizer
 
 
 def display_ascii_art():
@@ -135,6 +134,14 @@ class SLAFArray:
         # Cache for metadata column info (lightweight)
         self._obs_columns = None
         self._var_columns = None
+
+        # Initialize RowIndexMapper for efficient Lance row access
+        from .query_optimizer import RowIndexMapper
+
+        self.row_mapper = RowIndexMapper(self)
+
+        # Build cell start indices during metadata loading
+        self._cell_start_index = None
 
         # Start async metadata loading in background
         self._start_async_metadata_loading()
@@ -302,6 +309,44 @@ class SLAFArray:
         self._obs_columns = list(self._obs.columns)
         self._var_columns = list(self._var.columns)
 
+        # Build cell start indices for efficient row access (zero-copy Polars)
+        if "n_genes" in self._obs.columns:
+            # Use existing n_genes column
+            cumsum = self._obs["n_genes"].cum_sum()
+        else:
+            # Calculate n_genes per cell from expression data
+            logger.info("n_genes column not found, calculating from expression data...")
+
+            # Query expression data to count genes per cell
+            gene_counts_query = """
+            SELECT cell_integer_id, COUNT(*) as n_genes
+            FROM expression
+            GROUP BY cell_integer_id
+            ORDER BY cell_integer_id
+            """
+            gene_counts_df = self.query(gene_counts_query)
+
+            # Convert to polars if needed and join with obs
+            if hasattr(gene_counts_df, "to_pandas"):
+                gene_counts_df = gene_counts_df.to_pandas()
+            gene_counts_pl = pl.from_pandas(gene_counts_df)
+
+            # Join with obs to get n_genes for each cell
+            obs_with_counts = self._obs.join(
+                gene_counts_pl.select(["cell_integer_id", "n_genes"]),
+                on="cell_integer_id",
+                how="left",
+            )
+
+            # Fill missing values with 0 (cells with no expression)
+            obs_with_counts = obs_with_counts.with_columns(
+                pl.col("n_genes").fill_null(0)
+            )
+
+            cumsum = obs_with_counts["n_genes"].cum_sum()
+
+        self._cell_start_index = pl.concat([pl.Series([0]), cumsum])
+
         # Restore dtypes for obs using polars
         obs_dtypes = self.config.get("obs_dtypes", {})
         for col, dtype_info in obs_dtypes.items():
@@ -440,14 +485,21 @@ class SLAFArray:
             >>> print(f"Found {len(result)} expression patterns")
             Found 5 expression patterns
         """
+        # Create a new DuckDB connection for this query to avoid connection issues
+
+        # Create a new connection
+        con = duckdb.connect()
+
         # Reference Lance datasets in local scope so DuckDB can find them
         expression = self.expression  # noqa: F841
         cells = self.cells  # noqa: F841
         genes = self.genes  # noqa: F841
 
-        # Use global duckdb to query Lance datasets directly
-        duckdb.query("SET enable_progress_bar = true;")
-        result = duckdb.query(sql).fetchdf()
+        # Execute the query
+        result = con.execute(sql).fetchdf()
+
+        # Close the connection
+        con.close()
 
         # Convert pandas DataFrame to polars DataFrame
         return pl.from_pandas(result)
@@ -750,11 +802,11 @@ class SLAFArray:
 
     def get_cell_expression(self, cell_ids: str | list[str]) -> pl.DataFrame:
         """
-        Get expression data for specific cells using optimized query strategies.
+        Get expression data for specific cells using Lance take() and Polars.
 
-        Retrieves expression data for specified cells using optimized SQL queries.
-        The method automatically converts string cell IDs to integer IDs and uses
-        query optimization for efficient data retrieval.
+        Retrieves expression data for specified cells using efficient Lance row access
+        and Polars for in-memory operations. This method provides significant
+        performance improvements over SQL-based queries.
 
         Args:
             cell_ids: Single cell ID (string) or list of cell IDs to retrieve.
@@ -790,33 +842,26 @@ class SLAFArray:
         # Convert to integer IDs
         integer_ids = self._normalize_entity_ids(cell_ids, "cell")
 
-        # Build query that joins with metadata tables to get string IDs
         if not integer_ids:
             return pl.DataFrame({"cell_id": [], "gene_id": [], "value": []})
 
-        # Use optimized query strategy but join with metadata tables
-        base_sql = QueryOptimizer.build_optimized_query(integer_ids, "cell")
+        # Get row indices using RowIndexMapper
+        row_indices = self.row_mapper.get_cell_row_ranges(integer_ids)
 
-        # Wrap the base query to join with metadata tables
-        sql = f"""
-        SELECT
-            c.cell_id,
-            g.gene_id,
-            e.value
-        FROM ({base_sql}) e
-        JOIN cells c ON e.cell_integer_id = c.cell_integer_id
-        JOIN genes g ON e.gene_integer_id = g.gene_integer_id
-        """
+        # Load data with Lance take()
+        expression_data = self.expression.take(row_indices)
 
-        return self.query(sql)
+        # Convert PyArrow Table to Polars DataFrame and join with metadata
+        expression_df = pl.from_arrow(expression_data)
+        return self._join_with_metadata(expression_df)
 
     def get_gene_expression(self, gene_ids: str | list[str]) -> pl.DataFrame:
         """
-        Get expression data for specific genes using optimized query strategies.
+        Get expression data for specific genes using Lance take() and Polars.
 
-        Retrieves expression data for specified genes using optimized SQL queries.
-        The method automatically converts string gene IDs to integer IDs and uses
-        query optimization for efficient data retrieval.
+        Retrieves expression data for specified genes using efficient Lance row access
+        and Polars for in-memory operations. This method provides significant
+        performance improvements over SQL-based queries.
 
         Args:
             gene_ids: Single gene ID (string) or list of gene IDs to retrieve.
@@ -852,35 +897,32 @@ class SLAFArray:
         # Convert to integer IDs
         integer_ids = self._normalize_entity_ids(gene_ids, "gene")
 
-        # Build query that joins with metadata tables to get string IDs
         if not integer_ids:
             return pl.DataFrame({"cell_id": [], "gene_id": [], "value": []})
 
-        # Use optimized query strategy but join with metadata tables
-        base_sql = QueryOptimizer.build_optimized_query(integer_ids, "gene")
+            # For gene-based queries, use Lance table scan with Polars SQL
+        ldf = pl.scan_pyarrow_dataset(self.expression)
 
-        # Wrap the base query to join with metadata tables
-        sql = f"""
-        SELECT
-            c.cell_id,
-            g.gene_id,
-            e.value
-        FROM ({base_sql}) e
-        JOIN cells c ON e.cell_integer_id = c.cell_integer_id
-        JOIN genes g ON e.gene_integer_id = g.gene_integer_id
-        """
+        # Build SQL query for gene filtering
+        gene_ids_str = ",".join(map(str, integer_ids))
+        sql_query = f"SELECT * FROM self WHERE gene_integer_id IN ({gene_ids_str})"
 
-        return self.query(sql)
+        # Execute query and collect results
+        expression_df = ldf.sql(sql_query).collect()
+
+        # Join with metadata using Polars
+        return self._join_with_metadata(expression_df)
 
     def get_submatrix(
         self, cell_selector: Any | None = None, gene_selector: Any | None = None
     ) -> pl.DataFrame:
         """
-        Get expression data using cell/gene selectors that work with obs/var DataFrames.
+        Get expression data using cell/gene selectors with Lance take() and Polars.
 
         Retrieves a subset of expression data based on cell and gene selectors.
         The selectors can be slices, lists, boolean masks, or None for all cells/genes.
-        This method provides a flexible interface for subsetting expression data.
+        This method provides a flexible interface for subsetting expression data with
+        significant performance improvements over SQL-based queries.
 
         Args:
             cell_selector: Cell selector for subsetting. Can be:
@@ -936,26 +978,106 @@ class SLAFArray:
             ...     print(f"Error: {e}")
             Error: Cell selector out of bounds
         """
-        # Use optimized query builder from QueryOptimizer
-        base_sql = QueryOptimizer.build_submatrix_query(
-            cell_selector=cell_selector,
-            gene_selector=gene_selector,
-            cell_count=self.shape[0],
-            gene_count=self.shape[1],
+        # Get row indices for cells using RowIndexMapper
+        cell_indices = self.row_mapper.get_cell_row_ranges_by_selector(cell_selector)
+
+        # Load data with Lance take()
+        expression_data = self.expression.take(cell_indices)
+        expression_df = pl.from_arrow(expression_data)
+
+        # Filter by genes if specified
+        if gene_selector is not None:
+            # Convert gene selector to integer IDs
+            if isinstance(gene_selector, int):
+                if gene_selector < 0:
+                    gene_selector = self.shape[1] + gene_selector
+                if 0 <= gene_selector < self.shape[1]:
+                    gene_integer_id = self.var["gene_integer_id"][gene_selector]
+                    expression_df = expression_df.filter(
+                        pl.col("gene_integer_id") == gene_integer_id
+                    )
+                else:
+                    raise ValueError(f"Gene index {gene_selector} out of bounds")
+            elif isinstance(gene_selector, slice):
+                start = gene_selector.start or 0
+                stop = gene_selector.stop or self.shape[1]
+                step = gene_selector.step or 1
+
+                # Handle negative indices
+                if start < 0:
+                    start = self.shape[1] + start
+                if stop < 0:
+                    stop = self.shape[1] + stop
+
+                # Clamp bounds
+                start = max(0, min(start, self.shape[1]))
+                stop = max(0, min(stop, self.shape[1]))
+
+                gene_integer_ids = self.var["gene_integer_id"][
+                    start:stop:step
+                ].to_list()
+                expression_df = expression_df.filter(
+                    pl.col("gene_integer_id").is_in(gene_integer_ids)
+                )
+            elif isinstance(gene_selector, list):
+                gene_integer_ids = []
+                for idx in gene_selector:
+                    if isinstance(idx, int):
+                        if idx < 0:
+                            idx = self.shape[1] + idx
+                        if 0 <= idx < self.shape[1]:
+                            gene_integer_id = self.var["gene_integer_id"][idx]
+                            gene_integer_ids.append(gene_integer_id)
+                        else:
+                            raise ValueError(f"Gene index {idx} out of bounds")
+                    else:
+                        raise ValueError(f"Invalid gene index type: {type(idx)}")
+                expression_df = expression_df.filter(
+                    pl.col("gene_integer_id").is_in(gene_integer_ids)
+                )
+            elif isinstance(gene_selector, np.ndarray) and gene_selector.dtype == bool:
+                if len(gene_selector) != self.shape[1]:
+                    raise ValueError(
+                        f"Boolean mask length {len(gene_selector)} doesn't match gene count {self.shape[1]}"
+                    )
+                gene_integer_ids = self.var["gene_integer_id"][gene_selector].to_list()
+                expression_df = expression_df.filter(
+                    pl.col("gene_integer_id").is_in(gene_integer_ids)
+                )
+            else:
+                raise ValueError(
+                    f"Unsupported gene selector type: {type(gene_selector)}"
+                )
+
+        # Join with metadata using Polars
+        return self._join_with_metadata(expression_df)
+
+    def _join_with_metadata(self, expression_data: pl.DataFrame) -> pl.DataFrame:
+        """
+        Join expression data with cell/gene metadata using Polars.
+
+        Args:
+            expression_data: Polars DataFrame containing expression data
+
+        Returns:
+            Polars DataFrame with cell_id, gene_id, and value columns
+        """
+        # Join with cell metadata
+        result = expression_data.join(
+            self.obs.select(["cell_integer_id", "cell_id"]),
+            on="cell_integer_id",
+            how="left",
         )
 
-        # Wrap the base query to join with metadata tables
-        sql = f"""
-        SELECT
-            c.cell_id,
-            g.gene_id,
-            e.value
-        FROM ({base_sql}) e
-        JOIN cells c ON e.cell_integer_id = c.cell_integer_id
-        JOIN genes g ON e.gene_integer_id = g.gene_integer_id
-        """
+        # Join with gene metadata
+        result = result.join(
+            self.var.select(["gene_integer_id", "gene_id"]),
+            on="gene_integer_id",
+            how="left",
+        )
 
-        return self.query(sql)
+        # Select final columns
+        return result.select(["cell_id", "gene_id", "value"])
 
     def info(self):
         """Print information about the SLAF dataset"""

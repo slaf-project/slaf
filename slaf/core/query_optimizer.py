@@ -11,6 +11,7 @@ This module contains optimized query strategies including:
 from typing import Any
 
 import numpy as np
+import polars as pl
 
 
 class QueryOptimizer:
@@ -394,6 +395,209 @@ class QueryOptimizer:
             return "cte"
         else:
             return "scattered"
+
+
+class RowIndexMapper:
+    """
+    Simple row index mapping using cumulative sums for cell-based queries.
+
+    This class provides efficient methods to get row ranges for cells
+    using cumulative sums of gene counts. For gene-based queries,
+    it falls back to table scans with WHERE clauses.
+
+    Key Features:
+        - Fast cell row range calculation using cumulative sums
+        - Efficient gene filtering in Polars after cell loading
+        - Simple and maintainable implementation
+
+    Examples:
+        >>> mapper = RowIndexMapper(slaf_array)
+        >>> cell_ranges = mapper.get_cell_row_ranges([1, 2, 3])
+        >>> expression_data = slaf_array.expression.take(cell_ranges)
+    """
+
+    def __init__(self, slaf_array):
+        """
+        Initialize RowIndexMapper with SLAF array.
+
+        Args:
+            slaf_array: SLAFArray instance containing the dataset
+        """
+        self.slaf_array = slaf_array
+        self._cell_count = slaf_array.shape[0]
+        self._gene_count = slaf_array.shape[1]
+
+    def get_cell_row_ranges(self, cell_integer_ids: list[int]) -> list[int]:
+        """
+        Get row indices for specific cell integer IDs using cumulative sums.
+
+        Args:
+            cell_integer_ids: List of cell integer IDs
+
+        Returns:
+            List of row indices covering all expression records for the cells
+        """
+        start_indices = self.slaf_array._cell_start_index
+
+        # Find original row positions for the requested cell_integer_ids (vectorized)
+        # Create a mapping from cell_integer_id to original row position
+        cell_id_to_position = (
+            self.slaf_array.obs.with_row_index()
+            .select(["cell_integer_id", "index"])
+            .to_dict(as_series=False)
+        )
+
+        # Convert to numpy arrays for fast vectorized operations
+        all_cell_ids = np.array(cell_id_to_position["cell_integer_id"])
+        all_positions = np.array(cell_id_to_position["index"])
+
+        # Find positions for requested cell IDs (vectorized)
+        requested_cell_ids = np.array(cell_integer_ids)
+
+        # Use numpy's searchsorted for O(log n) lookup
+        # First, sort the original data for binary search
+        sort_idx = np.argsort(all_cell_ids)
+        sorted_cell_ids = all_cell_ids[sort_idx]
+        sorted_positions = all_positions[sort_idx]
+
+        # Find positions for requested cell IDs
+        found_positions = []
+        for cell_id in requested_cell_ids:
+            # Binary search for the cell_id
+            idx = np.searchsorted(sorted_cell_ids, cell_id)
+            if idx < len(sorted_cell_ids) and sorted_cell_ids[idx] == cell_id:
+                found_positions.append(sorted_positions[idx])
+            else:
+                raise ValueError(f"Cell integer ID {cell_id} not found in dataset")
+
+        # Convert to numpy array for vectorized operations
+        cell_positions = np.array(found_positions)
+
+        # Get start and end indices for all cells at once (vectorized)
+        start_idx_array = start_indices.gather(pl.Series(cell_positions)).to_numpy()
+        end_idx_array = start_indices.gather(pl.Series(cell_positions + 1)).to_numpy()
+
+        # Calculate row ranges for all cells at once (vectorized)
+        # Use numpy's broadcast operations to create all ranges efficiently
+        if len(start_idx_array) == 0:
+            return []
+
+        # Calculate the length of each range
+        range_lengths = end_idx_array - start_idx_array
+
+        # Create a single array with all the ranges using numpy's broadcast operations
+        total_length = np.sum(range_lengths)
+        if total_length == 0:
+            return []
+
+        # Use list comprehension for maximum efficiency
+        # This is faster than explicit for loops and more Pythonic
+        ranges = [
+            np.arange(start, end)
+            for start, end in zip(start_idx_array, end_idx_array, strict=False)
+        ]
+        result = np.concatenate(ranges) if ranges else np.array([], dtype=np.int64)
+
+        return result.tolist()
+
+    def get_cell_row_ranges_by_selector(self, cell_selector) -> list[int]:
+        """
+        Get row indices for cell selector.
+
+        Args:
+            cell_selector: Cell selector (slice, list, boolean mask, int, or None)
+
+        Returns:
+            List of row indices for the selected cells
+        """
+        if cell_selector is None:
+            # Return all row indices - use the last value of cumulative sum
+            total_genes = self.slaf_array._cell_start_index[-1]
+            return list(range(total_genes))
+
+        # Convert selector to cell integer IDs using vectorized operations
+        if isinstance(cell_selector, int):
+            # Single cell index
+            if cell_selector < 0:
+                cell_selector = self._cell_count + cell_selector
+            if 0 <= cell_selector < self._cell_count:
+                cell_integer_id = self.slaf_array.obs["cell_integer_id"][cell_selector]
+                return self.get_cell_row_ranges([cell_integer_id])
+            else:
+                raise ValueError(f"Cell index {cell_selector} out of bounds")
+
+        elif isinstance(cell_selector, slice):
+            # Slice selector - use vectorized slicing
+            start = cell_selector.start or 0
+            stop = cell_selector.stop or self._cell_count
+            step = cell_selector.step or 1
+
+            # Handle negative indices
+            if start < 0:
+                start = self._cell_count + start
+            if stop < 0:
+                stop = self._cell_count + stop
+
+            # Clamp bounds
+            start = max(0, min(start, self._cell_count))
+            stop = max(0, min(stop, self._cell_count))
+
+            # Get cell integer IDs for the slice (vectorized)
+            cell_integer_ids = self.slaf_array.obs["cell_integer_id"][
+                start:stop:step
+            ].to_list()
+            return self.get_cell_row_ranges(cell_integer_ids)
+
+        elif isinstance(cell_selector, list):
+            # List of indices - handle vectorized with bounds checking
+            if len(cell_selector) == 0:
+                return []
+
+            # Convert negative indices and validate bounds
+            indices_array = np.array(cell_selector)
+
+            # Handle negative indices vectorized
+            negative_mask = indices_array < 0
+            indices_array[negative_mask] += self._cell_count
+
+            # Check bounds
+            if np.any((indices_array < 0) | (indices_array >= self._cell_count)):
+                invalid_indices = indices_array[
+                    (indices_array < 0) | (indices_array >= self._cell_count)
+                ]
+                raise ValueError(
+                    f"Cell indices out of bounds: {invalid_indices.tolist()}"
+                )
+
+            # Get cell integer IDs vectorized
+            cell_integer_ids = (
+                self.slaf_array.obs["cell_integer_id"]
+                .gather(pl.Series(indices_array.tolist()))
+                .to_list()
+            )
+            return self.get_cell_row_ranges(cell_integer_ids)
+
+        elif isinstance(cell_selector, np.ndarray) and cell_selector.dtype == bool:
+            # Boolean mask
+            if len(cell_selector) != self._cell_count:
+                raise ValueError(
+                    f"Boolean mask length {len(cell_selector)} doesn't match cell count {self._cell_count}"
+                )
+
+            # Convert boolean mask to indices and get cell integer IDs
+            indices = np.where(cell_selector)[0]
+            if len(indices) == 0:
+                return []
+
+            cell_integer_ids = (
+                self.slaf_array.obs["cell_integer_id"]
+                .gather(pl.Series(indices.tolist()))
+                .to_list()
+            )
+            return self.get_cell_row_ranges(cell_integer_ids)
+
+        else:
+            raise ValueError(f"Unsupported cell selector type: {type(cell_selector)}")
 
 
 class PerformanceMetrics:
