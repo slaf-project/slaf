@@ -923,7 +923,7 @@ class SLAFArray:
                 if 0 <= gene_selector < self.shape[1]:
                     gene_integer_id = self.var["gene_integer_id"][gene_selector]
                     expression_df = expression_df.filter(
-                        pl.col("gene_integer_id") == gene_integer_id
+                        pl.col("gene_integer_id") == gene_integer_id  # type: ignore[arg-type]
                     )
                 else:
                     raise ValueError(f"Gene index {gene_selector} out of bounds")
@@ -946,7 +946,7 @@ class SLAFArray:
                     start:stop:step
                 ].to_list()
                 expression_df = expression_df.filter(
-                    pl.col("gene_integer_id").is_in(gene_integer_ids)
+                    pl.col("gene_integer_id").is_in(gene_integer_ids)  # type: ignore[arg-type]
                 )
             elif isinstance(gene_selector, list):
                 gene_integer_ids = []
@@ -962,7 +962,7 @@ class SLAFArray:
                     else:
                         raise ValueError(f"Invalid gene index type: {type(idx)}")
                 expression_df = expression_df.filter(
-                    pl.col("gene_integer_id").is_in(gene_integer_ids)
+                    pl.col("gene_integer_id").is_in(gene_integer_ids)  # type: ignore[arg-type]
                 )
             elif isinstance(gene_selector, np.ndarray) and gene_selector.dtype == bool:
                 if len(gene_selector) != self.shape[1]:
@@ -971,7 +971,7 @@ class SLAFArray:
                     )
                 gene_integer_ids = self.var["gene_integer_id"][gene_selector].to_list()
                 expression_df = expression_df.filter(
-                    pl.col("gene_integer_id").is_in(gene_integer_ids)
+                    pl.col("gene_integer_id").is_in(gene_integer_ids)  # type: ignore[arg-type]
                 )
             else:
                 raise ValueError(
@@ -981,16 +981,22 @@ class SLAFArray:
         # Join with metadata using Polars
         return self._join_with_metadata(expression_df)
 
-    def _join_with_metadata(self, expression_data: pl.DataFrame) -> pl.DataFrame:
+    def _join_with_metadata(
+        self, expression_data: pl.DataFrame | pl.Series
+    ) -> pl.DataFrame:
         """
         Join expression data with cell/gene metadata using Polars.
 
         Args:
-            expression_data: Polars DataFrame containing expression data
+            expression_data: Polars DataFrame or Series containing expression data
 
         Returns:
             Polars DataFrame with cell_id, gene_id, and value columns
         """
+        # Convert Series to DataFrame if needed
+        if isinstance(expression_data, pl.Series):
+            expression_data = expression_data.to_frame()
+
         # Join with cell metadata
         result = expression_data.join(
             self.obs.select(["cell_integer_id", "cell_id"]),
