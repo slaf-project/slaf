@@ -318,6 +318,98 @@ class LazySparseMixin:
         else:
             return "TRUE"  # Default to no filtering
 
+    def _normalize_selector(self, selector, axis: int) -> tuple[int, int, int]:
+        """Normalize selector to start, stop, step values for consistent processing"""
+        max_size = self.shape[0] if axis == 0 else self.shape[1]
+
+        if selector is None:
+            return 0, max_size, 1
+
+        if isinstance(selector, slice):
+            start = selector.start or 0
+            stop = selector.stop or max_size
+            step = selector.step or 1
+
+            # Handle negative indices
+            if start < 0:
+                start = max_size + start
+            if stop < 0:
+                stop = max_size + stop
+
+            # Clamp bounds
+            start = max(0, min(start, max_size))
+            stop = max(0, min(stop, max_size))
+
+            return start, stop, step
+
+        elif isinstance(selector, list):
+            if not selector:
+                return 0, 0, 1
+            return min(selector), max(selector) + 1, 1
+
+        elif isinstance(selector, int):
+            if selector < 0:
+                selector = max_size + selector
+            if 0 <= selector < max_size:
+                return selector, selector + 1, 1
+            else:
+                return 0, 0, 1  # Out of bounds
+
+        elif isinstance(selector, np.ndarray) and selector.dtype == bool:
+            if len(selector) != max_size:
+                raise ValueError(
+                    f"Boolean mask length {len(selector)} doesn't match axis {axis} size {max_size}"
+                )
+            true_indices = [int(x) for x in np.where(selector)[0]]
+            if not true_indices:
+                return 0, 0, 1
+            return min(true_indices), max(true_indices) + 1, 1
+
+        else:
+            raise ValueError(f"Unsupported selector type: {type(selector)}")
+
+    def _get_selector_size(self, selector, axis: int) -> int:
+        """Get the size of a selector for result array sizing"""
+        if selector is None:
+            return self.shape[0] if axis == 0 else self.shape[1]
+
+        if isinstance(selector, slice):
+            start, stop, step = self._normalize_selector(selector, axis)
+            return len(range(start, stop, step))
+
+        elif isinstance(selector, list):
+            return len(selector)
+
+        elif isinstance(selector, int):
+            return 1
+
+        elif isinstance(selector, np.ndarray) and selector.dtype == bool:
+            return int(selector.sum())
+
+        else:
+            raise ValueError(f"Unsupported selector type: {type(selector)}")
+
+    def _build_selector_where_clause(
+        self, cell_selector=None, gene_selector=None
+    ) -> str:
+        """Build WHERE clause from cell and gene selectors"""
+        conditions = []
+
+        if cell_selector is not None:
+            cell_condition = self._selector_to_sql_condition(cell_selector, 0, "cell")
+            if cell_condition and cell_condition != "TRUE":
+                conditions.append(cell_condition)
+
+        if gene_selector is not None:
+            gene_condition = self._selector_to_sql_condition(gene_selector, 1, "gene")
+            if gene_condition and gene_condition != "TRUE":
+                conditions.append(gene_condition)
+
+        if not conditions:
+            return ""
+
+        return "WHERE " + " AND ".join(conditions)
+
     def _reconstruct_sparse_matrix(
         self, records: pl.DataFrame, cell_selector, gene_selector
     ) -> scipy.sparse.csr_matrix:
@@ -474,59 +566,13 @@ class LazySparseMixin:
             return {}
 
     def _get_result_shape(self, cell_selector, gene_selector) -> tuple[int, int]:
-        """Calculate the shape of the result matrix"""
+        """Calculate the shape of the result matrix using DRY utilities"""
         if not hasattr(self, "shape"):
             raise AttributeError("Implementing class must provide 'shape' attribute")
 
-        # Calculate number of cells
-        if cell_selector is None or (
-            isinstance(cell_selector, slice) and cell_selector == slice(None)
-        ):
-            n_cells = self.shape[0]
-        elif isinstance(cell_selector, slice):
-            start = cell_selector.start or 0
-            stop = cell_selector.stop or self.shape[0]
-            step = cell_selector.step or 1
-
-            # Clamp bounds to actual data size
-            start = max(0, min(start, self.shape[0]))
-            stop = max(0, min(stop, self.shape[0]))
-
-            n_cells = len(range(start, stop, step))
-        elif isinstance(cell_selector, list | np.ndarray):
-            if isinstance(cell_selector, np.ndarray) and cell_selector.dtype == bool:
-                n_cells = np.sum(cell_selector)
-            else:
-                n_cells = len(cell_selector)
-        elif isinstance(cell_selector, int | np.integer):
-            n_cells = 1
-        else:
-            n_cells = self.shape[0]
-
-        # Calculate number of genes
-        if gene_selector is None or (
-            isinstance(gene_selector, slice) and gene_selector == slice(None)
-        ):
-            n_genes = self.shape[1]
-        elif isinstance(gene_selector, slice):
-            start = gene_selector.start or 0
-            stop = gene_selector.stop or self.shape[1]
-            step = gene_selector.step or 1
-
-            # Clamp bounds to actual data size
-            start = max(0, min(start, self.shape[1]))
-            stop = max(0, min(stop, self.shape[1]))
-
-            n_genes = len(range(start, stop, step))
-        elif isinstance(gene_selector, list | np.ndarray):
-            if isinstance(gene_selector, np.ndarray) and gene_selector.dtype == bool:
-                n_genes = np.sum(gene_selector)
-            else:
-                n_genes = len(gene_selector)
-        elif isinstance(gene_selector, int | np.integer):
-            n_genes = 1
-        else:
-            n_genes = self.shape[1]
+        # Use utility functions to calculate dimensions
+        n_cells = self._get_selector_size(cell_selector, 0)
+        n_genes = self._get_selector_size(gene_selector, 1)
 
         return (n_cells, n_genes)
 
@@ -560,54 +606,12 @@ class LazySparseMixin:
     def _sql_mean_aggregation(
         self, axis: int | None = None, cell_selector=None, gene_selector=None
     ) -> np.ndarray:
-        """Optimized mean aggregation with vectorized operations"""
+        """Optimized mean aggregation with vectorized operations using DRY utilities"""
         if axis == 0:  # Gene-wise aggregation (across cells)
-            # Build WHERE clause for selectors
-            where_conditions = []
-            if cell_selector is not None:
-                if isinstance(cell_selector, slice):
-                    start = cell_selector.start or 0
-                    stop = cell_selector.stop or self.shape[0]
-                    step = cell_selector.step or 1
-                    # Handle negative indices
-                    if start < 0:
-                        start = self.shape[0] + start
-                    if stop < 0:
-                        stop = self.shape[0] + stop
-                    # Clamp bounds
-                    start = max(0, min(start, self.shape[0]))
-                    stop = max(0, min(stop, self.shape[0]))
-                    where_conditions.append(
-                        f"cell_integer_id >= {start} AND cell_integer_id < {stop}"
-                    )
-                elif isinstance(cell_selector, list):
-                    cell_ids_str = ",".join(map(str, cell_selector))
-                    where_conditions.append(f"cell_integer_id IN ({cell_ids_str})")
-
-            if gene_selector is not None:
-                if isinstance(gene_selector, slice):
-                    start = gene_selector.start or 0
-                    stop = gene_selector.stop or self.shape[1]
-                    step = gene_selector.step or 1
-                    # Handle negative indices
-                    if start < 0:
-                        start = self.shape[1] + start
-                    if stop < 0:
-                        stop = self.shape[1] + stop
-                    # Clamp bounds
-                    start = max(0, min(start, self.shape[1]))
-                    stop = max(0, min(stop, self.shape[1]))
-                    where_conditions.append(
-                        f"gene_integer_id >= {start} AND gene_integer_id < {stop}"
-                    )
-                elif isinstance(gene_selector, list):
-                    gene_ids_str = ",".join(map(str, gene_selector))
-                    where_conditions.append(f"gene_integer_id IN ({gene_ids_str})")
-
-            # Build SQL query with WHERE clause
-            where_clause = ""
-            if where_conditions:
-                where_clause = "WHERE " + " AND ".join(where_conditions)
+            # Use utility function to build WHERE clause
+            where_clause = self._build_selector_where_clause(
+                cell_selector, gene_selector
+            )
 
             sql = f"""
             SELECT
@@ -620,52 +624,22 @@ class LazySparseMixin:
             """
             result_df = self.slaf_array.query(sql)
 
-            # Determine the result size based on gene selector (not cell selector for axis=0)
-            if gene_selector is not None:
-                if isinstance(gene_selector, slice):
-                    start = gene_selector.start or 0
-                    stop = gene_selector.stop or self.shape[1]
-                    step = gene_selector.step or 1
-                    # Handle negative indices
-                    if start < 0:
-                        start = self.shape[1] + start
-                    if stop < 0:
-                        stop = self.shape[1] + stop
-                    # Clamp bounds
-                    start = max(0, min(start, self.shape[1]))
-                    stop = max(0, min(stop, self.shape[1]))
-                    result_size = len(range(start, stop, step))
-                elif isinstance(gene_selector, list):
-                    result_size = len(gene_selector)
-                else:
-                    result_size = self.shape[1]
-            else:
-                result_size = self.shape[1]
+            # Use utility function to determine result size
+            result_size = (
+                self._get_selector_size(gene_selector, 1)
+                if gene_selector is not None
+                else self.shape[1]
+            )
 
             # Vectorized result construction
             full_result = np.zeros(result_size)
 
-            # Determine total cells for normalization (for gene-wise aggregation)
-            if cell_selector is not None:
-                if isinstance(cell_selector, slice):
-                    start = cell_selector.start or 0
-                    stop = cell_selector.stop or self.shape[0]
-                    step = cell_selector.step or 1
-                    # Handle negative indices
-                    if start < 0:
-                        start = self.shape[0] + start
-                    if stop < 0:
-                        stop = self.shape[0] + stop
-                    # Clamp bounds
-                    start = max(0, min(start, self.shape[0]))
-                    stop = max(0, min(stop, self.shape[0]))
-                    total_cells = len(range(start, stop, step))
-                elif isinstance(cell_selector, list):
-                    total_cells = len(cell_selector)
-                else:
-                    total_cells = self.shape[0]
-            else:
-                total_cells = self.shape[0]
+            # Use utility function to determine total cells for normalization
+            total_cells = (
+                self._get_selector_size(cell_selector, 0)
+                if cell_selector is not None
+                else self.shape[0]
+            )
 
             if len(result_df) > 0:
                 # Use vectorized operations instead of loops
@@ -711,52 +685,10 @@ class LazySparseMixin:
             return full_result.reshape(1, -1)  # Return (1, n_genes) for axis=0
 
         elif axis == 1:  # Cell-wise aggregation (across genes)
-            # Build WHERE clause for selectors
-            where_conditions = []
-            if cell_selector is not None:
-                if isinstance(cell_selector, slice):
-                    start = cell_selector.start or 0
-                    stop = cell_selector.stop or self.shape[0]
-                    step = cell_selector.step or 1
-                    # Handle negative indices
-                    if start < 0:
-                        start = self.shape[0] + start
-                    if stop < 0:
-                        stop = self.shape[0] + stop
-                    # Clamp bounds
-                    start = max(0, min(start, self.shape[0]))
-                    stop = max(0, min(stop, self.shape[0]))
-                    where_conditions.append(
-                        f"cell_integer_id >= {start} AND cell_integer_id < {stop}"
-                    )
-                elif isinstance(cell_selector, list):
-                    cell_ids_str = ",".join(map(str, cell_selector))
-                    where_conditions.append(f"cell_integer_id IN ({cell_ids_str})")
-
-            if gene_selector is not None:
-                if isinstance(gene_selector, slice):
-                    start = gene_selector.start or 0
-                    stop = gene_selector.stop or self.shape[1]
-                    step = gene_selector.step or 1
-                    # Handle negative indices
-                    if start < 0:
-                        start = self.shape[1] + start
-                    if stop < 0:
-                        stop = self.shape[1] + stop
-                    # Clamp bounds
-                    start = max(0, min(start, self.shape[1]))
-                    stop = max(0, min(stop, self.shape[1]))
-                    where_conditions.append(
-                        f"gene_integer_id >= {start} AND gene_integer_id < {stop}"
-                    )
-                elif isinstance(gene_selector, list):
-                    gene_ids_str = ",".join(map(str, gene_selector))
-                    where_conditions.append(f"gene_integer_id IN ({gene_ids_str})")
-
-            # Build SQL query with WHERE clause
-            where_clause = ""
-            if where_conditions:
-                where_clause = "WHERE " + " AND ".join(where_conditions)
+            # Use utility function to build WHERE clause
+            where_clause = self._build_selector_where_clause(
+                cell_selector, gene_selector
+            )
 
             sql = f"""
             SELECT
@@ -769,52 +701,22 @@ class LazySparseMixin:
             """
             result_df = self.slaf_array.query(sql)
 
-            # Determine the result size based on cell selector (not gene selector for axis=1)
-            if cell_selector is not None:
-                if isinstance(cell_selector, slice):
-                    start = cell_selector.start or 0
-                    stop = cell_selector.stop or self.shape[0]
-                    step = cell_selector.step or 1
-                    # Handle negative indices
-                    if start < 0:
-                        start = self.shape[0] + start
-                    if stop < 0:
-                        stop = self.shape[0] + stop
-                    # Clamp bounds
-                    start = max(0, min(start, self.shape[0]))
-                    stop = max(0, min(stop, self.shape[0]))
-                    result_size = len(range(start, stop, step))
-                elif isinstance(cell_selector, list):
-                    result_size = len(cell_selector)
-                else:
-                    result_size = self.shape[0]
-            else:
-                result_size = self.shape[0]
+            # Use utility function to determine result size
+            result_size = (
+                self._get_selector_size(cell_selector, 0)
+                if cell_selector is not None
+                else self.shape[0]
+            )
 
             # Vectorized result construction
             full_result = np.zeros(result_size)
 
-            # Determine total genes for normalization (for cell-wise aggregation)
-            if gene_selector is not None:
-                if isinstance(gene_selector, slice):
-                    start = gene_selector.start or 0
-                    stop = gene_selector.stop or self.shape[1]
-                    step = gene_selector.step or 1
-                    # Handle negative indices
-                    if start < 0:
-                        start = self.shape[1] + start
-                    if stop < 0:
-                        stop = self.shape[1] + stop
-                    # Clamp bounds
-                    start = max(0, min(start, self.shape[1]))
-                    stop = max(0, min(stop, self.shape[1]))
-                    total_genes = len(range(start, stop, step))
-                elif isinstance(gene_selector, list):
-                    total_genes = len(gene_selector)
-                else:
-                    total_genes = self.shape[1]
-            else:
-                total_genes = self.shape[1]
+            # Use utility function to determine total genes for normalization
+            total_genes = (
+                self._get_selector_size(gene_selector, 1)
+                if gene_selector is not None
+                else self.shape[1]
+            )
 
             if len(result_df) > 0:
                 # Use vectorized operations instead of loops
@@ -1064,58 +966,16 @@ class LazySparseMixin:
     def _sql_other_aggregation(
         self, operation: str, axis: int | None = None
     ) -> np.ndarray:
-        """Optimized non-mean aggregation operations with vectorized operations"""
+        """Optimized non-mean aggregation operations with vectorized operations using DRY utilities"""
         # Get selectors from the current state
         cell_selector = getattr(self, "_cell_selector", None)
         gene_selector = getattr(self, "_gene_selector", None)
 
         if axis == 0:  # Gene-wise aggregation (across cells)
-            # Build WHERE clause for selectors
-            where_conditions = []
-            if cell_selector is not None:
-                if isinstance(cell_selector, slice):
-                    start = cell_selector.start or 0
-                    stop = cell_selector.stop or self.shape[0]
-                    step = cell_selector.step or 1
-                    # Handle negative indices
-                    if start < 0:
-                        start = self.shape[0] + start
-                    if stop < 0:
-                        stop = self.shape[0] + stop
-                    # Clamp bounds
-                    start = max(0, min(start, self.shape[0]))
-                    stop = max(0, min(stop, self.shape[0]))
-                    where_conditions.append(
-                        f"cell_integer_id >= {start} AND cell_integer_id < {stop}"
-                    )
-                elif isinstance(cell_selector, list):
-                    cell_ids_str = ",".join(map(str, cell_selector))
-                    where_conditions.append(f"cell_integer_id IN ({cell_ids_str})")
-
-            if gene_selector is not None:
-                if isinstance(gene_selector, slice):
-                    start = gene_selector.start or 0
-                    stop = gene_selector.stop or self.shape[1]
-                    step = gene_selector.step or 1
-                    # Handle negative indices
-                    if start < 0:
-                        start = self.shape[1] + start
-                    if stop < 0:
-                        stop = self.shape[1] + stop
-                    # Clamp bounds
-                    start = max(0, min(start, self.shape[1]))
-                    stop = max(0, min(stop, self.shape[1]))
-                    where_conditions.append(
-                        f"gene_integer_id >= {start} AND gene_integer_id < {stop}"
-                    )
-                elif isinstance(gene_selector, list):
-                    gene_ids_str = ",".join(map(str, gene_selector))
-                    where_conditions.append(f"gene_integer_id IN ({gene_ids_str})")
-
-            # Build SQL query with WHERE clause
-            where_clause = ""
-            if where_conditions:
-                where_clause = "WHERE " + " AND ".join(where_conditions)
+            # Use utility function to build WHERE clause
+            where_clause = self._build_selector_where_clause(
+                cell_selector, gene_selector
+            )
 
             sql = f"""
             SELECT
@@ -1128,27 +988,12 @@ class LazySparseMixin:
             """
             result_df = self.slaf_array.query(sql)
 
-            # Determine the result size based on selectors
-            if gene_selector is not None:
-                if isinstance(gene_selector, slice):
-                    start = gene_selector.start or 0
-                    stop = gene_selector.stop or self.shape[1]
-                    step = gene_selector.step or 1
-                    # Handle negative indices
-                    if start < 0:
-                        start = self.shape[1] + start
-                    if stop < 0:
-                        stop = self.shape[1] + stop
-                    # Clamp bounds
-                    start = max(0, min(start, self.shape[1]))
-                    stop = max(0, min(stop, self.shape[1]))
-                    result_size = len(range(start, stop, step))
-                elif isinstance(gene_selector, list):
-                    result_size = len(gene_selector)
-                else:
-                    result_size = self.shape[1]
-            else:
-                result_size = self.shape[1]
+            # Use utility function to determine result size
+            result_size = (
+                self._get_selector_size(gene_selector, 1)
+                if gene_selector is not None
+                else self.shape[1]
+            )
 
             # Vectorized result construction
             full_result = np.zeros(result_size)
@@ -1161,17 +1006,7 @@ class LazySparseMixin:
                 # Map gene indices to positions in result array
                 if gene_selector is not None:
                     if isinstance(gene_selector, slice):
-                        start = gene_selector.start or 0
-                        stop = gene_selector.stop or self.shape[1]
-                        step = gene_selector.step or 1
-                        # Handle negative indices
-                        if start < 0:
-                            start = self.shape[1] + start
-                        if stop < 0:
-                            stop = self.shape[1] + stop
-                        # Clamp bounds
-                        start = max(0, min(start, self.shape[1]))
-                        stop = max(0, min(stop, self.shape[1]))
+                        start, stop, step = self._normalize_selector(gene_selector, 1)
                         gene_to_pos = {
                             gene_id: i
                             for i, gene_id in enumerate(range(start, stop, step))
@@ -1193,52 +1028,10 @@ class LazySparseMixin:
             return full_result.reshape(1, -1)  # Return (1, n_genes) for axis=0
 
         elif axis == 1:  # Cell-wise aggregation (across genes)
-            # Build WHERE clause for selectors
-            where_conditions = []
-            if cell_selector is not None:
-                if isinstance(cell_selector, slice):
-                    start = cell_selector.start or 0
-                    stop = cell_selector.stop or self.shape[0]
-                    step = cell_selector.step or 1
-                    # Handle negative indices
-                    if start < 0:
-                        start = self.shape[0] + start
-                    if stop < 0:
-                        stop = self.shape[0] + stop
-                    # Clamp bounds
-                    start = max(0, min(start, self.shape[0]))
-                    stop = max(0, min(stop, self.shape[0]))
-                    where_conditions.append(
-                        f"cell_integer_id >= {start} AND cell_integer_id < {stop}"
-                    )
-                elif isinstance(cell_selector, list):
-                    cell_ids_str = ",".join(map(str, cell_selector))
-                    where_conditions.append(f"cell_integer_id IN ({cell_ids_str})")
-
-            if gene_selector is not None:
-                if isinstance(gene_selector, slice):
-                    start = gene_selector.start or 0
-                    stop = gene_selector.stop or self.shape[1]
-                    step = gene_selector.step or 1
-                    # Handle negative indices
-                    if start < 0:
-                        start = self.shape[1] + start
-                    if stop < 0:
-                        stop = self.shape[1] + stop
-                    # Clamp bounds
-                    start = max(0, min(start, self.shape[1]))
-                    stop = max(0, min(stop, self.shape[1]))
-                    where_conditions.append(
-                        f"gene_integer_id >= {start} AND gene_integer_id < {stop}"
-                    )
-                elif isinstance(gene_selector, list):
-                    gene_ids_str = ",".join(map(str, gene_selector))
-                    where_conditions.append(f"gene_integer_id IN ({gene_ids_str})")
-
-            # Build SQL query with WHERE clause
-            where_clause = ""
-            if where_conditions:
-                where_clause = "WHERE " + " AND ".join(where_conditions)
+            # Use utility function to build WHERE clause
+            where_clause = self._build_selector_where_clause(
+                cell_selector, gene_selector
+            )
 
             sql = f"""
             SELECT
@@ -1251,27 +1044,12 @@ class LazySparseMixin:
             """
             result_df = self.slaf_array.query(sql)
 
-            # Determine the result size based on cell selector (not gene selector for axis=1)
-            if cell_selector is not None:
-                if isinstance(cell_selector, slice):
-                    start = cell_selector.start or 0
-                    stop = cell_selector.stop or self.shape[0]
-                    step = cell_selector.step or 1
-                    # Handle negative indices
-                    if start < 0:
-                        start = self.shape[0] + start
-                    if stop < 0:
-                        stop = self.shape[0] + stop
-                    # Clamp bounds
-                    start = max(0, min(start, self.shape[0]))
-                    stop = max(0, min(stop, self.shape[0]))
-                    result_size = len(range(start, stop, step))
-                elif isinstance(cell_selector, list):
-                    result_size = len(cell_selector)
-                else:
-                    result_size = self.shape[0]
-            else:
-                result_size = self.shape[0]
+            # Use utility function to determine result size
+            result_size = (
+                self._get_selector_size(cell_selector, 0)
+                if cell_selector is not None
+                else self.shape[0]
+            )
 
             # Vectorized result construction
             full_result = np.zeros(result_size)
@@ -1284,17 +1062,7 @@ class LazySparseMixin:
                 # Map cell indices to positions in result array
                 if cell_selector is not None:
                     if isinstance(cell_selector, slice):
-                        start = cell_selector.start or 0
-                        stop = cell_selector.stop or self.shape[0]
-                        step = cell_selector.step or 1
-                        # Handle negative indices
-                        if start < 0:
-                            start = self.shape[0] + start
-                        if stop < 0:
-                            stop = self.shape[0] + stop
-                        # Clamp bounds
-                        start = max(0, min(start, self.shape[0]))
-                        stop = max(0, min(stop, self.shape[0]))
+                        start, stop, step = self._normalize_selector(cell_selector, 0)
                         cell_to_pos = {
                             cell_id: i
                             for i, cell_id in enumerate(range(start, stop, step))
