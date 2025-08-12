@@ -26,6 +26,8 @@ dependencies = [
     "rich>=14.0.0", # Rich console output
     "tqdm>=4.67.0", # Progress bars
     "build>=1.2.2.post1",
+    "lancedb>=0.24.2",
+    "vortex-data>=0.33.2",
 ]
 
 [project.optional-dependencies]

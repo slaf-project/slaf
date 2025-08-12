@@ -77,7 +77,7 @@ class TestSLAFArray:
         # Check initial state
         assert hasattr(small_slaf, "_metadata_loaded")
         assert hasattr(small_slaf, "_metadata_loading")
-        assert hasattr(small_slaf, "_metadata_loading_thread")
+        assert hasattr(small_slaf, "_metadata_thread")
 
         # Check metadata status methods exist
         assert hasattr(small_slaf, "is_metadata_ready")
@@ -182,11 +182,9 @@ class TestSLAFArray:
 
     def test_metadata_loading_optimization(self, small_slaf):
         """Test that metadata loading uses optimized paths"""
-        # Check that optimized paths are set
-        assert hasattr(small_slaf, "_cells_path")
-        assert hasattr(small_slaf, "_genes_path")
-        assert isinstance(small_slaf._cells_path, str)
-        assert isinstance(small_slaf._genes_path, str)
+        # Trigger metadata loading first
+        _ = small_slaf.obs.columns
+        _ = small_slaf.var.columns
 
         # Check that column caches are available
         assert hasattr(small_slaf, "_obs_columns")

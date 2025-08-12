@@ -50,17 +50,17 @@ SLAF provides **efficient metadata-only queries** that avoid loading expression 
 # Load entire dataset into memory - including expression matrix
 adata = sc.read_h5ad("data.h5ad", backed="r")  # 7.8 MB for PBMC3K (metadata + expression)
 
-# Filter cells using pandas boolean indexing on metadata
-filtered_cells = adata.obs[adata.obs.n_genes_by_counts >= 500]
+# Filter cells using polars boolean indexing on metadata
+filtered_cells = adata.obs.filter(pl.col("n_genes_by_counts") >= 500)
 
 # Complex filtering with multiple conditions
-high_quality = adata.obs[
-    (adata.obs.n_genes_by_counts >= 1000) &
-    (adata.obs.pct_counts_mt <= 10)
-]
+high_quality = adata.obs.filter(
+    (pl.col("n_genes_by_counts") >= 1000) &
+    (pl.col("pct_counts_mt") <= 10)
+)
 
 # Cluster-based filtering
-cluster_cells = adata.obs[adata.obs.leiden.isin(["0", "1", "2"])]
+cluster_cells = adata.obs.filter(pl.col("leiden").is_in(["0", "1", "2"]))
 ```
 
 ### SLAF Approach (Metadata-Only Loading)

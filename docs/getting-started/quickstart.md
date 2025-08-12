@@ -34,7 +34,7 @@ This creates a realistic single-cell dataset from scratch:
 
 ```python
 import numpy as np
-import pandas as pd
+import polars as pl
 import scanpy as sc
 from scipy.sparse import csr_matrix
 from slaf.data.converter import SLAFConverter
@@ -58,21 +58,23 @@ col_indices = np.random.randint(0, n_genes, n_nonzero)
 X = csr_matrix((data, (row_indices, col_indices)), shape=(n_cells, n_genes))
 
 # Create cell metadata
-obs = pd.DataFrame({
+obs = pl.DataFrame({
+    "cell_id": [f"cell_{i:04d}" for i in range(n_cells)],
     "cell_type": np.random.choice(["T_cell", "B_cell", "NK_cell", "Monocyte"], n_cells),
     "batch": np.random.choice(["batch1", "batch2", "batch3"], n_cells),
     "total_counts": X.sum(axis=1).A1,
     "n_genes_by_counts": (X > 0).sum(axis=1).A1,
     "high_mito": np.random.choice([True, False], n_cells, p=[0.1, 0.9]),
-}, index=pd.Index([f"cell_{i:04d}" for i in range(n_cells)]))
+})
 
 # Create gene metadata
-var = pd.DataFrame({
+var = pl.DataFrame({
+    "gene_id": [f"ENSG_{i:08d}" for i in range(n_genes)],
     "gene_symbol": [f"GENE_{i:06d}" for i in range(n_genes)],
     "highly_variable": np.random.choice([True, False], n_genes, p=[0.2, 0.8]),
     "total_counts": X.sum(axis=0).A1,
     "n_cells_by_counts": (X > 0).sum(axis=0).A1,
-}, index=pd.Index([f"ENSG_{i:08d}" for i in range(n_genes)]))
+})
 
 # Create AnnData object
 adata = sc.AnnData(X=X, obs=obs, var=var)
