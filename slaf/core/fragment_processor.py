@@ -56,61 +56,6 @@ class FragmentProcessor:
 
         logger.debug(f"Initialized FragmentProcessor with {self.n_fragments} fragments")
 
-    def _get_cache_key(self, operation: str, **kwargs) -> str:
-        """
-        Generate a cache key for the operation and parameters.
-
-        Args:
-            operation: Operation name
-            **kwargs: Operation parameters
-
-        Returns:
-            Cache key string
-        """
-        # Create a deterministic cache key
-        key_parts = [
-            operation,
-            str(self.cell_selector),
-            str(self.gene_selector),
-        ]
-
-        # Add sorted kwargs for deterministic ordering
-        if kwargs:
-            sorted_kwargs = sorted(kwargs.items())
-            key_parts.extend([f"{k}={v}" for k, v in sorted_kwargs])
-
-        return "|".join(key_parts)
-
-    def _get_cached_result(self, cache_key: str) -> pl.LazyFrame | None:
-        """
-        Get cached result if available.
-
-        Args:
-            cache_key: Cache key
-
-        Returns:
-            Cached LazyFrame or None if not found
-        """
-        if not self.enable_caching:
-            return None
-
-        with self._cache_lock:
-            return self._cache.get(cache_key)
-
-    def _cache_result(self, cache_key: str, result: pl.LazyFrame) -> None:
-        """
-        Cache a result.
-
-        Args:
-            cache_key: Cache key
-            result: Result to cache
-        """
-        if not self.enable_caching:
-            return
-
-        with self._cache_lock:
-            self._cache[cache_key] = result
-
     def clear_cache(self) -> None:
         """Clear the operation cache."""
         with self._cache_lock:
@@ -129,12 +74,26 @@ class FragmentProcessor:
         Returns:
             LazyFrame representing the computation graph
         """
-        # Check cache first
-        cache_key = self._get_cache_key(operation, **kwargs)
-        cached_result = self._get_cached_result(cache_key)
-        if cached_result is not None:
-            logger.debug(f"Using cached result for operation: {operation}")
-            return cached_result
+        # Check cache first (inlined cache logic)
+        if self.enable_caching:
+            # Create a deterministic cache key
+            key_parts = [
+                operation,
+                str(self.cell_selector),
+                str(self.gene_selector),
+            ]
+            # Add sorted kwargs for deterministic ordering
+            if kwargs:
+                sorted_kwargs = sorted(kwargs.items())
+                key_parts.extend([f"{k}={v}" for k, v in sorted_kwargs])
+            cache_key = "|".join(key_parts)
+
+            # Get cached result
+            with self._cache_lock:
+                cached_result = self._cache.get(cache_key)
+            if cached_result is not None:
+                logger.debug(f"Using cached result for operation: {operation}")
+                return cached_result
 
         # Special handling for normalize_total - need global cell totals first
         if operation == "normalize_total":
@@ -164,8 +123,10 @@ class FragmentProcessor:
             else:
                 result = pl.concat(lazy_fragments, how="vertical")
 
-        # Cache the result
-        self._cache_result(cache_key, result)
+        # Cache the result (inlined cache logic)
+        if self.enable_caching:
+            with self._cache_lock:
+                self._cache[cache_key] = result
         return result
 
     def build_lazy_pipeline_parallel(self, operation: str, **kwargs) -> pl.LazyFrame:
@@ -229,12 +190,26 @@ class FragmentProcessor:
         Returns:
             LazyFrame representing the computation graph
         """
-        # Check cache first
-        cache_key = self._get_cache_key(operation, **kwargs)
-        cached_result = self._get_cached_result(cache_key)
-        if cached_result is not None:
-            logger.debug(f"Using cached result for operation: {operation}")
-            return cached_result
+        # Check cache first (inlined cache logic)
+        if self.enable_caching:
+            # Create a deterministic cache key
+            key_parts = [
+                operation,
+                str(self.cell_selector),
+                str(self.gene_selector),
+            ]
+            # Add sorted kwargs for deterministic ordering
+            if kwargs:
+                sorted_kwargs = sorted(kwargs.items())
+                key_parts.extend([f"{k}={v}" for k, v in sorted_kwargs])
+            cache_key = "|".join(key_parts)
+
+            # Get cached result
+            with self._cache_lock:
+                cached_result = self._cache.get(cache_key)
+            if cached_result is not None:
+                logger.debug(f"Using cached result for operation: {operation}")
+                return cached_result
 
         # Determine optimal strategy
         use_parallel = self._should_use_parallel(operation, **kwargs)
@@ -246,8 +221,10 @@ class FragmentProcessor:
             logger.debug(f"Using sequential processing for operation: {operation}")
             result = self.build_lazy_pipeline(operation, **kwargs)
 
-        # Cache the result
-        self._cache_result(cache_key, result)
+        # Cache the result (inlined cache logic)
+        if self.enable_caching:
+            with self._cache_lock:
+                self._cache[cache_key] = result
         return result
 
     def _should_use_parallel(self, operation: str, **kwargs) -> bool:
@@ -283,40 +260,6 @@ class FragmentProcessor:
 
         # Use sequential for simple operations or small datasets
         return False
-
-    def _can_terminate_early(self, operation: str) -> bool:
-        """
-        Check if an operation can benefit from early termination.
-
-        Args:
-            operation: Operation type
-
-        Returns:
-            True if early termination is beneficial
-        """
-        # Operations that can be computed incrementally
-        return operation in ["mean", "sum", "variance", "highly_variable_genes"]
-
-    def _optimize_batch_size(self, operation: str) -> int:
-        """
-        Determine optimal batch size for parallel processing.
-
-        Args:
-            operation: Operation type
-
-        Returns:
-            Optimal batch size
-        """
-        # For expensive operations, use smaller batches
-        if operation == "normalize_total":
-            return max(1, self.n_fragments // (self.max_workers * 2))
-
-        # For simple operations, use larger batches
-        if operation in ["log1p", "compute_matrix"]:
-            return max(1, self.n_fragments // self.max_workers)
-
-        # Default batch size
-        return max(1, self.n_fragments // self.max_workers)
 
     def _process_single_fragment(
         self, fragment, operation: str, **kwargs

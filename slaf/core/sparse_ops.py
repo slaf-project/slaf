@@ -1547,40 +1547,20 @@ class LazySparseMixin:
 
             return global_results
 
-    def _get_processing_strategy(self, fragments: bool = None) -> bool:
-        """
-        Get processing strategy with automatic selection if not specified.
-
-        Args:
-            fragments: Whether to use fragment processing. If None, automatically selects.
-
-        Returns:
-            True if fragment processing should be used, False otherwise.
-        """
-        if fragments is not None:
-            return fragments
-        else:
-            return self._should_use_fragments()
-
-    def _should_use_fragments(self) -> bool:
-        """
-        Determine if fragment processing should be used.
-
-        Returns:
-            True if fragment processing should be used, False otherwise.
-        """
-        try:
-            fragments_list = self.slaf_array.expression.get_fragments()
-            return len(fragments_list) > 1
-        except Exception:
-            return False
-
     def _aggregation_with_fragments(
         self, operation: str, fragments: bool = None, **kwargs
     ):
         """Unified aggregation interface with automatic strategy selection"""
 
-        use_fragments = self._get_processing_strategy(fragments)
+        # Inline processing strategy logic
+        if fragments is not None:
+            use_fragments = fragments
+        else:
+            try:
+                fragments_list = self.slaf_array.expression.get_fragments()
+                use_fragments = len(fragments_list) > 1
+            except Exception:
+                use_fragments = False
 
         if use_fragments:
             try:

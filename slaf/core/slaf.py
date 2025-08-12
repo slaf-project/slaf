@@ -697,61 +697,6 @@ class SLAFArray:
 
         return result
 
-    def _filter_with_sql(self, table_name: str, **filters: Any) -> pl.DataFrame:
-        """
-        Filter metadata using SQL queries against disk-based tables.
-
-        Args:
-            table_name: Table name ("cells" or "genes")
-            **filters: Filter conditions
-
-        Returns:
-            Filtered polars DataFrame
-        """
-        if not filters:
-            result = self.query(f"SELECT * FROM {table_name}")
-            return result
-
-        # Validate column names first to provide better error messages
-        try:
-            # Get column names from the table
-            columns_result = self.query(f"SELECT * FROM {table_name} LIMIT 0")
-            available_columns = set(columns_result.columns)
-
-            # Check if all filter columns exist
-            for column in filters.keys():
-                if column not in available_columns:
-                    raise ValueError(
-                        f"Column '{column}' not found in {table_name} metadata"
-                    )
-        except Exception:
-            # If we can't validate columns (e.g., table doesn't exist),
-            # let the SQL query fail naturally
-            pass
-
-        # Build filter conditions
-        conditions = []
-        for column, value in filters.items():
-            if isinstance(value, str) and value.startswith((">", "<", ">=", "<=")):
-                # Handle range queries
-                operator = value[:2] if value.startswith((">=", "<=")) else value[0]
-                filter_value = (
-                    value[2:] if value.startswith((">=", "<=")) else value[1:]
-                )
-                conditions.append(f"{column} {operator} {filter_value}")
-            elif isinstance(value, list):
-                # Handle list values
-                value_list = "', '".join(map(str, value))
-                conditions.append(f"{column} IN ('{value_list}')")
-            else:
-                # Handle exact matches
-                conditions.append(f"{column} = '{value}'")
-
-        where_clause = " AND ".join(conditions)
-        sql = f"SELECT * FROM {table_name} WHERE {where_clause}"
-
-        return self.query(sql)
-
     def _normalize_entity_ids(
         self, entity_ids: str | list[str], entity_type: str
     ) -> list[int]:
