@@ -582,10 +582,8 @@ class LazyPreprocessing:
     def normalize_total(
         adata: LazyAnnData,
         target_sum: float | None = 1e4,
-        exclude_highly_expressed: bool = False,
-        max_fraction: float = 0.05,
-        key_added: str | None = None,
         inplace: bool = True,
+        fragments: bool | None = None,
     ) -> LazyAnnData | None:
         """
         Normalize counts per cell to target sum using lazy evaluation.
@@ -597,13 +595,10 @@ class LazyPreprocessing:
         Args:
             adata: LazyAnnData instance containing the single-cell data.
             target_sum: Target sum for normalization. Default is 10,000.
-            exclude_highly_expressed: Whether to exclude highly expressed genes from
-                                     normalization. Currently not implemented in lazy version.
-            max_fraction: Maximum fraction of counts for highly expressed genes.
-                         Used when exclude_highly_expressed=True.
-            key_added: Key for storing normalization factors. Currently not used.
             inplace: Whether to modify the adata object in place. If False, returns
                     a copy with the transformation applied.
+            fragments: Whether to use fragment-based processing. If None, automatically
+                      selects based on dataset characteristics.
 
         Returns:
             LazyAnnData | None: If inplace=False, returns LazyAnnData with transformation.
@@ -641,28 +636,67 @@ class LazyPreprocessing:
         if target_sum <= 0:
             raise ValueError("target_sum must be positive")
 
-        # Get cell totals for normalization using only the expression table
-        cell_totals_sql = """
-        SELECT
-            e.cell_integer_id,
-            SUM(e.value) as total_counts
-        FROM expression e
-        GROUP BY e.cell_integer_id
-        ORDER BY e.cell_integer_id
-        """
+        # Determine processing strategy
+        if fragments is not None:
+            use_fragments = fragments
+        else:
+            # Check if dataset has multiple fragments
+            try:
+                fragments_list = adata.slaf.expression.get_fragments()
+                use_fragments = len(fragments_list) > 1
+            except Exception:
+                use_fragments = False
 
-        cell_totals = adata.slaf.query(cell_totals_sql)
+        if use_fragments:
+            # Use fragment-based processing
+            try:
+                from slaf.core.fragment_processor import FragmentProcessor
+
+                # Get selectors from the LazyAnnData if it's sliced
+                cell_selector = getattr(adata, "_cell_selector", None)
+                gene_selector = getattr(adata, "_gene_selector", None)
+
+                processor = FragmentProcessor(
+                    adata.slaf,
+                    cell_selector=cell_selector,
+                    gene_selector=gene_selector,
+                    max_workers=4,
+                    enable_caching=True,
+                )
+                # Use smart strategy selection for optimal performance
+                lazy_pipeline = processor.build_lazy_pipeline_smart(
+                    "normalize_total", target_sum=target_sum
+                )
+                result_df = processor.compute(lazy_pipeline)
+
+                # Update adata with normalized values
+                return adata._update_with_normalized_data(
+                    result_df, target_sum, inplace
+                )
+
+            except Exception as e:
+                print(
+                    f"Fragment processing failed, falling back to global processing: {e}"
+                )
+                # Fall back to global processing
+                use_fragments = False
+
+        if not use_fragments:
+            # Use global processing (original implementation)
+            # Get cell totals for normalization using only the expression table
+            cell_totals_sql = """
+            SELECT
+                e.cell_integer_id,
+                SUM(e.value) as total_counts
+            FROM expression e
+            GROUP BY e.cell_integer_id
+            ORDER BY e.cell_integer_id
+            """
+
+            cell_totals = adata.slaf.query(cell_totals_sql)
 
         # Work with polars DataFrame internally
         cell_totals_pl = cell_totals
-
-        # Handle exclude_highly_expressed if requested
-        if exclude_highly_expressed:
-            # This would require more complex logic to identify and exclude highly expressed genes
-            # For now, we'll implement the basic version
-            print(
-                "Warning: exclude_highly_expressed=True not yet implemented in lazy version"
-            )
 
         # Create normalization factors using polars
         # Map cell_integer_id to cell names for compatibility with anndata.py
@@ -761,7 +795,9 @@ class LazyPreprocessing:
             return new_adata
 
     @staticmethod
-    def log1p(adata: LazyAnnData, inplace: bool = True) -> LazyAnnData | None:
+    def log1p(
+        adata: LazyAnnData, inplace: bool = True, fragments: bool | None = None
+    ) -> LazyAnnData | None:
         """
         Apply log1p transformation to expression data using lazy evaluation.
 
@@ -797,24 +833,67 @@ class LazyPreprocessing:
             >>> print("log1p" in adata._transformations)
             True
         """
-        if inplace:
-            # Store log1p transformation for lazy application
-            if not hasattr(adata, "_transformations"):
-                adata._transformations = {}
-
-            adata._transformations["log1p"] = {"type": "log1p", "applied": True}
-
-            print("Applied log1p transformation")
-            return None
+        # Determine processing strategy
+        if fragments is not None:
+            use_fragments = fragments
         else:
-            # Create a copy with the transformation (copy-on-write)
-            new_adata = adata.copy()
-            if not hasattr(new_adata, "_transformations"):
-                new_adata._transformations = {}
+            # Check if dataset has multiple fragments
+            try:
+                fragments_list = adata.slaf.expression.get_fragments()
+                use_fragments = len(fragments_list) > 1
+            except Exception:
+                use_fragments = False
 
-            new_adata._transformations["log1p"] = {"type": "log1p", "applied": True}
+        if use_fragments:
+            # Use fragment-based processing
+            try:
+                from slaf.core.fragment_processor import FragmentProcessor
 
-            return new_adata
+                # Get selectors from the LazyAnnData if it's sliced
+                cell_selector = getattr(adata, "_cell_selector", None)
+                gene_selector = getattr(adata, "_gene_selector", None)
+
+                processor = FragmentProcessor(
+                    adata.slaf,
+                    cell_selector=cell_selector,
+                    gene_selector=gene_selector,
+                    max_workers=4,
+                    enable_caching=True,
+                )
+                # Use smart strategy selection for optimal performance
+                lazy_pipeline = processor.build_lazy_pipeline_smart("log1p")
+                result_df = processor.compute(lazy_pipeline)
+
+                # Update adata with log1p values
+                return adata._update_with_log1p_data(result_df, inplace)
+
+            except Exception as e:
+                print(
+                    f"Fragment processing failed, falling back to global processing: {e}"
+                )
+                # Fall back to global processing
+                use_fragments = False
+
+        if not use_fragments:
+            # Use global processing (original implementation)
+            if inplace:
+                # Store log1p transformation for lazy application
+                if not hasattr(adata, "_transformations"):
+                    adata._transformations = {}
+
+                adata._transformations["log1p"] = {"type": "log1p", "applied": True}
+
+                print("Applied log1p transformation")
+                return None
+            else:
+                # Create a copy with the transformation (copy-on-write)
+                new_adata = adata.copy()
+                if not hasattr(new_adata, "_transformations"):
+                    new_adata._transformations = {}
+
+                new_adata._transformations["log1p"] = {"type": "log1p", "applied": True}
+
+                return new_adata
 
     @staticmethod
     def highly_variable_genes(

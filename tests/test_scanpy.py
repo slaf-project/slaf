@@ -608,9 +608,7 @@ class TestLazyPreprocessingCorrectness:
         lazy_adata = LazyAnnData(tiny_slaf)
 
         # Test normalize_total with different parameters
-        pp.normalize_total(
-            lazy_adata, target_sum=1e5, exclude_highly_expressed=True, inplace=True
-        )
+        pp.normalize_total(lazy_adata, target_sum=1e5, inplace=True)
 
         transform = lazy_adata._transformations["normalize_total"]
         assert transform["type"] == "normalize_total"

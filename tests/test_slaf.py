@@ -77,7 +77,7 @@ class TestSLAFArray:
         # Check initial state
         assert hasattr(small_slaf, "_metadata_loaded")
         assert hasattr(small_slaf, "_metadata_loading")
-        assert hasattr(small_slaf, "_metadata_loading_thread")
+        assert hasattr(small_slaf, "_metadata_thread")
 
         # Check metadata status methods exist
         assert hasattr(small_slaf, "is_metadata_ready")
@@ -182,11 +182,9 @@ class TestSLAFArray:
 
     def test_metadata_loading_optimization(self, small_slaf):
         """Test that metadata loading uses optimized paths"""
-        # Check that optimized paths are set
-        assert hasattr(small_slaf, "_cells_path")
-        assert hasattr(small_slaf, "_genes_path")
-        assert isinstance(small_slaf._cells_path, str)
-        assert isinstance(small_slaf._genes_path, str)
+        # Trigger metadata loading first
+        _ = small_slaf.obs.columns
+        _ = small_slaf.var.columns
 
         # Check that column caches are available
         assert hasattr(small_slaf, "_obs_columns")
@@ -366,11 +364,13 @@ class TestSLAFArray:
         assert isinstance(result, pl.DataFrame)
         assert len(result) == 5  # All genes
 
-    @pytest.mark.skip(reason="Not implemented")
     def test_get_cell_expression(self, small_slaf):
         """Test getting expression data for specific cells"""
+        # Wait for metadata to be loaded
+        small_slaf.wait_for_metadata()
+
         # Get expression for first cell
-        cell_id = small_slaf.obs.index[0]
+        cell_id = small_slaf.obs["cell_id"][0]
         result = small_slaf.get_cell_expression(cell_id)
 
         # Check that we got a polars DataFrame
@@ -385,11 +385,13 @@ class TestSLAFArray:
         if len(result) > 0:
             assert all(result["cell_id"] == cell_id)
 
-    @pytest.mark.skip(reason="Not implemented")
     def test_get_gene_expression(self, small_slaf):
         """Test getting expression data for specific genes"""
+        # Wait for metadata to be loaded
+        small_slaf.wait_for_metadata()
+
         # Get expression for first gene
-        gene_id = small_slaf.var.index[0]
+        gene_id = small_slaf.var["gene_id"][0]
         result = small_slaf.get_gene_expression(gene_id)
 
         # Check that we got a polars DataFrame
@@ -403,6 +405,48 @@ class TestSLAFArray:
         # Check that all rows have the expected gene ID
         if len(result) > 0:
             assert all(result["gene_id"] == gene_id)
+
+    def test_get_cell_expression_multiple(self, small_slaf):
+        """Test getting expression data for multiple cells"""
+        # Wait for metadata to be loaded
+        small_slaf.wait_for_metadata()
+
+        # Get expression for first two cells
+        cell_ids = small_slaf.obs["cell_id"][:2].to_list()
+        result = small_slaf.get_cell_expression(cell_ids)
+
+        # Check that we got a polars DataFrame
+        assert isinstance(result, pl.DataFrame)
+
+        # Check that it has the expected columns
+        assert "cell_id" in result.columns
+        assert "gene_id" in result.columns
+        assert "value" in result.columns
+
+        # Check that all rows have the expected cell IDs
+        if len(result) > 0:
+            assert all(cid in cell_ids for cid in result["cell_id"].to_list())
+
+    def test_get_gene_expression_multiple(self, small_slaf):
+        """Test getting expression data for multiple genes"""
+        # Wait for metadata to be loaded
+        small_slaf.wait_for_metadata()
+
+        # Get expression for first two genes
+        gene_ids = small_slaf.var["gene_id"][:2].to_list()
+        result = small_slaf.get_gene_expression(gene_ids)
+
+        # Check that we got a polars DataFrame
+        assert isinstance(result, pl.DataFrame)
+
+        # Check that it has the expected columns
+        assert "cell_id" in result.columns
+        assert "gene_id" in result.columns
+        assert "value" in result.columns
+
+        # Check that all rows have the expected gene IDs
+        if len(result) > 0:
+            assert all(gid in gene_ids for gid in result["gene_id"].to_list())
 
     def test_query_method(self, small_slaf):
         """Test the SQL query method"""
@@ -540,6 +584,73 @@ class TestSLAFArray:
 
         # The result should be a reasonable size (could be 0 if no expression in range)
         assert len(result) >= 0
+
+    def test_row_index_mapper_integration(self, small_slaf):
+        """Test RowIndexMapper integration with SLAFArray."""
+        # Wait for metadata to be loaded
+        small_slaf.wait_for_metadata()
+
+        # Check that row_mapper is initialized
+        assert hasattr(small_slaf, "row_mapper")
+        assert small_slaf.row_mapper is not None
+
+        # Check that cell start index is available
+        assert small_slaf._cell_start_index is not None
+        assert (
+            len(small_slaf._cell_start_index) == small_slaf.shape[0] + 1
+        )  # +1 for prepended 0
+
+        # Test getting row ranges for a single cell
+        row_indices = small_slaf.row_mapper.get_cell_row_ranges_by_selector(0)
+        assert isinstance(row_indices, list)
+        assert len(row_indices) >= 0
+
+        # Test with a slice
+        row_indices = small_slaf.row_mapper.get_cell_row_ranges_by_selector(slice(0, 2))
+        assert isinstance(row_indices, list)
+        assert len(row_indices) >= 0
+
+    def test_get_submatrix_with_different_selectors(self, small_slaf):
+        """Test get_submatrix with various selector types."""
+        # Wait for metadata to be loaded
+        small_slaf.wait_for_metadata()
+
+        # Test with integer selectors
+        result = small_slaf.get_submatrix(cell_selector=0, gene_selector=0)
+        assert isinstance(result, pl.DataFrame)
+
+        # Test with list selectors
+        result = small_slaf.get_submatrix(cell_selector=[0, 1], gene_selector=[0, 1])
+        assert isinstance(result, pl.DataFrame)
+
+        # Test with None selectors (all cells/genes)
+        result = small_slaf.get_submatrix(cell_selector=None, gene_selector=slice(0, 2))
+        assert isinstance(result, pl.DataFrame)
+
+    def test_expression_methods_consistency(self, small_slaf):
+        """Test that expression methods return consistent results."""
+        # Wait for metadata to be loaded
+        small_slaf.wait_for_metadata()
+
+        if len(small_slaf.obs) > 0:
+            # Get cell expression using the new optimized method
+            cell_id = small_slaf.obs["cell_id"][0]
+            cell_result = small_slaf.get_cell_expression(cell_id)
+
+            # Get the same data using submatrix (should be consistent)
+            submatrix_result = small_slaf.get_submatrix(
+                cell_selector=0, gene_selector=None
+            )
+
+            # Both should be DataFrames with same columns
+            assert isinstance(cell_result, pl.DataFrame)
+            assert isinstance(submatrix_result, pl.DataFrame)
+            assert set(cell_result.columns) == set(submatrix_result.columns)
+
+            # If both have data, cell IDs should match
+            if len(cell_result) > 0 and len(submatrix_result) > 0:
+                assert all(cell_result["cell_id"] == cell_id)
+                assert all(submatrix_result["cell_id"] == cell_id)
 
     def test_info_method_backward_compatibility(self, tmp_path):
         """Test that info method works with both new and old format versions"""

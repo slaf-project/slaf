@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import scipy.sparse
 
 from slaf.core.slaf import SLAFArray
@@ -12,6 +13,12 @@ if TYPE_CHECKING:
     from typing import Any
 
     import scanpy as sc
+
+# Import FragmentProcessor for runtime use
+try:
+    from slaf.core.fragment_processor import FragmentProcessor
+except ImportError:
+    FragmentProcessor = None  # type: ignore
 
 
 class LazyExpressionMatrix(LazySparseMixin):
@@ -606,13 +613,17 @@ class LazyExpressionMatrix(LazySparseMixin):
             matrix = self.compute()
             return func(matrix, *args[1:], **kwargs)
 
-    def mean(self, axis: int | None = None) -> float | np.ndarray:
+    def mean(
+        self, axis: int | None = None, fragments: bool | None = None
+    ) -> float | np.ndarray:
         """Compute mean along axis via SQL aggregation"""
-        return self._sql_aggregation("avg", axis)
+        return self._aggregation_with_fragments("mean", fragments, axis=axis)
 
-    def sum(self, axis: int | None = None) -> float | np.ndarray:
+    def sum(
+        self, axis: int | None = None, fragments: bool | None = None
+    ) -> float | np.ndarray:
         """Compute sum along axis via SQL aggregation"""
-        return self._sql_aggregation("sum", axis)
+        return self._aggregation_with_fragments("sum", fragments, axis=axis)
 
     def var(self, axis: int | None = None) -> float | np.ndarray:
         """Compute variance along axis via SQL aggregation"""
@@ -627,11 +638,45 @@ class LazyExpressionMatrix(LazySparseMixin):
         matrix = self.compute()
         return matrix.toarray()
 
-    def compute(self) -> scipy.sparse.csr_matrix:
+    def compute(self, fragments: bool | None = None) -> scipy.sparse.csr_matrix:
         """
         Explicitly compute the matrix with all transformations applied.
         This is where the actual SQL query and materialization happens.
+
+        Args:
+            fragments: Whether to use fragment processing (None for automatic)
+
+        Returns:
+            Sparse matrix with transformations applied
         """
+        # Determine processing strategy
+        if fragments is not None:
+            use_fragments = fragments
+        else:
+            # Check if dataset has multiple fragments
+            try:
+                fragments_list = self.slaf_array.expression.get_fragments()
+                use_fragments = len(fragments_list) > 1
+            except Exception:
+                use_fragments = False
+
+        if use_fragments:
+            processor = FragmentProcessor(
+                self.slaf_array,
+                cell_selector=self._cell_selector,
+                gene_selector=self._gene_selector,
+                max_workers=4,
+                enable_caching=True,
+            )
+            # Use smart strategy selection for optimal performance
+            lazy_pipeline = processor.build_lazy_pipeline_smart("compute_matrix")
+            result = processor.compute(lazy_pipeline)
+            return self._convert_to_sparse_matrix(result)
+        else:
+            return self._compute_global()
+
+    def _compute_global(self) -> scipy.sparse.csr_matrix:
+        """Compute the matrix globally (original implementation)"""
         # Build the SQL query with transformations
         if self.parent_adata is not None and hasattr(
             self.parent_adata, "_transformations"
@@ -662,10 +707,37 @@ class LazyExpressionMatrix(LazySparseMixin):
         # Apply transformations in numpy if needed
         if transformations:
             return self._apply_numpy_transformations(
-                base_matrix, self._cell_selector, self._gene_selector, transformations
+                base_matrix,
+                self._cell_selector,
+                self._gene_selector,
+                transformations,
             )
 
         return base_matrix
+
+    def _convert_to_sparse_matrix(
+        self, result_df: pl.DataFrame
+    ) -> scipy.sparse.csr_matrix:
+        """
+        Convert fragment processing result to sparse matrix.
+
+        Args:
+            result_df: Polars DataFrame from fragment processing
+
+        Returns:
+            Sparse matrix representation
+        """
+        if len(result_df) == 0:
+            # Return empty matrix with appropriate shape
+            return scipy.sparse.csr_matrix(self.shape)
+
+        # Convert to COO format for efficient sparse matrix construction
+        rows = result_df["cell_integer_id"].to_numpy()
+        cols = result_df["gene_integer_id"].to_numpy()
+        data = result_df["value"].to_numpy()
+
+        # Create sparse matrix
+        return scipy.sparse.coo_matrix((data, (rows, cols)), shape=self.shape).tocsr()
 
 
 class LazyAnnData(LazySparseMixin):
@@ -1172,6 +1244,101 @@ class LazyAnnData(LazySparseMixin):
         adata = sc.AnnData(X=self._X.compute(), obs=self.obs, var=self.var)
 
         return adata
+
+    def _update_with_normalized_data(
+        self, result_df: pl.DataFrame, target_sum: float, inplace: bool
+    ) -> "LazyAnnData | None":
+        """
+        Update AnnData with normalized data from fragment processing.
+
+        Args:
+            result_df: Polars DataFrame with normalized values
+            target_sum: Target sum used for normalization
+            inplace: Whether to modify in place
+
+        Returns:
+            Updated LazyAnnData or None if inplace=True
+        """
+        if inplace:
+            # Store normalization transformation
+            if not hasattr(self, "_transformations"):
+                self._transformations = {}
+
+            self._transformations["normalize_total"] = {
+                "type": "normalize_total",
+                "target_sum": target_sum,
+                "fragment_processed": True,
+                "result_df": result_df,
+            }
+
+            print(
+                f"Applied normalize_total with target_sum={target_sum} (fragment processing)"
+            )
+            return None
+        else:
+            # Create a copy with the transformation
+            new_adata = self.copy()
+            if not hasattr(new_adata, "_transformations"):
+                new_adata._transformations = {}
+
+            new_adata._transformations["normalize_total"] = {
+                "type": "normalize_total",
+                "target_sum": target_sum,
+                "fragment_processed": True,
+                "result_df": result_df,
+            }
+
+            return new_adata
+
+    def _update_with_log1p_data(
+        self, result_df: pl.DataFrame, inplace: bool
+    ) -> "LazyAnnData | None":
+        """
+        Update AnnData with log1p data from fragment processing.
+
+        Args:
+            result_df: Polars DataFrame with log1p values
+            inplace: Whether to modify in place
+
+        Returns:
+            Updated LazyAnnData or None if inplace=True
+        """
+        if inplace:
+            # Store log1p transformation
+            if not hasattr(self, "_transformations"):
+                self._transformations = {}
+
+            self._transformations["log1p"] = {
+                "type": "log1p",
+                "fragment_processed": True,
+                "result_df": result_df,
+            }
+
+            print("Applied log1p transformation (fragment processing)")
+            return None
+        else:
+            # Create a copy with the transformation
+            new_adata = self.copy()
+            if not hasattr(new_adata, "_transformations"):
+                new_adata._transformations = {}
+
+            new_adata._transformations["log1p"] = {
+                "type": "log1p",
+                "fragment_processed": True,
+                "result_df": result_df,
+            }
+
+            return new_adata
+
+    def _get_processing_strategy(self, fragments: bool | None = None) -> bool:
+        """Determine the processing strategy based on fragments and dataset size"""
+        if fragments is not None:
+            return fragments
+        try:
+            fragments_list = self.slaf.expression.get_fragments()
+            return len(fragments_list) > 1
+        except Exception:
+            return False
 
 
 def read_slaf(filename: str, backend: str = "auto") -> LazyAnnData:

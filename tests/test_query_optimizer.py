@@ -1,8 +1,169 @@
 """Tests for SLAF query optimization."""
 
 import numpy as np
+import polars as pl
+import pytest
 
-from slaf.core.query_optimizer import PerformanceMetrics, QueryOptimizer
+from slaf.core.query_optimizer import PerformanceMetrics, QueryOptimizer, RowIndexMapper
+
+
+class TestRowIndexMapper:
+    """Test RowIndexMapper functionality."""
+
+    @pytest.fixture
+    def mock_slaf_array(self):
+        """Create a mock SLAFArray for testing RowIndexMapper."""
+
+        class MockSLAFArray:
+            def __init__(self):
+                self.shape = (5, 3)  # 5 cells, 3 genes
+                # Create mock obs with n_genes column
+                self.obs = pl.DataFrame(
+                    {
+                        "cell_integer_id": [0, 1, 2, 3, 4],
+                        "cell_id": ["cell_0", "cell_1", "cell_2", "cell_3", "cell_4"],
+                        "n_genes": [2, 3, 1, 4, 2],  # Number of genes per cell
+                    }
+                )
+                # Mock cell start index (cumulative sum with prepended 0)
+                cumsum = self.obs["n_genes"].cum_sum()
+                self._cell_start_index = pl.concat([pl.Series([0]), cumsum])
+
+        return MockSLAFArray()
+
+    def test_row_index_mapper_initialization(self, mock_slaf_array):
+        """Test RowIndexMapper initialization."""
+        mapper = RowIndexMapper(mock_slaf_array)
+
+        assert mapper.slaf_array == mock_slaf_array
+        assert mapper._cell_count == 5
+        assert mapper._gene_count == 3
+        # RowIndexMapper references slaf_array._cell_start_index, doesn't have its own
+
+    def test_get_cell_start_index_via_slaf_array(self, mock_slaf_array):
+        """Test accessing cell start indices via slaf_array."""
+        mapper = RowIndexMapper(mock_slaf_array)
+
+        # The start index should be accessible via slaf_array
+        start_indices = mapper.slaf_array._cell_start_index
+
+        # Should be [0, 2, 5, 6, 10, 12] (cumulative sum with prepended 0)
+        expected = [0, 2, 5, 6, 10, 12]
+        assert start_indices.to_list() == expected
+
+    def test_get_cell_row_ranges_single_cell(self, mock_slaf_array):
+        """Test getting row ranges for a single cell."""
+        mapper = RowIndexMapper(mock_slaf_array)
+
+        # Cell 0 should have row indices [0, 1] (2 genes)
+        row_indices = mapper.get_cell_row_ranges([0])
+        assert row_indices == [0, 1]
+
+        # Cell 1 should have row indices [2, 3, 4] (3 genes)
+        row_indices = mapper.get_cell_row_ranges([1])
+        assert row_indices == [2, 3, 4]
+
+        # Cell 2 should have row indices [5] (1 gene)
+        row_indices = mapper.get_cell_row_ranges([2])
+        assert row_indices == [5]
+
+    def test_get_cell_row_ranges_multiple_cells(self, mock_slaf_array):
+        """Test getting row ranges for multiple cells."""
+        mapper = RowIndexMapper(mock_slaf_array)
+
+        # Cells 0 and 2 should combine their ranges
+        row_indices = mapper.get_cell_row_ranges([0, 2])
+        expected = [0, 1] + [5]  # Cell 0: [0,1], Cell 2: [5]
+        assert sorted(row_indices) == sorted(expected)
+
+    def test_get_cell_row_ranges_by_selector_none(self, mock_slaf_array):
+        """Test getting row ranges for None selector (all cells)."""
+        mapper = RowIndexMapper(mock_slaf_array)
+
+        # Should return all row indices (total of 12 based on n_genes sum)
+        row_indices = mapper.get_cell_row_ranges_by_selector(None)
+        assert len(row_indices) == 12  # Sum of n_genes: 2+3+1+4+2=12
+
+    def test_get_cell_row_ranges_by_selector_int(self, mock_slaf_array):
+        """Test getting row ranges for integer selector."""
+        mapper = RowIndexMapper(mock_slaf_array)
+
+        # Cell index 1 should give same result as cell_integer_id 1
+        row_indices = mapper.get_cell_row_ranges_by_selector(1)
+        expected = mapper.get_cell_row_ranges([1])
+        assert row_indices == expected
+
+    def test_get_cell_row_ranges_by_selector_slice(self, mock_slaf_array):
+        """Test getting row ranges for slice selector."""
+        mapper = RowIndexMapper(mock_slaf_array)
+
+        # First 2 cells (indices 0, 1)
+        row_indices = mapper.get_cell_row_ranges_by_selector(slice(0, 2))
+        expected = mapper.get_cell_row_ranges([0, 1])  # cell_integer_ids
+        assert sorted(row_indices) == sorted(expected)
+
+    def test_get_cell_row_ranges_by_selector_list(self, mock_slaf_array):
+        """Test getting row ranges for list selector."""
+        mapper = RowIndexMapper(mock_slaf_array)
+
+        # List of cell indices [0, 2]
+        row_indices = mapper.get_cell_row_ranges_by_selector([0, 2])
+        expected = mapper.get_cell_row_ranges([0, 2])  # cell_integer_ids
+        assert sorted(row_indices) == sorted(expected)
+
+    def test_get_cell_row_ranges_by_selector_empty_list(self, mock_slaf_array):
+        """Test getting row ranges for empty list selector."""
+        mapper = RowIndexMapper(mock_slaf_array)
+
+        # Empty list should return empty result
+        row_indices = mapper.get_cell_row_ranges_by_selector([])
+        assert row_indices == []
+
+    def test_get_cell_row_ranges_by_selector_boolean_mask(self, mock_slaf_array):
+        """Test getting row ranges for boolean mask selector."""
+        mapper = RowIndexMapper(mock_slaf_array)
+
+        # Boolean mask for first 3 cells
+        mask = np.array([True, True, True, False, False])
+        row_indices = mapper.get_cell_row_ranges_by_selector(mask)
+        expected = mapper.get_cell_row_ranges([0, 1, 2])  # cell_integer_ids
+        assert sorted(row_indices) == sorted(expected)
+
+    def test_get_cell_row_ranges_by_selector_negative_index(self, mock_slaf_array):
+        """Test getting row ranges for negative index selector."""
+        mapper = RowIndexMapper(mock_slaf_array)
+
+        # -1 should be the last cell (index 4)
+        row_indices = mapper.get_cell_row_ranges_by_selector(-1)
+        expected = mapper.get_cell_row_ranges([4])  # last cell_integer_id
+        assert row_indices == expected
+
+    def test_get_cell_row_ranges_invalid_cell_id(self, mock_slaf_array):
+        """Test error handling for invalid cell IDs."""
+        mapper = RowIndexMapper(mock_slaf_array)
+
+        # Non-existent cell_integer_id should raise ValueError
+        with pytest.raises(ValueError, match="Cell integer ID .* not found"):
+            mapper.get_cell_row_ranges([999])
+
+    def test_get_cell_row_ranges_by_selector_out_of_bounds(self, mock_slaf_array):
+        """Test error handling for out of bounds selectors."""
+        mapper = RowIndexMapper(mock_slaf_array)
+
+        # Out of bounds index should raise ValueError
+        with pytest.raises(ValueError, match="Cell index .* out of bounds"):
+            mapper.get_cell_row_ranges_by_selector(5)  # Only 5 cells (0-4)
+
+    def test_get_cell_row_ranges_by_selector_invalid_boolean_mask(
+        self, mock_slaf_array
+    ):
+        """Test error handling for invalid boolean mask length."""
+        mapper = RowIndexMapper(mock_slaf_array)
+
+        # Wrong length boolean mask should raise ValueError
+        mask = np.array([True, False])  # Only 2 elements for 5 cells
+        with pytest.raises(ValueError, match="Boolean mask length .* doesn't match"):
+            mapper.get_cell_row_ranges_by_selector(mask)
 
 
 class TestQueryOptimizer:

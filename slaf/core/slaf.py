@@ -5,10 +5,9 @@ from typing import Any
 
 import duckdb
 import lance
+import numpy as np
 import polars as pl
 from loguru import logger
-
-from .query_optimizer import QueryOptimizer
 
 
 def display_ascii_art():
@@ -107,6 +106,10 @@ class SLAFArray:
         """
         self.slaf_path = Path(slaf_path)
 
+        # Validate dataset exists
+        if not self.slaf_path.exists():
+            raise FileNotFoundError(f"SLAF dataset not found: {self.slaf_path}")
+
         # Load configuration
         config_path = self.slaf_path / "config.json"
         if not config_path.exists():
@@ -118,23 +121,21 @@ class SLAFArray:
         # Initialize shape
         self.shape = tuple(self.config["array_shape"])
 
-        # Setup Lance datasets
+        # Setup datasets
         self._setup_datasets()
 
-        # Lazy metadata loading - don't load until first access
+        # Initialize metadata loading
         self._obs = None
         self._var = None
         self._metadata_loaded = False
         self._metadata_loading = False
-        self._metadata_loading_thread = None
+        self._metadata_thread = None
+        self._metadata_error = None
 
-        # Pre-compute metadata paths for faster loading
-        self._cells_path = str(self.slaf_path / self.config["tables"]["cells"])
-        self._genes_path = str(self.slaf_path / self.config["tables"]["genes"])
+        # Initialize row mapper for cell-based queries
+        from slaf.core.query_optimizer import RowIndexMapper
 
-        # Cache for metadata column info (lightweight)
-        self._obs_columns = None
-        self._var_columns = None
+        self.row_mapper = RowIndexMapper(self)
 
         # Start async metadata loading in background
         self._start_async_metadata_loading()
@@ -189,23 +190,23 @@ class SLAFArray:
 
     def _start_async_metadata_loading(self):
         """Start async metadata loading in background thread"""
-        if self._metadata_loading or self._metadata_loaded:
-            return
+        if self._metadata_thread and self._metadata_thread.is_alive():
+            return  # Already loading
 
         self._metadata_loading = True
-        self._metadata_loading_thread = threading.Thread(
+        self._metadata_thread = threading.Thread(
             target=self._load_metadata_async, daemon=True
         )
-        self._metadata_loading_thread.start()
+        self._metadata_thread.start()
 
     def _load_metadata_async(self):
-        """Load metadata asynchronously in background thread"""
+        """Load metadata in background thread"""
         try:
             self._load_metadata()
             self._metadata_loaded = True
         except Exception as e:
-            # Log error but don't crash the background thread
-            logger.warning(f"Async metadata loading failed: {e}")
+            self._metadata_error = e
+            logger.error(f"Error loading metadata: {e}")
         finally:
             self._metadata_loading = False
 
@@ -225,14 +226,11 @@ class SLAFArray:
 
         if self._metadata_loading:
             # Wait for async loading to complete
-            if (
-                self._metadata_loading_thread
-                and self._metadata_loading_thread.is_alive()
-            ):
+            if self._metadata_thread and self._metadata_thread.is_alive():
                 logger.info(
                     "Loading metadata in background... (this may take a few seconds)"
                 )
-                self._metadata_loading_thread.join()
+                self._metadata_thread.join()
 
         if not self._metadata_loaded:
             # Fallback to synchronous loading if async failed
@@ -264,11 +262,11 @@ class SLAFArray:
         if self._metadata_loaded:
             return
 
-        if self._metadata_loading and self._metadata_loading_thread:
+        if self._metadata_loading and self._metadata_thread:
             if timeout:
-                self._metadata_loading_thread.join(timeout=timeout)
+                self._metadata_thread.join(timeout=timeout)
             else:
-                self._metadata_loading_thread.join()
+                self._metadata_thread.join()
 
         if not self._metadata_loaded:
             # Fallback to synchronous loading
@@ -278,29 +276,63 @@ class SLAFArray:
     def _load_metadata(self):
         """Load cell and gene metadata into polars DataFrames for fast operations"""
         # Load cell metadata using optimized Lance operations
-        cells_lance = lance.dataset(self._cells_path)
-
         # Use more efficient loading strategy for large datasets
         # Load in chunks if dataset is very large
         if self.shape[0] > 1000000:  # 1M+ cells
             # Use scan() for large datasets to avoid loading everything at once
-            cells_df = pl.from_arrow(cells_lance.scanner().to_table())
+            cells_df = pl.from_arrow(self.cells.scanner().to_table())
         else:
             # Use direct to_table() for smaller datasets
-            cells_df = pl.from_arrow(cells_lance.to_table())
+            cells_df = pl.from_arrow(self.cells.to_table())
 
         self._obs = cells_df.sort("cell_integer_id")
 
         # Load gene metadata using optimized Lance operations
-        genes_lance = lance.dataset(self._genes_path)
-
         # Genes are typically smaller, so use direct loading
-        genes_df = pl.from_arrow(genes_lance.to_table())
+        genes_df = pl.from_arrow(self.genes.to_table())
         self._var = genes_df.sort("gene_integer_id")
 
         # Cache column information for faster access
         self._obs_columns = list(self._obs.columns)
         self._var_columns = list(self._var.columns)
+
+        # Build cell start indices for efficient row access (zero-copy Polars)
+        if "n_genes" in self._obs.columns:
+            # Use existing n_genes column
+            cumsum = self._obs["n_genes"].cum_sum()
+        else:
+            # Calculate n_genes per cell from expression data
+            logger.info("n_genes column not found, calculating from expression data...")
+
+            # Query expression data to count genes per cell
+            gene_counts_query = """
+            SELECT cell_integer_id, COUNT(*) as n_genes
+            FROM expression
+            GROUP BY cell_integer_id
+            ORDER BY cell_integer_id
+            """
+            gene_counts_df = self.query(gene_counts_query)
+
+            # Convert to polars if needed and join with obs
+            if hasattr(gene_counts_df, "to_pandas"):
+                gene_counts_df = gene_counts_df.to_pandas()
+            gene_counts_pl = pl.from_pandas(gene_counts_df)
+
+            # Join with obs to get n_genes for each cell
+            obs_with_counts = self._obs.join(
+                gene_counts_pl.select(["cell_integer_id", "n_genes"]),
+                on="cell_integer_id",
+                how="left",
+            )
+
+            # Fill missing values with 0 (cells with no expression)
+            obs_with_counts = obs_with_counts.with_columns(
+                pl.col("n_genes").fill_null(0)
+            )
+
+            cumsum = obs_with_counts["n_genes"].cum_sum()
+
+        self._cell_start_index = pl.concat([pl.Series([0]), cumsum])
 
         # Restore dtypes for obs using polars
         obs_dtypes = self.config.get("obs_dtypes", {})
@@ -440,14 +472,21 @@ class SLAFArray:
             >>> print(f"Found {len(result)} expression patterns")
             Found 5 expression patterns
         """
+        # Create a new DuckDB connection for this query to avoid connection issues
+
+        # Create a new connection
+        con = duckdb.connect()
+
         # Reference Lance datasets in local scope so DuckDB can find them
         expression = self.expression  # noqa: F841
         cells = self.cells  # noqa: F841
         genes = self.genes  # noqa: F841
 
-        # Use global duckdb to query Lance datasets directly
-        duckdb.query("SET enable_progress_bar = true;")
-        result = duckdb.query(sql).fetchdf()
+        # Execute the query
+        result = con.execute(sql).fetchdf()
+
+        # Close the connection
+        con.close()
 
         # Convert pandas DataFrame to polars DataFrame
         return pl.from_pandas(result)
@@ -658,61 +697,6 @@ class SLAFArray:
 
         return result
 
-    def _filter_with_sql(self, table_name: str, **filters: Any) -> pl.DataFrame:
-        """
-        Filter metadata using SQL queries against disk-based tables.
-
-        Args:
-            table_name: Table name ("cells" or "genes")
-            **filters: Filter conditions
-
-        Returns:
-            Filtered polars DataFrame
-        """
-        if not filters:
-            result = self.query(f"SELECT * FROM {table_name}")
-            return result
-
-        # Validate column names first to provide better error messages
-        try:
-            # Get column names from the table
-            columns_result = self.query(f"SELECT * FROM {table_name} LIMIT 0")
-            available_columns = set(columns_result.columns)
-
-            # Check if all filter columns exist
-            for column in filters.keys():
-                if column not in available_columns:
-                    raise ValueError(
-                        f"Column '{column}' not found in {table_name} metadata"
-                    )
-        except Exception:
-            # If we can't validate columns (e.g., table doesn't exist),
-            # let the SQL query fail naturally
-            pass
-
-        # Build filter conditions
-        conditions = []
-        for column, value in filters.items():
-            if isinstance(value, str) and value.startswith((">", "<", ">=", "<=")):
-                # Handle range queries
-                operator = value[:2] if value.startswith((">=", "<=")) else value[0]
-                filter_value = (
-                    value[2:] if value.startswith((">=", "<=")) else value[1:]
-                )
-                conditions.append(f"{column} {operator} {filter_value}")
-            elif isinstance(value, list):
-                # Handle list values
-                value_list = "', '".join(map(str, value))
-                conditions.append(f"{column} IN ('{value_list}')")
-            else:
-                # Handle exact matches
-                conditions.append(f"{column} = '{value}'")
-
-        where_clause = " AND ".join(conditions)
-        sql = f"SELECT * FROM {table_name} WHERE {where_clause}"
-
-        return self.query(sql)
-
     def _normalize_entity_ids(
         self, entity_ids: str | list[str], entity_type: str
     ) -> list[int]:
@@ -750,11 +734,11 @@ class SLAFArray:
 
     def get_cell_expression(self, cell_ids: str | list[str]) -> pl.DataFrame:
         """
-        Get expression data for specific cells using optimized query strategies.
+        Get expression data for specific cells using Lance take() and Polars.
 
-        Retrieves expression data for specified cells using optimized SQL queries.
-        The method automatically converts string cell IDs to integer IDs and uses
-        query optimization for efficient data retrieval.
+        Retrieves expression data for specified cells using efficient Lance row access
+        and Polars for in-memory operations. This method provides significant
+        performance improvements over SQL-based queries.
 
         Args:
             cell_ids: Single cell ID (string) or list of cell IDs to retrieve.
@@ -790,37 +774,28 @@ class SLAFArray:
         # Convert to integer IDs
         integer_ids = self._normalize_entity_ids(cell_ids, "cell")
 
-        # Build query that joins with metadata tables to get string IDs
         if not integer_ids:
             return pl.DataFrame({"cell_id": [], "gene_id": [], "value": []})
 
-        # Use optimized query strategy but join with metadata tables
-        base_sql = QueryOptimizer.build_optimized_query(integer_ids, "cell")
+        # Get row indices using RowIndexMapper
+        row_indices = self.row_mapper.get_cell_row_ranges(integer_ids)
 
-        # Wrap the base query to join with metadata tables
-        sql = f"""
-        SELECT
-            c.cell_id,
-            g.gene_id,
-            e.value
-        FROM ({base_sql}) e
-        JOIN cells c ON e.cell_integer_id = c.cell_integer_id
-        JOIN genes g ON e.gene_integer_id = g.gene_integer_id
-        """
+        # Load data with Lance take()
+        expression_data = self.expression.take(row_indices)
 
-        return self.query(sql)
+        # Convert PyArrow Table to Polars DataFrame and join with metadata
+        expression_df = pl.from_arrow(expression_data)
+        return self._join_with_metadata(expression_df)
 
     def get_gene_expression(self, gene_ids: str | list[str]) -> pl.DataFrame:
         """
-        Get expression data for specific genes using optimized query strategies.
+        Get gene expression data for specified genes.
 
-        Retrieves expression data for specified genes using optimized SQL queries.
-        The method automatically converts string gene IDs to integer IDs and uses
-        query optimization for efficient data retrieval.
+        This method uses QueryOptimizer to generate optimal SQL queries based on the
+        gene ID distribution (consecutive ranges use BETWEEN, scattered values use IN).
 
         Args:
-            gene_ids: Single gene ID (string) or list of gene IDs to retrieve.
-                     Can be string identifiers or integer IDs.
+            gene_ids: Gene ID(s) to query. Can be a single gene ID string or list of gene IDs.
 
         Returns:
             Polars DataFrame containing expression data for the specified genes.
@@ -834,53 +809,49 @@ class SLAFArray:
             >>> # Get expression for a single gene
             >>> slaf_array = SLAFArray("path/to/data.slaf")
             >>> expression = slaf_array.get_gene_expression("GENE1")
-            >>> print(f"Expression data shape: {expression.shape}")
-            Expression data shape: (800, 3)
-
-            >>> # Get expression for multiple genes
-            >>> expression = slaf_array.get_gene_expression(["GENE1", "GENE2", "GENE3"])
-            >>> print(f"Expression data shape: {expression.shape}")
-            Expression data shape: (2400, 3)
-
-            >>> # Error handling for invalid gene ID
-            >>> try:
-            ...     expression = slaf_array.get_gene_expression("invalid_gene")
-            ... except ValueError as e:
-            ...     print(f"Error: {e}")
-            Error: gene ID 'invalid_gene' not found
         """
-        # Convert to integer IDs
+
+        # Convert to list if single gene ID
+        if isinstance(gene_ids, str):
+            gene_ids = [gene_ids]
+
+        # Convert string gene IDs to integer IDs
         integer_ids = self._normalize_entity_ids(gene_ids, "gene")
 
-        # Build query that joins with metadata tables to get string IDs
         if not integer_ids:
             return pl.DataFrame({"cell_id": [], "gene_id": [], "value": []})
 
-        # Use optimized query strategy but join with metadata tables
-        base_sql = QueryOptimizer.build_optimized_query(integer_ids, "gene")
+        # Use QueryOptimizer for optimal performance
+        from slaf.core.query_optimizer import QueryOptimizer
 
-        # Wrap the base query to join with metadata tables
-        sql = f"""
-        SELECT
-            c.cell_id,
-            g.gene_id,
-            e.value
-        FROM ({base_sql}) e
-        JOIN cells c ON e.cell_integer_id = c.cell_integer_id
-        JOIN genes g ON e.gene_integer_id = g.gene_integer_id
-        """
+        # Build optimized SQL query using QueryOptimizer
+        sql_query = QueryOptimizer.build_optimized_query(
+            entity_ids=integer_ids,
+            entity_type="gene",
+            use_adaptive_batching=True,
+            max_batch_size=100,
+        )
 
-        return self.query(sql)
+        # Fix the table name for Polars scan (use 'self' instead of 'expression')
+        sql_query = sql_query.replace("expression", "self")
+
+        # Execute the optimized query
+        ldf = pl.scan_pyarrow_dataset(self.expression)
+        expression_df = ldf.sql(sql_query).collect()
+
+        # Join with metadata using Polars
+        return self._join_with_metadata(expression_df)
 
     def get_submatrix(
         self, cell_selector: Any | None = None, gene_selector: Any | None = None
     ) -> pl.DataFrame:
         """
-        Get expression data using cell/gene selectors that work with obs/var DataFrames.
+        Get expression data using cell/gene selectors with Lance take() and Polars.
 
         Retrieves a subset of expression data based on cell and gene selectors.
         The selectors can be slices, lists, boolean masks, or None for all cells/genes.
-        This method provides a flexible interface for subsetting expression data.
+        This method provides a flexible interface for subsetting expression data with
+        significant performance improvements over SQL-based queries.
 
         Args:
             cell_selector: Cell selector for subsetting. Can be:
@@ -936,26 +907,112 @@ class SLAFArray:
             ...     print(f"Error: {e}")
             Error: Cell selector out of bounds
         """
-        # Use optimized query builder from QueryOptimizer
-        base_sql = QueryOptimizer.build_submatrix_query(
-            cell_selector=cell_selector,
-            gene_selector=gene_selector,
-            cell_count=self.shape[0],
-            gene_count=self.shape[1],
+        # Get row indices for cells using RowIndexMapper
+        cell_indices = self.row_mapper.get_cell_row_ranges_by_selector(cell_selector)
+
+        # Load data with Lance take()
+        expression_data = self.expression.take(cell_indices)
+        expression_df = pl.from_arrow(expression_data)
+
+        # Filter by genes if specified
+        if gene_selector is not None:
+            # Convert gene selector to integer IDs
+            if isinstance(gene_selector, int):
+                if gene_selector < 0:
+                    gene_selector = self.shape[1] + gene_selector
+                if 0 <= gene_selector < self.shape[1]:
+                    gene_integer_id = self.var["gene_integer_id"][gene_selector]
+                    expression_df = expression_df.filter(
+                        pl.col("gene_integer_id") == gene_integer_id  # type: ignore[arg-type]
+                    )
+                else:
+                    raise ValueError(f"Gene index {gene_selector} out of bounds")
+            elif isinstance(gene_selector, slice):
+                start = gene_selector.start or 0
+                stop = gene_selector.stop or self.shape[1]
+                step = gene_selector.step or 1
+
+                # Handle negative indices
+                if start < 0:
+                    start = self.shape[1] + start
+                if stop < 0:
+                    stop = self.shape[1] + stop
+
+                # Clamp bounds
+                start = max(0, min(start, self.shape[1]))
+                stop = max(0, min(stop, self.shape[1]))
+
+                gene_integer_ids = self.var["gene_integer_id"][
+                    start:stop:step
+                ].to_list()
+                expression_df = expression_df.filter(
+                    pl.col("gene_integer_id").is_in(gene_integer_ids)  # type: ignore[arg-type]
+                )
+            elif isinstance(gene_selector, list):
+                gene_integer_ids = []
+                for idx in gene_selector:
+                    if isinstance(idx, int):
+                        if idx < 0:
+                            idx = self.shape[1] + idx
+                        if 0 <= idx < self.shape[1]:
+                            gene_integer_id = self.var["gene_integer_id"][idx]
+                            gene_integer_ids.append(gene_integer_id)
+                        else:
+                            raise ValueError(f"Gene index {idx} out of bounds")
+                    else:
+                        raise ValueError(f"Invalid gene index type: {type(idx)}")
+                expression_df = expression_df.filter(
+                    pl.col("gene_integer_id").is_in(gene_integer_ids)  # type: ignore[arg-type]
+                )
+            elif isinstance(gene_selector, np.ndarray) and gene_selector.dtype == bool:
+                if len(gene_selector) != self.shape[1]:
+                    raise ValueError(
+                        f"Boolean mask length {len(gene_selector)} doesn't match gene count {self.shape[1]}"
+                    )
+                gene_integer_ids = self.var["gene_integer_id"][gene_selector].to_list()
+                expression_df = expression_df.filter(
+                    pl.col("gene_integer_id").is_in(gene_integer_ids)  # type: ignore[arg-type]
+                )
+            else:
+                raise ValueError(
+                    f"Unsupported gene selector type: {type(gene_selector)}"
+                )
+
+        # Join with metadata using Polars
+        return self._join_with_metadata(expression_df)
+
+    def _join_with_metadata(
+        self, expression_data: pl.DataFrame | pl.Series
+    ) -> pl.DataFrame:
+        """
+        Join expression data with cell/gene metadata using Polars.
+
+        Args:
+            expression_data: Polars DataFrame or Series containing expression data
+
+        Returns:
+            Polars DataFrame with cell_id, gene_id, and value columns
+        """
+        # Convert Series to DataFrame if needed
+        if isinstance(expression_data, pl.Series):
+            expression_data = expression_data.to_frame()
+
+        # Join with cell metadata
+        result = expression_data.join(
+            self.obs.select(["cell_integer_id", "cell_id"]),
+            on="cell_integer_id",
+            how="left",
         )
 
-        # Wrap the base query to join with metadata tables
-        sql = f"""
-        SELECT
-            c.cell_id,
-            g.gene_id,
-            e.value
-        FROM ({base_sql}) e
-        JOIN cells c ON e.cell_integer_id = c.cell_integer_id
-        JOIN genes g ON e.gene_integer_id = g.gene_integer_id
-        """
+        # Join with gene metadata
+        result = result.join(
+            self.var.select(["gene_integer_id", "gene_id"]),
+            on="gene_integer_id",
+            how="left",
+        )
 
-        return self.query(sql)
+        # Select final columns
+        return result.select(["cell_id", "gene_id", "value"])
 
     def info(self):
         """Print information about the SLAF dataset"""
