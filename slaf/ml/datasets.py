@@ -317,6 +317,7 @@ class PrefetchBatchProcessor:
         raw_mode: bool = False,  # Add raw_mode parameter
         verbose: bool = True,  # Add verbose parameter
         log_metrics: bool = False,  # Add log_metrics parameter
+        batch_size: int = 32,  # Add batch_size parameter
     ):
         """Initialize the PrefetchBatchProcessor."""
         self.slaf_array = slaf_array
@@ -333,6 +334,7 @@ class PrefetchBatchProcessor:
         self.verbose = verbose
         self.log_metrics = log_metrics
         self.batches_per_chunk = batches_per_chunk
+        self.batch_size = batch_size
 
         # Initialize state
         self.batch_id = 0
@@ -596,7 +598,7 @@ class PrefetchBatchProcessor:
                     shuffled_chunks = self.shuffle.apply(
                         complete_df,  # type: ignore
                         self.seed + self.batch_id + self.current_epoch * 10000,
-                        batch_size=32,  # TODO: make this configurable
+                        batch_size=self.batch_size,  # Use the configurable batch_size
                     )
 
                     shuffle_time = time.time() - shuffle_start
@@ -1195,10 +1197,11 @@ class SLAFIterableDataset(IterableDataset):
             raw_mode=raw_mode,  # Pass raw_mode to batch processor
             verbose=verbose,  # Pass verbose to batch processor
             log_metrics=False,  # Pass log_metrics to batch processor
+            batch_size=batch_size,  # Pass batch_size to batch processor
         )
         self.prefetcher = AsyncPrefetcher(
             batch_processor=self.batch_processor,
-            max_queue_size=500,
+            max_queue_size=5000,
         )
 
         # Start async prefetching
@@ -1517,6 +1520,3 @@ class SLAFIterableDataset(IterableDataset):
             Manual cleanup completed
         """
         self.prefetcher.stop()
-
-    # Tokenization is now handled at the PrefetchBatchProcessor level
-    # These methods are no longer needed since we consume pre-tokenized data
