@@ -5,6 +5,10 @@ This module provides fragment-based processing capabilities for large SLAF datas
 enabling memory-efficient operations on datasets with millions of cells.
 """
 
+import concurrent.futures
+import threading
+from typing import Any
+
 import numpy as np
 import polars as pl
 from loguru import logger
@@ -12,108 +16,330 @@ from loguru import logger
 
 class FragmentProcessor:
     """
-    Fragment-based processing for SLAF datasets.
+    Fragment-based processing for large SLAF datasets.
 
-    This class enables building lazy computation graphs using Polars LazyFrames
-    for fragment-based processing of large datasets. It provides a unified
-    interface for various operations like normalization, aggregation, and
-    matrix computation.
-
-    Key Features:
-        - Lazy evaluation with Polars LazyFrames
-        - Fragment-based processing for memory efficiency
-        - Support for cell and gene selectors (slicing)
-        - Automatic query fusion for optimal performance
-        - Progress feedback during processing
-
-    Examples:
-        >>> # Basic usage
-        >>> processor = FragmentProcessor(slaf_array)
-        >>> lazy_pipeline = processor.build_lazy_pipeline("normalize_total", target_sum=10000)
-        >>> result = processor.compute(lazy_pipeline)
-
-        >>> # With selectors (slicing)
-        >>> processor = FragmentProcessor(slaf_array, cell_selector=slice(0, 1000), gene_selector=slice(0, 5000))
-        >>> lazy_pipeline = processor.build_lazy_pipeline("mean", axis=0)
-        >>> result = processor.compute(lazy_pipeline)
+    This class provides efficient fragment-based processing for large datasets
+    by breaking them into manageable chunks and processing them in parallel.
     """
 
-    def __init__(self, slaf_array, cell_selector=None, gene_selector=None):
+    def __init__(
+        self,
+        slaf_array,
+        cell_selector: Any | None = None,
+        gene_selector: Any | None = None,
+        max_workers: int = 4,
+        enable_caching: bool = True,
+    ):
         """
         Initialize FragmentProcessor.
 
         Args:
             slaf_array: SLAFArray instance
-            cell_selector: Cell selector (slice, list, etc.) for subsetting
-            gene_selector: Gene selector (slice, list, etc.) for subsetting
+            cell_selector: Cell selector for subsetting
+            gene_selector: Gene selector for subsetting
+            max_workers: Maximum number of parallel workers
+            enable_caching: Whether to enable operation caching
         """
         self.slaf_array = slaf_array
-        self.fragments = slaf_array.expression.get_fragments()
-        self.n_fragments = len(self.fragments)
         self.cell_selector = cell_selector
         self.gene_selector = gene_selector
+        self.max_workers = max_workers
+        self.enable_caching = enable_caching
+
+        # Get fragments from the expression dataset
+        self.fragments = slaf_array.expression.get_fragments()
+        self.n_fragments = len(self.fragments)
+
+        # Initialize cache
+        self._cache: dict[str, pl.LazyFrame] = {}
+        self._cache_lock = threading.Lock()
 
         logger.debug(f"Initialized FragmentProcessor with {self.n_fragments} fragments")
-        if cell_selector is not None or gene_selector is not None:
-            logger.debug(f"Using selectors: cell={cell_selector}, gene={gene_selector}")
+
+    def _get_cache_key(self, operation: str, **kwargs) -> str:
+        """
+        Generate a cache key for the operation and parameters.
+
+        Args:
+            operation: Operation name
+            **kwargs: Operation parameters
+
+        Returns:
+            Cache key string
+        """
+        # Create a deterministic cache key
+        key_parts = [
+            operation,
+            str(self.cell_selector),
+            str(self.gene_selector),
+        ]
+
+        # Add sorted kwargs for deterministic ordering
+        if kwargs:
+            sorted_kwargs = sorted(kwargs.items())
+            key_parts.extend([f"{k}={v}" for k, v in sorted_kwargs])
+
+        return "|".join(key_parts)
+
+    def _get_cached_result(self, cache_key: str) -> pl.LazyFrame | None:
+        """
+        Get cached result if available.
+
+        Args:
+            cache_key: Cache key
+
+        Returns:
+            Cached LazyFrame or None if not found
+        """
+        if not self.enable_caching:
+            return None
+
+        with self._cache_lock:
+            return self._cache.get(cache_key)
+
+    def _cache_result(self, cache_key: str, result: pl.LazyFrame) -> None:
+        """
+        Cache a result.
+
+        Args:
+            cache_key: Cache key
+            result: Result to cache
+        """
+        if not self.enable_caching:
+            return
+
+        with self._cache_lock:
+            self._cache[cache_key] = result
+
+    def clear_cache(self) -> None:
+        """Clear the operation cache."""
+        with self._cache_lock:
+            self._cache.clear()
 
     def build_lazy_pipeline(self, operation: str, **kwargs) -> pl.LazyFrame:
         """
         Build lazy computation graph for the specified operation.
 
-        Creates a Polars LazyFrame that represents the computation graph for the
-        specified operation across all fragments. The actual computation is deferred
-        until compute() is called.
-
-        Polars handles query fusion automatically for optimal performance.
+        This method maintains backward compatibility by implementing the actual logic.
 
         Args:
-            operation: Operation to apply ("normalize_total", "log1p", "mean", "sum")
+            operation: Operation to perform ("normalize_total", "log1p", "mean", "sum")
             **kwargs: Operation-specific parameters
 
         Returns:
-            Polars LazyFrame representing the computation graph
+            LazyFrame representing the computation graph
+        """
+        # Check cache first
+        cache_key = self._get_cache_key(operation, **kwargs)
+        cached_result = self._get_cached_result(cache_key)
+        if cached_result is not None:
+            logger.debug(f"Using cached result for operation: {operation}")
+            return cached_result
 
-        Raises:
-            ValueError: If operation is not supported
+        # Special handling for normalize_total - need global cell totals first
+        if operation == "normalize_total":
+            result = self._build_normalize_total_pipeline(**kwargs)
+        else:
+            # Create lazy frames for each fragment
+            lazy_fragments = []
 
-        Examples:
-            >>> # Build pipeline for normalize_total
-            >>> pipeline = processor.build_lazy_pipeline("normalize_total", target_sum=1e4)
-            >>>
-            >>> # Build pipeline for log1p
-            >>> pipeline = processor.build_lazy_pipeline("log1p")
-            >>>
-            >>> # Build pipeline for mean aggregation
-            >>> pipeline = processor.build_lazy_pipeline("mean", axis=0)
+            for i, fragment in enumerate(self.fragments):
+                logger.debug(
+                    f"Building lazy pipeline for fragment {i + 1}/{self.n_fragments}"
+                )
+
+                # Create lazy dataframe from fragment
+                lazy_df = pl.scan_pyarrow_dataset(fragment)
+
+                # Apply cell and gene selectors to the fragment
+                lazy_df = self._apply_selectors_to_fragment(lazy_df)
+
+                # Apply operation to lazy dataframe
+                processed_df = self._apply_operation(lazy_df, operation, **kwargs)
+                lazy_fragments.append(processed_df)
+
+            # Return lazy concatenation (Polars handles fusion automatically)
+            if len(lazy_fragments) == 1:
+                result = lazy_fragments[0]
+            else:
+                result = pl.concat(lazy_fragments, how="vertical")
+
+        # Cache the result
+        self._cache_result(cache_key, result)
+        return result
+
+    def build_lazy_pipeline_parallel(self, operation: str, **kwargs) -> pl.LazyFrame:
+        """
+        Build lazy computation graph using parallel processing.
+
+        Args:
+            operation: Operation to perform
+            **kwargs: Operation-specific parameters
+
+        Returns:
+            LazyFrame representing the computation graph
         """
         # Special handling for normalize_total - need global cell totals first
         if operation == "normalize_total":
-            return self._build_normalize_total_pipeline(**kwargs)
+            return self._build_normalize_total_pipeline_parallel(**kwargs)
 
-        # Create lazy frames for each fragment
-        lazy_fragments = []
+        # Process fragments in parallel
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=self.max_workers
+        ) as executor:
+            # Submit fragment processing tasks
+            future_to_fragment = {
+                executor.submit(
+                    self._process_single_fragment, fragment, operation, **kwargs
+                ): i
+                for i, fragment in enumerate(self.fragments)
+            }
 
-        for i, fragment in enumerate(self.fragments):
-            logger.debug(
-                f"Building lazy pipeline for fragment {i + 1}/{self.n_fragments}"
-            )
+            # Collect results
+            lazy_fragments = []
+            for future in concurrent.futures.as_completed(future_to_fragment):
+                fragment_idx = future_to_fragment[future]
+                try:
+                    result = future.result()
+                    lazy_fragments.append(result)
+                    logger.debug(
+                        f"Completed fragment {fragment_idx + 1}/{self.n_fragments}"
+                    )
+                except Exception as e:
+                    logger.error(f"Fragment {fragment_idx} failed: {e}")
+                    raise
 
-            # Create lazy dataframe from fragment
-            lazy_df = pl.scan_pyarrow_dataset(fragment)
-
-            # Apply cell and gene selectors to the fragment
-            lazy_df = self._apply_selectors_to_fragment(lazy_df)
-
-            # Apply operation to lazy dataframe
-            processed_df = self._apply_operation(lazy_df, operation, **kwargs)
-            lazy_fragments.append(processed_df)
-
-        # Return lazy concatenation (Polars handles fusion automatically)
+        # Return lazy concatenation
         if len(lazy_fragments) == 1:
             return lazy_fragments[0]
         else:
             return pl.concat(lazy_fragments, how="vertical")
+
+    def build_lazy_pipeline_smart(self, operation: str, **kwargs) -> pl.LazyFrame:
+        """
+        Build lazy computation graph with smart strategy selection.
+
+        Automatically chooses between sequential and parallel processing based on
+        dataset size, operation type, and available resources.
+
+        Args:
+            operation: Operation to perform
+            **kwargs: Operation-specific parameters
+
+        Returns:
+            LazyFrame representing the computation graph
+        """
+        # Check cache first
+        cache_key = self._get_cache_key(operation, **kwargs)
+        cached_result = self._get_cached_result(cache_key)
+        if cached_result is not None:
+            logger.debug(f"Using cached result for operation: {operation}")
+            return cached_result
+
+        # Determine optimal strategy
+        use_parallel = self._should_use_parallel(operation, **kwargs)
+
+        if use_parallel:
+            logger.debug(f"Using parallel processing for operation: {operation}")
+            result = self.build_lazy_pipeline_parallel(operation, **kwargs)
+        else:
+            logger.debug(f"Using sequential processing for operation: {operation}")
+            result = self.build_lazy_pipeline(operation, **kwargs)
+
+        # Cache the result
+        self._cache_result(cache_key, result)
+        return result
+
+    def _should_use_parallel(self, operation: str, **kwargs) -> bool:
+        """
+        Determine if parallel processing should be used.
+
+        Args:
+            operation: Operation type
+            **kwargs: Operation parameters
+
+        Returns:
+            True if parallel processing should be used
+        """
+        # Always use parallel for normalize_total (most expensive operation)
+        if operation == "normalize_total":
+            return True
+
+        # Use parallel if we have many fragments and multiple workers
+        if self.n_fragments > 10 and self.max_workers > 1:
+            return True
+
+        # Use parallel for expensive operations with large datasets
+        if operation in ["mean", "sum"] and self.n_fragments > 5:
+            return True
+
+        # Use parallel for operations that benefit from batching
+        if operation in ["log1p", "compute_matrix"] and self.n_fragments > 8:
+            return True
+
+        # Use parallel for operations that can benefit from early termination
+        if operation in ["highly_variable_genes", "variance"] and self.n_fragments > 3:
+            return True
+
+        # Use sequential for simple operations or small datasets
+        return False
+
+    def _can_terminate_early(self, operation: str) -> bool:
+        """
+        Check if an operation can benefit from early termination.
+
+        Args:
+            operation: Operation type
+
+        Returns:
+            True if early termination is beneficial
+        """
+        # Operations that can be computed incrementally
+        return operation in ["mean", "sum", "variance", "highly_variable_genes"]
+
+    def _optimize_batch_size(self, operation: str) -> int:
+        """
+        Determine optimal batch size for parallel processing.
+
+        Args:
+            operation: Operation type
+
+        Returns:
+            Optimal batch size
+        """
+        # For expensive operations, use smaller batches
+        if operation == "normalize_total":
+            return max(1, self.n_fragments // (self.max_workers * 2))
+
+        # For simple operations, use larger batches
+        if operation in ["log1p", "compute_matrix"]:
+            return max(1, self.n_fragments // self.max_workers)
+
+        # Default batch size
+        return max(1, self.n_fragments // self.max_workers)
+
+    def _process_single_fragment(
+        self, fragment, operation: str, **kwargs
+    ) -> pl.LazyFrame:
+        """
+        Process a single fragment.
+
+        Args:
+            fragment: Fragment to process
+            operation: Operation to perform
+            **kwargs: Operation-specific parameters
+
+        Returns:
+            LazyFrame for the processed fragment
+        """
+        # Create lazy dataframe from fragment
+        lazy_df = pl.scan_pyarrow_dataset(fragment)
+
+        # Apply cell and gene selectors to the fragment
+        lazy_df = self._apply_selectors_to_fragment(lazy_df)
+
+        # Apply operation to lazy dataframe
+        return self._apply_operation(lazy_df, operation, **kwargs)
 
     def _build_normalize_total_pipeline(self, **kwargs) -> pl.LazyFrame:
         """
@@ -188,6 +414,144 @@ class FragmentProcessor:
         else:
             return pl.concat(normalized_fragments, how="vertical")
 
+    def _build_normalize_total_pipeline_parallel(self, **kwargs) -> pl.LazyFrame:
+        """
+        Build normalize_total pipeline with parallel global cell totals computation.
+
+        This method computes global cell totals in parallel, then applies normalization
+        to each fragment using the global totals.
+        """
+        target_sum = kwargs.get("target_sum", 1e4)
+
+        # Step 1: Compute global cell totals across all fragments in parallel
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=self.max_workers
+        ) as executor:
+            # Submit cell totals computation tasks
+            future_to_fragment = {
+                executor.submit(self._compute_fragment_cell_totals, fragment): i
+                for i, fragment in enumerate(self.fragments)
+            }
+
+            # Collect results
+            global_totals_fragments = []
+            for future in concurrent.futures.as_completed(future_to_fragment):
+                fragment_idx = future_to_fragment[future]
+                try:
+                    result = future.result()
+                    global_totals_fragments.append(result)
+                    logger.debug(
+                        f"Completed cell totals for fragment {fragment_idx + 1}/{self.n_fragments}"
+                    )
+                except Exception as e:
+                    logger.error(f"Fragment {fragment_idx} cell totals failed: {e}")
+                    raise
+
+        # Combine all fragment totals to get global totals
+        if len(global_totals_fragments) == 1:
+            global_cell_totals = global_totals_fragments[0]
+        else:
+            global_cell_totals = pl.concat(global_totals_fragments, how="vertical")
+
+        # Sum up totals for each cell across all fragments
+        global_cell_totals = global_cell_totals.group_by("cell_integer_id").agg(
+            pl.col("fragment_total").sum().alias("global_total")
+        )
+
+        # Step 2: Apply normalization to each fragment using global totals in parallel
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=self.max_workers
+        ) as executor:
+            # Submit normalization tasks
+            future_to_fragment = {
+                executor.submit(
+                    self._normalize_fragment_with_global_totals,
+                    fragment,
+                    global_cell_totals,
+                    target_sum,
+                ): i
+                for i, fragment in enumerate(self.fragments)
+            }
+
+            # Collect results
+            normalized_fragments = []
+            for future in concurrent.futures.as_completed(future_to_fragment):
+                fragment_idx = future_to_fragment[future]
+                try:
+                    result = future.result()
+                    normalized_fragments.append(result)
+                    logger.debug(
+                        f"Completed normalization for fragment {fragment_idx + 1}/{self.n_fragments}"
+                    )
+                except Exception as e:
+                    logger.error(f"Fragment {fragment_idx} normalization failed: {e}")
+                    raise
+
+        # Return concatenated result as LazyFrame
+        if len(normalized_fragments) == 1:
+            return pl.LazyFrame(normalized_fragments[0])
+        else:
+            return pl.LazyFrame(pl.concat(normalized_fragments, how="vertical"))
+
+    def _compute_fragment_cell_totals(self, fragment) -> pl.DataFrame:
+        """
+        Compute cell totals for a single fragment.
+
+        Args:
+            fragment: Fragment to process
+
+        Returns:
+            DataFrame with cell totals for this fragment
+        """
+        lazy_df = pl.scan_pyarrow_dataset(fragment)
+        return (
+            lazy_df.group_by("cell_integer_id")
+            .agg(pl.col("value").sum().alias("fragment_total"))
+            .collect()
+        )
+
+    def _normalize_fragment_with_global_totals(
+        self, fragment, global_cell_totals: pl.DataFrame, target_sum: float
+    ) -> pl.DataFrame:
+        """
+        Normalize a fragment using global cell totals.
+
+        Args:
+            fragment: Fragment to normalize
+            global_cell_totals: Global cell totals DataFrame
+            target_sum: Target sum for normalization
+
+        Returns:
+            DataFrame with normalized values
+        """
+        lazy_df = pl.scan_pyarrow_dataset(fragment)
+
+        # Apply cell and gene selectors to the fragment
+        lazy_df = self._apply_selectors_to_fragment(lazy_df)
+
+        # Convert global cell totals to LazyFrame for proper join
+        global_totals_lazy = pl.LazyFrame(global_cell_totals)
+
+        # Join with global cell totals and normalize
+        return (
+            lazy_df.join(global_totals_lazy, on="cell_integer_id", how="left")
+            .with_columns(
+                [
+                    (pl.col("value") / pl.col("global_total") * target_sum).alias(
+                        "normalized_value"
+                    )
+                ]
+            )
+            .select(
+                [
+                    "cell_integer_id",
+                    "gene_integer_id",
+                    pl.col("normalized_value").alias("value"),
+                ]
+            )
+            .collect()
+        )
+
     def _apply_operation(
         self, lazy_df: pl.LazyFrame, operation: str, **kwargs
     ) -> pl.LazyFrame:
@@ -200,10 +564,7 @@ class FragmentProcessor:
             **kwargs: Operation-specific parameters
 
         Returns:
-            Processed Polars LazyFrame
-
-        Raises:
-            ValueError: If operation is not supported
+            LazyFrame with applied operation
         """
         if operation == "normalize_total":
             target_sum = kwargs.get("target_sum", 1e4)
@@ -220,6 +581,23 @@ class FragmentProcessor:
             return self._apply_compute_matrix(lazy_df)
         else:
             raise ValueError(f"Unknown operation: {operation}")
+
+    def _apply_compute_matrix(self, lazy_df: pl.LazyFrame) -> pl.LazyFrame:
+        """
+        Apply matrix computation operation to lazy dataframe.
+
+        This operation prepares the data for matrix conversion by ensuring
+        all necessary columns are present and properly formatted.
+
+        Args:
+            lazy_df: Polars LazyFrame to process
+
+        Returns:
+            LazyFrame ready for matrix conversion
+        """
+        # For matrix computation, we just need to ensure the data is properly formatted
+        # The actual matrix conversion happens in the calling code
+        return lazy_df.select(["cell_integer_id", "gene_integer_id", "value"])
 
     def compute(self, lazy_pipeline: pl.LazyFrame) -> pl.DataFrame:
         """
@@ -457,21 +835,6 @@ class FragmentProcessor:
         else:  # Overall sum
             # For sum, we can just sum the values
             return lazy_df.select(pl.col("value").sum().alias("partial_sum"))
-
-    def _apply_compute_matrix(self, lazy_df: pl.LazyFrame) -> pl.LazyFrame:
-        """
-        Apply compute_matrix operation to lazy dataframe.
-
-        Prepares data for sparse matrix computation by ensuring proper column structure.
-
-        Args:
-            lazy_df: Polars LazyFrame to process
-
-        Returns:
-            LazyFrame ready for matrix computation
-        """
-        # Ensure we have the required columns for matrix computation
-        return lazy_df.select(["cell_integer_id", "gene_integer_id", "value"])
 
     def _convert_fragment_result_to_array(
         self, result_df: pl.DataFrame, operation: str, axis: int | None = None

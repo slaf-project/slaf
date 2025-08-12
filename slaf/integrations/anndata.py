@@ -14,6 +14,12 @@ if TYPE_CHECKING:
 
     import scanpy as sc
 
+# Import FragmentProcessor for runtime use
+try:
+    from slaf.core.fragment_processor import FragmentProcessor
+except ImportError:
+    FragmentProcessor = None  # type: ignore
+
 
 class LazyExpressionMatrix(LazySparseMixin):
     """
@@ -655,66 +661,59 @@ class LazyExpressionMatrix(LazySparseMixin):
                 use_fragments = False
 
         if use_fragments:
-            try:
-                from slaf.core.fragment_processor import FragmentProcessor
-
-                # Create processor with selectors
-                processor = FragmentProcessor(
-                    self.slaf_array,
-                    cell_selector=self._cell_selector,
-                    gene_selector=self._gene_selector,
-                )
-                lazy_pipeline = processor.build_lazy_pipeline("compute_matrix")
-                result_df = processor.compute(lazy_pipeline)
-                return self._convert_to_sparse_matrix(result_df)
-            except Exception as e:
-                print(
-                    f"Fragment processing failed, falling back to global processing: {e}"
-                )
-                # Fall back to global processing
-                use_fragments = False
-
-        if not use_fragments:
-            # Use global processing (original implementation)
-            # Build the SQL query with transformations
-            if self.parent_adata is not None and hasattr(
-                self.parent_adata, "_transformations"
-            ):
-                transformations = self.parent_adata._transformations
-            else:
-                transformations = {}
-
-            # Try SQL-level transformations first
-            if transformations:
-                sql_result = self._apply_sql_transformations(
-                    self._cell_selector, self._gene_selector, transformations
-                )
-                if sql_result is not None:
-                    return self._reconstruct_sparse_matrix(
-                        sql_result, self._cell_selector, self._gene_selector
-                    )
-
-            # Fall back to base query + numpy transformations
-            base_query = self._build_submatrix_sql(
-                self._cell_selector, self._gene_selector
+            processor = FragmentProcessor(
+                self.slaf_array,
+                cell_selector=self._cell_selector,
+                gene_selector=self._gene_selector,
+                max_workers=4,
+                enable_caching=True,
             )
-            base_result = self.slaf_array.query(base_query)
+            # Use smart strategy selection for optimal performance
+            lazy_pipeline = processor.build_lazy_pipeline_smart("compute_matrix")
+            result = processor.compute(lazy_pipeline)
+            return self._convert_to_sparse_matrix(result)
+        else:
+            return self._compute_global()
 
-            # Reconstruct base matrix
-            base_matrix = self._reconstruct_sparse_matrix(
-                base_result, self._cell_selector, self._gene_selector
+    def _compute_global(self) -> scipy.sparse.csr_matrix:
+        """Compute the matrix globally (original implementation)"""
+        # Build the SQL query with transformations
+        if self.parent_adata is not None and hasattr(
+            self.parent_adata, "_transformations"
+        ):
+            transformations = self.parent_adata._transformations
+        else:
+            transformations = {}
+
+        # Try SQL-level transformations first
+        if transformations:
+            sql_result = self._apply_sql_transformations(
+                self._cell_selector, self._gene_selector, transformations
             )
-
-            # Apply transformations in numpy if needed
-            if transformations:
-                return self._apply_numpy_transformations(
-                    base_matrix,
-                    self._cell_selector,
-                    self._gene_selector,
-                    transformations,
+            if sql_result is not None:
+                return self._reconstruct_sparse_matrix(
+                    sql_result, self._cell_selector, self._gene_selector
                 )
 
-            return base_matrix
+        # Fall back to base query + numpy transformations
+        base_query = self._build_submatrix_sql(self._cell_selector, self._gene_selector)
+        base_result = self.slaf_array.query(base_query)
+
+        # Reconstruct base matrix
+        base_matrix = self._reconstruct_sparse_matrix(
+            base_result, self._cell_selector, self._gene_selector
+        )
+
+        # Apply transformations in numpy if needed
+        if transformations:
+            return self._apply_numpy_transformations(
+                base_matrix,
+                self._cell_selector,
+                self._gene_selector,
+                transformations,
+            )
+
+        return base_matrix
 
     def _convert_to_sparse_matrix(
         self, result_df: pl.DataFrame
@@ -1330,6 +1329,16 @@ class LazyAnnData(LazySparseMixin):
             }
 
             return new_adata
+
+    def _get_processing_strategy(self, fragments: bool | None = None) -> bool:
+        """Determine the processing strategy based on fragments and dataset size"""
+        if fragments is not None:
+            return fragments
+        try:
+            fragments_list = self.slaf.expression.get_fragments()
+            return len(fragments_list) > 1
+        except Exception:
+            return False
 
 
 def read_slaf(filename: str, backend: str = "auto") -> LazyAnnData:

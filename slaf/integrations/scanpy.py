@@ -658,8 +658,19 @@ class LazyPreprocessing:
             try:
                 from slaf.core.fragment_processor import FragmentProcessor
 
-                processor = FragmentProcessor(adata.slaf)
-                lazy_pipeline = processor.build_lazy_pipeline(
+                # Get selectors from the LazyAnnData if it's sliced
+                cell_selector = getattr(adata, "_cell_selector", None)
+                gene_selector = getattr(adata, "_gene_selector", None)
+
+                processor = FragmentProcessor(
+                    adata.slaf,
+                    cell_selector=cell_selector,
+                    gene_selector=gene_selector,
+                    max_workers=4,
+                    enable_caching=True,
+                )
+                # Use smart strategy selection for optimal performance
+                lazy_pipeline = processor.build_lazy_pipeline_smart(
                     "normalize_total", target_sum=target_sum
                 )
                 result_df = processor.compute(lazy_pipeline)
@@ -852,8 +863,19 @@ class LazyPreprocessing:
             try:
                 from slaf.core.fragment_processor import FragmentProcessor
 
-                processor = FragmentProcessor(adata.slaf)
-                lazy_pipeline = processor.build_lazy_pipeline("log1p")
+                # Get selectors from the LazyAnnData if it's sliced
+                cell_selector = getattr(adata, "_cell_selector", None)
+                gene_selector = getattr(adata, "_gene_selector", None)
+
+                processor = FragmentProcessor(
+                    adata.slaf,
+                    cell_selector=cell_selector,
+                    gene_selector=gene_selector,
+                    max_workers=4,
+                    enable_caching=True,
+                )
+                # Use smart strategy selection for optimal performance
+                lazy_pipeline = processor.build_lazy_pipeline_smart("log1p")
                 result_df = processor.compute(lazy_pipeline)
 
                 # Update adata with log1p values

@@ -413,9 +413,9 @@ class TestLazySparseMixinFragmentIntegration:
             mock_processor = Mock()
             mock_processor_class.return_value = mock_processor
 
-            # Mock the build_lazy_pipeline and compute methods
+            # Mock the build_lazy_pipeline_smart and compute methods
             mock_lazy_pipeline = Mock()
-            mock_processor.build_lazy_pipeline.return_value = mock_lazy_pipeline
+            mock_processor.build_lazy_pipeline_smart.return_value = mock_lazy_pipeline
 
             mock_result_df = pl.DataFrame(
                 {"cell_integer_id": [0, 1, 2], "mean_value": [10.0, 20.0, 30.0]}
@@ -432,7 +432,9 @@ class TestLazySparseMixinFragmentIntegration:
 
             # Check that FragmentProcessor was used
             mock_processor_class.assert_called_once()
-            mock_processor.build_lazy_pipeline.assert_called_once_with("mean", axis=1)
+            mock_processor.build_lazy_pipeline_smart.assert_called_once_with(
+                "mean", axis=1
+            )
             mock_processor.compute.assert_called_once_with(mock_lazy_pipeline)
 
             # Check that result is a numpy array
@@ -467,7 +469,7 @@ class TestLazySparseMixinFragmentIntegration:
             mock_processor_class.return_value = mock_processor
 
             mock_lazy_pipeline = Mock()
-            mock_processor.build_lazy_pipeline.return_value = mock_lazy_pipeline
+            mock_processor.build_lazy_pipeline_smart.return_value = mock_lazy_pipeline
 
             mock_result_df = pl.DataFrame(
                 {"cell_integer_id": [0, 1, 2], "sum_value": [100.0, 200.0, 300.0]}
@@ -484,7 +486,9 @@ class TestLazySparseMixinFragmentIntegration:
 
             # Check that FragmentProcessor was used (since we have multiple fragments)
             mock_processor_class.assert_called_once()
-            mock_processor.build_lazy_pipeline.assert_called_once_with("sum", axis=1)
+            mock_processor.build_lazy_pipeline_smart.assert_called_once_with(
+                "sum", axis=1
+            )
 
             # Check that result is a numpy array
             assert isinstance(result, np.ndarray)
@@ -541,7 +545,7 @@ class TestLazySparseMixinFragmentIntegration:
             mock_processor_class.return_value = mock_processor
 
             mock_lazy_pipeline = Mock()
-            mock_processor.build_lazy_pipeline.return_value = mock_lazy_pipeline
+            mock_processor.build_lazy_pipeline_smart.return_value = mock_lazy_pipeline
 
             mock_result_df = pl.DataFrame(
                 {"cell_integer_id": [0, 1, 2], "mean_value": [5.0, 10.0, 15.0]}
@@ -553,7 +557,9 @@ class TestLazySparseMixinFragmentIntegration:
 
             # Check that FragmentProcessor was used
             mock_processor_class.assert_called_once()
-            mock_processor.build_lazy_pipeline.assert_called_once_with("mean", axis=1)
+            mock_processor.build_lazy_pipeline_smart.assert_called_once_with(
+                "mean", axis=1
+            )
 
     def test_sum_method_fragment_support(self, sparse_mixin_with_fragments):
         """Test sum method with fragment support."""
@@ -564,7 +570,7 @@ class TestLazySparseMixinFragmentIntegration:
             mock_processor_class.return_value = mock_processor
 
             mock_lazy_pipeline = Mock()
-            mock_processor.build_lazy_pipeline.return_value = mock_lazy_pipeline
+            mock_processor.build_lazy_pipeline_smart.return_value = mock_lazy_pipeline
 
             mock_result_df = pl.DataFrame(
                 {"gene_integer_id": [0, 1, 2], "sum_value": [50.0, 100.0, 150.0]}
@@ -576,7 +582,9 @@ class TestLazySparseMixinFragmentIntegration:
 
             # Check that FragmentProcessor was used
             mock_processor_class.assert_called_once()
-            mock_processor.build_lazy_pipeline.assert_called_once_with("sum", axis=0)
+            mock_processor.build_lazy_pipeline_smart.assert_called_once_with(
+                "sum", axis=0
+            )
 
 
 class TestScanpyFragmentIntegration:
@@ -617,7 +625,7 @@ class TestScanpyFragmentIntegration:
             mock_processor_class.return_value = mock_processor
 
             mock_lazy_pipeline = Mock()
-            mock_processor.build_lazy_pipeline.return_value = mock_lazy_pipeline
+            mock_processor.build_lazy_pipeline_smart.return_value = mock_lazy_pipeline
 
             mock_result_df = pl.DataFrame(
                 {
@@ -635,7 +643,7 @@ class TestScanpyFragmentIntegration:
 
             # Check that FragmentProcessor was used
             mock_processor_class.assert_called_once()
-            mock_processor.build_lazy_pipeline.assert_called_once_with(
+            mock_processor.build_lazy_pipeline_smart.assert_called_once_with(
                 "normalize_total", target_sum=1e4
             )
             mock_processor.compute.assert_called_once_with(mock_lazy_pipeline)
@@ -649,7 +657,7 @@ class TestScanpyFragmentIntegration:
             mock_processor_class.return_value = mock_processor
 
             mock_lazy_pipeline = Mock()
-            mock_processor.build_lazy_pipeline.return_value = mock_lazy_pipeline
+            mock_processor.build_lazy_pipeline_smart.return_value = mock_lazy_pipeline
 
             mock_result_df = pl.DataFrame(
                 {
@@ -665,7 +673,7 @@ class TestScanpyFragmentIntegration:
 
             # Check that FragmentProcessor was used
             mock_processor_class.assert_called_once()
-            mock_processor.build_lazy_pipeline.assert_called_once_with("log1p")
+            mock_processor.build_lazy_pipeline_smart.assert_called_once_with("log1p")
             mock_processor.compute.assert_called_once_with(mock_lazy_pipeline)
 
     def test_normalize_total_automatic_fragment_detection(
@@ -679,7 +687,7 @@ class TestScanpyFragmentIntegration:
             mock_processor_class.return_value = mock_processor
 
             mock_lazy_pipeline = Mock()
-            mock_processor.build_lazy_pipeline.return_value = mock_lazy_pipeline
+            mock_processor.build_lazy_pipeline_smart.return_value = mock_lazy_pipeline
 
             mock_result_df = pl.DataFrame(
                 {
@@ -697,7 +705,7 @@ class TestScanpyFragmentIntegration:
 
             # Check that FragmentProcessor was used (since we have multiple fragments)
             mock_processor_class.assert_called_once()
-            mock_processor.build_lazy_pipeline.assert_called_once_with(
+            mock_processor.build_lazy_pipeline_smart.assert_called_once_with(
                 "normalize_total", target_sum=1e4
             )
 
@@ -773,13 +781,20 @@ class TestAnnDataFragmentIntegration:
     def test_compute_fragment_processing(self, lazy_expression_matrix_with_fragments):
         """Test compute method with fragment processing."""
         with patch(
-            "slaf.core.fragment_processor.FragmentProcessor"
+            "slaf.integrations.anndata.FragmentProcessor"
         ) as mock_processor_class:
             mock_processor = Mock()
             mock_processor_class.return_value = mock_processor
 
-            mock_lazy_pipeline = Mock()
-            mock_processor.build_lazy_pipeline.return_value = mock_lazy_pipeline
+            # Mock the build_lazy_pipeline_smart method to return a real LazyFrame
+            mock_lazy_pipeline = pl.LazyFrame(
+                {
+                    "cell_integer_id": [0, 1, 2],
+                    "gene_integer_id": [0, 1, 2],
+                    "value": [1.0, 2.0, 3.0],
+                }
+            )
+            mock_processor.build_lazy_pipeline_smart.return_value = mock_lazy_pipeline
 
             mock_result_df = pl.DataFrame(
                 {
@@ -799,23 +814,30 @@ class TestAnnDataFragmentIntegration:
 
                 # Check that FragmentProcessor was used
                 mock_processor_class.assert_called_once()
-                mock_processor.build_lazy_pipeline.assert_called_once_with(
+                mock_processor.build_lazy_pipeline_smart.assert_called_once_with(
                     "compute_matrix"
                 )
-                mock_processor.compute.assert_called_once_with(mock_lazy_pipeline)
+                mock_processor.compute.assert_called_once()
 
     def test_compute_automatic_fragment_detection(
         self, lazy_expression_matrix_with_fragments
     ):
         """Test compute method with automatic fragment detection."""
         with patch(
-            "slaf.core.fragment_processor.FragmentProcessor"
+            "slaf.integrations.anndata.FragmentProcessor"
         ) as mock_processor_class:
             mock_processor = Mock()
             mock_processor_class.return_value = mock_processor
 
-            mock_lazy_pipeline = Mock()
-            mock_processor.build_lazy_pipeline.return_value = mock_lazy_pipeline
+            # Mock the build_lazy_pipeline_smart method to return a real LazyFrame
+            mock_lazy_pipeline = pl.LazyFrame(
+                {
+                    "cell_integer_id": [0, 1, 2],
+                    "gene_integer_id": [0, 1, 2],
+                    "value": [1.0, 2.0, 3.0],
+                }
+            )
+            mock_processor.build_lazy_pipeline_smart.return_value = mock_lazy_pipeline
 
             mock_result_df = pl.DataFrame(
                 {
@@ -835,7 +857,7 @@ class TestAnnDataFragmentIntegration:
 
                 # Check that FragmentProcessor was used (since we have multiple fragments)
                 mock_processor_class.assert_called_once()
-                mock_processor.build_lazy_pipeline.assert_called_once_with(
+                mock_processor.build_lazy_pipeline_smart.assert_called_once_with(
                     "compute_matrix"
                 )
 

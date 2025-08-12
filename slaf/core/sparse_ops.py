@@ -1547,25 +1547,40 @@ class LazySparseMixin:
 
             return global_results
 
-    def _aggregation_with_fragments(
-        self, operation: str, fragments: bool | None = None, **kwargs
-    ) -> np.ndarray:
+    def _get_processing_strategy(self, fragments: bool = None) -> bool:
         """
-        Perform aggregation using fragment-based processing.
+        Get processing strategy with automatic selection if not specified.
 
         Args:
-            operation: Operation to perform ("mean", "sum", etc.)
-            fragments: Whether to use fragment processing (None for auto)
-            **kwargs: Additional operation-specific parameters
+            fragments: Whether to use fragment processing. If None, automatically selects.
 
         Returns:
-            Numpy array with aggregation results
+            True if fragment processing should be used, False otherwise.
         """
-        # Check if we should use fragments
-        if fragments is None:
-            use_fragments = len(self.slaf_array.expression.get_fragments()) > 1
+        if fragments is not None:
+            return fragments
         else:
-            use_fragments = fragments
+            return self._should_use_fragments()
+
+    def _should_use_fragments(self) -> bool:
+        """
+        Determine if fragment processing should be used.
+
+        Returns:
+            True if fragment processing should be used, False otherwise.
+        """
+        try:
+            fragments_list = self.slaf_array.expression.get_fragments()
+            return len(fragments_list) > 1
+        except Exception:
+            return False
+
+    def _aggregation_with_fragments(
+        self, operation: str, fragments: bool = None, **kwargs
+    ):
+        """Unified aggregation interface with automatic strategy selection"""
+
+        use_fragments = self._get_processing_strategy(fragments)
 
         if use_fragments:
             try:
@@ -1580,10 +1595,12 @@ class LazySparseMixin:
                     self.slaf_array,
                     cell_selector=cell_selector,
                     gene_selector=gene_selector,
+                    max_workers=4,
+                    enable_caching=True,
                 )
 
                 # Build and execute pipeline
-                lazy_pipeline = processor.build_lazy_pipeline(operation, **kwargs)
+                lazy_pipeline = processor.build_lazy_pipeline_smart(operation, **kwargs)
                 result_df = processor.compute(lazy_pipeline)
 
                 # Convert result to array
