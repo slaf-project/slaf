@@ -582,9 +582,6 @@ class LazyPreprocessing:
     def normalize_total(
         adata: LazyAnnData,
         target_sum: float | None = 1e4,
-        exclude_highly_expressed: bool = False,
-        max_fraction: float = 0.05,
-        key_added: str | None = None,
         inplace: bool = True,
         fragments: bool | None = None,
     ) -> LazyAnnData | None:
@@ -598,13 +595,10 @@ class LazyPreprocessing:
         Args:
             adata: LazyAnnData instance containing the single-cell data.
             target_sum: Target sum for normalization. Default is 10,000.
-            exclude_highly_expressed: Whether to exclude highly expressed genes from
-                                     normalization. Currently not implemented in lazy version.
-            max_fraction: Maximum fraction of counts for highly expressed genes.
-                         Used when exclude_highly_expressed=True.
-            key_added: Key for storing normalization factors. Currently not used.
             inplace: Whether to modify the adata object in place. If False, returns
                     a copy with the transformation applied.
+            fragments: Whether to use fragment-based processing. If None, automatically
+                      selects based on dataset characteristics.
 
         Returns:
             LazyAnnData | None: If inplace=False, returns LazyAnnData with transformation.
@@ -703,14 +697,6 @@ class LazyPreprocessing:
 
         # Work with polars DataFrame internally
         cell_totals_pl = cell_totals
-
-        # Handle exclude_highly_expressed if requested
-        if exclude_highly_expressed:
-            # This would require more complex logic to identify and exclude highly expressed genes
-            # For now, we'll implement the basic version
-            print(
-                "Warning: exclude_highly_expressed=True not yet implemented in lazy version"
-            )
 
         # Create normalization factors using polars
         # Map cell_integer_id to cell names for compatibility with anndata.py
