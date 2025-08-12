@@ -165,6 +165,22 @@ class QueryOptimizer:
         return start, stop, step
 
     @staticmethod
+    def _normalize_index(index: int, max_size: int) -> int:
+        """
+        Normalize a single index, handling negative indices and bounds
+
+        Args:
+            index: Index to normalize
+            max_size: Maximum size of the dimension
+
+        Returns:
+            Normalized index
+        """
+        if index < 0:
+            index = max_size + index
+        return max(0, min(index, max_size))
+
+    @staticmethod
     def _build_slice_condition(
         start: int, stop: int, step: int, entity_type: str
     ) -> str:
@@ -226,10 +242,9 @@ class QueryOptimizer:
             # List of indices - handle negative indices
             list_indices: list[int] = []
             for idx in selector:
-                if idx < 0:
-                    idx = max_size + idx
-                if 0 <= idx < max_size:
-                    list_indices.append(idx)
+                normalized_idx = QueryOptimizer._normalize_index(idx, max_size)
+                if normalized_idx < max_size:
+                    list_indices.append(normalized_idx)
             if len(list_indices) == 0:
                 return "FALSE"
 
@@ -259,13 +274,42 @@ class QueryOptimizer:
         Returns:
             SQL WHERE condition string
         """
-        # Handle negative index
-        if selector < 0:
-            selector = max_size + selector
-        if 0 <= selector < max_size:
-            return f"{entity_type}_integer_id = {selector}"
+        normalized_idx = QueryOptimizer._normalize_index(selector, max_size)
+        if normalized_idx < max_size:
+            return f"{entity_type}_integer_id = {normalized_idx}"
         else:
             return "FALSE"
+
+    @staticmethod
+    def _process_selector(
+        selector: Any, entity_type: str, max_size: int, size_name: str
+    ) -> str:
+        """
+        Process any type of selector and return SQL condition
+
+        Args:
+            selector: Selector of any supported type
+            entity_type: Either 'cell' or 'gene'
+            max_size: Maximum size of the dimension
+            size_name: Name of the size parameter for error messages
+
+        Returns:
+            SQL WHERE condition string
+        """
+        if selector is None:
+            return "TRUE"
+        elif isinstance(selector, slice):
+            start, stop, step = QueryOptimizer._normalize_slice_indices(
+                selector, max_size
+            )
+            return QueryOptimizer._build_slice_condition(start, stop, step, entity_type)
+        elif isinstance(selector, list | np.ndarray):
+            return QueryOptimizer._build_list_condition(selector, entity_type, max_size)
+        else:
+            # Single index
+            return QueryOptimizer._build_single_index_condition(
+                selector, entity_type, max_size
+            )
 
     @staticmethod
     def build_submatrix_query(
@@ -286,57 +330,19 @@ class QueryOptimizer:
         Returns:
             Optimized SQL query string
         """
-        # Handle cell selector
-        if cell_selector is None:
-            cell_condition = "TRUE"
-        elif isinstance(cell_selector, slice):
-            if cell_count is None:
-                raise ValueError("cell_count must be provided for slice selectors")
-            start, stop, step = QueryOptimizer._normalize_slice_indices(
-                cell_selector, cell_count
-            )
-            cell_condition = QueryOptimizer._build_slice_condition(
-                start, stop, step, "cell"
-            )
-        elif isinstance(cell_selector, list | np.ndarray):
-            if cell_count is None:
-                raise ValueError("cell_count must be provided for list/array selectors")
-            cell_condition = QueryOptimizer._build_list_condition(
-                cell_selector, "cell", cell_count
-            )
-        else:
-            # Single index
-            if cell_count is None:
-                raise ValueError("cell_count must be provided for index selectors")
-            cell_condition = QueryOptimizer._build_single_index_condition(
-                cell_selector, "cell", cell_count
-            )
+        # Validate required parameters
+        if cell_selector is not None and cell_count is None:
+            raise ValueError("cell_count must be provided for cell selectors")
+        if gene_selector is not None and gene_count is None:
+            raise ValueError("gene_count must be provided for gene selectors")
 
-        # Handle gene selector
-        if gene_selector is None:
-            gene_condition = "TRUE"
-        elif isinstance(gene_selector, slice):
-            if gene_count is None:
-                raise ValueError("gene_count must be provided for slice selectors")
-            start, stop, step = QueryOptimizer._normalize_slice_indices(
-                gene_selector, gene_count
-            )
-            gene_condition = QueryOptimizer._build_slice_condition(
-                start, stop, step, "gene"
-            )
-        elif isinstance(gene_selector, list | np.ndarray):
-            if gene_count is None:
-                raise ValueError("gene_count must be provided for list/array selectors")
-            gene_condition = QueryOptimizer._build_list_condition(
-                gene_selector, "gene", gene_count
-            )
-        else:
-            # Single index
-            if gene_count is None:
-                raise ValueError("gene_count must be provided for index selectors")
-            gene_condition = QueryOptimizer._build_single_index_condition(
-                gene_selector, "gene", gene_count
-            )
+        # Use unified selector processing
+        cell_condition = QueryOptimizer._process_selector(
+            cell_selector, "cell", cell_count or 0, "cell_count"
+        )
+        gene_condition = QueryOptimizer._process_selector(
+            gene_selector, "gene", gene_count or 0, "gene_count"
+        )
 
         # Build final query
         where_clause = f"{cell_condition} AND {gene_condition}"
@@ -428,6 +434,65 @@ class RowIndexMapper:
         self._cell_count = slaf_array.shape[0]
         self._gene_count = slaf_array.shape[1]
 
+    def _normalize_selector_indices(self, selector: Any, max_size: int) -> list[int]:
+        """
+        Normalize selector indices to a list of valid indices
+
+        Args:
+            selector: Selector of any supported type
+            max_size: Maximum size of the dimension
+
+        Returns:
+            List of normalized indices
+        """
+        if selector is None:
+            return list(range(max_size))
+
+        if isinstance(selector, int):
+            # Single index
+            normalized_idx = QueryOptimizer._normalize_index(selector, max_size)
+            if normalized_idx < max_size:
+                return [normalized_idx]
+            else:
+                raise ValueError(f"Cell index {selector} out of bounds")
+
+        elif isinstance(selector, slice):
+            # Slice selector
+            start, stop, step = QueryOptimizer._normalize_slice_indices(
+                selector, max_size
+            )
+            return list(range(start, stop, step))
+
+        elif isinstance(selector, list):
+            # List of indices
+            if len(selector) == 0:
+                return []
+
+            indices_array = np.array(selector)
+            # Handle negative indices vectorized
+            negative_mask = indices_array < 0
+            indices_array[negative_mask] += max_size
+
+            # Check bounds
+            if np.any((indices_array < 0) | (indices_array >= max_size)):
+                invalid_indices = indices_array[
+                    (indices_array < 0) | (indices_array >= max_size)
+                ]
+                raise ValueError(f"Indices out of bounds: {invalid_indices.tolist()}")
+
+            return indices_array.tolist()
+
+        elif isinstance(selector, np.ndarray) and selector.dtype == bool:
+            # Boolean mask
+            if len(selector) != max_size:
+                raise ValueError(
+                    f"Boolean mask length {len(selector)} doesn't match size {max_size}"
+                )
+            return np.where(selector)[0].tolist()
+
+        else:
+            raise ValueError(f"Unsupported selector type: {type(selector)}")
+
     def get_cell_row_ranges(self, cell_integer_ids: list[int]) -> list[int]:
         """
         Get row indices for specific cell integer IDs using cumulative sums.
@@ -511,94 +576,19 @@ class RowIndexMapper:
         Returns:
             List of row indices for the selected cells
         """
-        if cell_selector is None:
-            # Return all row indices - use the last value of cumulative sum
-            total_genes = self.slaf_array._cell_start_index[-1]
-            return list(range(total_genes))
+        # Use unified selector processing
+        cell_indices = self._normalize_selector_indices(cell_selector, self._cell_count)
 
-        # Convert selector to cell integer IDs using vectorized operations
-        if isinstance(cell_selector, int):
-            # Single cell index
-            if cell_selector < 0:
-                cell_selector = self._cell_count + cell_selector
-            if 0 <= cell_selector < self._cell_count:
-                cell_integer_id = self.slaf_array.obs["cell_integer_id"][cell_selector]
-                return self.get_cell_row_ranges([cell_integer_id])
-            else:
-                raise ValueError(f"Cell index {cell_selector} out of bounds")
+        if not cell_indices:
+            return []
 
-        elif isinstance(cell_selector, slice):
-            # Slice selector - use vectorized slicing
-            start = cell_selector.start or 0
-            stop = cell_selector.stop or self._cell_count
-            step = cell_selector.step or 1
-
-            # Handle negative indices
-            if start < 0:
-                start = self._cell_count + start
-            if stop < 0:
-                stop = self._cell_count + stop
-
-            # Clamp bounds
-            start = max(0, min(start, self._cell_count))
-            stop = max(0, min(stop, self._cell_count))
-
-            # Get cell integer IDs for the slice (vectorized)
-            cell_integer_ids = self.slaf_array.obs["cell_integer_id"][
-                start:stop:step
-            ].to_list()
-            return self.get_cell_row_ranges(cell_integer_ids)
-
-        elif isinstance(cell_selector, list):
-            # List of indices - handle vectorized with bounds checking
-            if len(cell_selector) == 0:
-                return []
-
-            # Convert negative indices and validate bounds
-            indices_array = np.array(cell_selector)
-
-            # Handle negative indices vectorized
-            negative_mask = indices_array < 0
-            indices_array[negative_mask] += self._cell_count
-
-            # Check bounds
-            if np.any((indices_array < 0) | (indices_array >= self._cell_count)):
-                invalid_indices = indices_array[
-                    (indices_array < 0) | (indices_array >= self._cell_count)
-                ]
-                raise ValueError(
-                    f"Cell indices out of bounds: {invalid_indices.tolist()}"
-                )
-
-            # Get cell integer IDs vectorized
-            cell_integer_ids = (
-                self.slaf_array.obs["cell_integer_id"]
-                .gather(pl.Series(indices_array.tolist()))
-                .to_list()
-            )
-            return self.get_cell_row_ranges(cell_integer_ids)
-
-        elif isinstance(cell_selector, np.ndarray) and cell_selector.dtype == bool:
-            # Boolean mask
-            if len(cell_selector) != self._cell_count:
-                raise ValueError(
-                    f"Boolean mask length {len(cell_selector)} doesn't match cell count {self._cell_count}"
-                )
-
-            # Convert boolean mask to indices and get cell integer IDs
-            indices = np.where(cell_selector)[0]
-            if len(indices) == 0:
-                return []
-
-            cell_integer_ids = (
-                self.slaf_array.obs["cell_integer_id"]
-                .gather(pl.Series(indices.tolist()))
-                .to_list()
-            )
-            return self.get_cell_row_ranges(cell_integer_ids)
-
-        else:
-            raise ValueError(f"Unsupported cell selector type: {type(cell_selector)}")
+        # Get cell integer IDs vectorized
+        cell_integer_ids = (
+            self.slaf_array.obs["cell_integer_id"]
+            .gather(pl.Series(cell_indices))
+            .to_list()
+        )
+        return self.get_cell_row_ranges(cell_integer_ids)
 
 
 class PerformanceMetrics:
