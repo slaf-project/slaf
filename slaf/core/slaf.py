@@ -300,9 +300,14 @@ class SLAFArray:
         if "n_genes" in self._obs.columns:
             # Use existing n_genes column
             cumsum = self._obs["n_genes"].cum_sum()
+        elif "gene_count" in self._obs.columns:
+            # Use existing gene_count column
+            cumsum = self._obs["gene_count"].cum_sum()
         else:
             # Calculate n_genes per cell from expression data
-            logger.info("n_genes column not found, calculating from expression data...")
+            logger.info(
+                "n_genes or gene_count column not found, calculating from expression data..."
+            )
 
             # Query expression data to count genes per cell
             gene_counts_query = """
