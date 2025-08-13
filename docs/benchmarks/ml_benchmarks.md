@@ -75,13 +75,13 @@ SLAF supports two loading strategies: fragment-based and batch-based loading. Fr
 | Fragment-Based Loading | 21,735                 | 229,669     | 7,180         |
 | Batch-Based Loading    | 19,512                 | 195,356     | 6,441         |
 
-!!! success "Fragment Strategy Advantage"
+!!! note "Fragment Strategy Performance"
 
-    Fragment-based loading provides **11.4% higher throughput** than batch-based loading, demonstrating that processing larger data chunks (fragments) is more efficient than processing smaller chunks (batches). This is likely due to reduced overhead from fragment boundary management and better memory locality.
+    Fragment-based loading shows modestly higher throughput than batch-based loading in this benchmark, but test-retest repeatability shows high variance. The performance difference should not be overinterpreted as it may vary significantly across different runs and hardware configurations.
 
 !!! info "Strategy Selection"
 
-    Fragment-based loading is the default strategy in SLAF as it provides better performance and higher entropy (better randomness) due to processing larger, naturally random data chunks. Batch-based loading is available as an alternative for specific use cases where smaller chunk sizes are preferred.
+    Batch-based loading is the default strategy in SLAF as it has lower memory overhead. Fragment-based loading is available as an alternative with just a single additional argument (`by_fragment=True`) to the SLAFDataLoader for users who prefer processing larger data chunks.
 
 ### **Tokenized Mode: Tokens/sec Scaling**
 
@@ -114,7 +114,7 @@ We compared SLAF against three state-of-the-art dataloaders:
 
 ### **Methodology**
 
-To match the benchmarks from the [scDataset paper](https://arxiv.org/pdf/2506.01883) as closely as possible, we used a `batch_size=64` across all comparisons. For scDataset itself, we used the optimal parameters from the paper: `block_size=4`, `fetch_factor=16`. However, we couldn't use `num_workers=12` out of the box because h5ad datasets aren't pickle-able and PyTorch DataLoaders expect this since they use multiprocessing.
+To match the benchmarks from the [scDataset paper](https://arxiv.org/pdf/2506.01883) as closely as possible, we used a `batch_size=64` across all comparisons. For scDataset itself, we used the optimal parameters in our hardware (`block_size=8`, `fetch_factor=64`, which were different from the ones found to be optimal in the paper). However, we couldn't use `num_workers=12` out of the box because h5ad datasets aren't pickle-able and PyTorch DataLoaders expect this since they use multiprocessing.
 
 ### **Tier 1: Raw Data Loading Comparison**
 
