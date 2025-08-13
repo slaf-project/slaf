@@ -66,6 +66,23 @@ Raw mode bypasses tokenization and returns Polars DataFrames that have the exact
 
     Raw mode throughput shows **1.3x improvement** from batch size 32 to 256, demonstrating that SLAF's data loading pipeline scales efficiently with larger batch sizes while maintaining high performance.
 
+### **Fragment vs Batch Loading Comparison**
+
+SLAF supports two loading strategies: fragment-based and batch-based loading. Fragment-based loading processes entire Lance fragments at once, while batch-based loading processes multiple Lance batches sequentially.
+
+| Strategy               | Throughput (cells/sec) | Total Cells | Total Batches |
+| ---------------------- | ---------------------- | ----------- | ------------- |
+| Fragment-Based Loading | 21,735                 | 229,669     | 7,180         |
+| Batch-Based Loading    | 19,512                 | 195,356     | 6,441         |
+
+!!! success "Fragment Strategy Advantage"
+
+    Fragment-based loading provides **11.4% higher throughput** than batch-based loading, demonstrating that processing larger data chunks (fragments) is more efficient than processing smaller chunks (batches). This is likely due to reduced overhead from fragment boundary management and better memory locality.
+
+!!! info "Strategy Selection"
+
+    Fragment-based loading is the default strategy in SLAF as it provides better performance and higher entropy (better randomness) due to processing larger, naturally random data chunks. Batch-based loading is available as an alternative for specific use cases where smaller chunk sizes are preferred.
+
 ### **Tokenized Mode: Tokens/sec Scaling**
 
 Tokenized mode provides pre-tokenized sequences ready for GPU training, demonstrating SLAF's end-to-end pipeline performance.

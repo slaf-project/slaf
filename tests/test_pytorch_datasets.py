@@ -86,6 +86,126 @@ class TestSLAFIterableDataset:
         assert hasattr(processor, "expression_dataset")
         assert hasattr(processor, "batch_generator")
 
+    def test_prefetch_batch_processor_fragment_parameter(self, tiny_slaf):
+        """Test the by_fragment parameter in PrefetchBatchProcessor."""
+        window = ScGPTWindow()
+        shuffle = RandomShuffle()
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        # Test fragment-based loading
+        processor_fragment = PrefetchBatchProcessor(
+            slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
+            tokenizer=tokenizer,
+            batch_size=32,
+            verbose=False,
+            by_fragment=True,
+        )
+
+        assert processor_fragment.by_fragment is True
+
+        # Test batch-based loading
+        processor_batch = PrefetchBatchProcessor(
+            slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
+            tokenizer=tokenizer,
+            batch_size=32,
+            verbose=False,
+            by_fragment=False,
+        )
+
+        assert processor_batch.by_fragment is False
+
+    def test_prefetch_batch_processor_reset_fragment(self, tiny_slaf):
+        """Test processor epoch reset in fragment mode."""
+        window = ScGPTWindow()
+        shuffle = RandomShuffle()
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        processor = PrefetchBatchProcessor(
+            slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
+            tokenizer=tokenizer,
+            batch_size=32,
+            n_epochs=3,
+            verbose=False,
+            by_fragment=True,
+        )
+
+        # Test reset for epoch
+        processor.reset_for_epoch(1)
+        assert processor.current_epoch == 1
+        assert processor.batch_id == 0
+
+    def test_prefetch_batch_processor_reset_batch(self, tiny_slaf):
+        """Test processor epoch reset in batch mode."""
+        window = ScGPTWindow()
+        shuffle = RandomShuffle()
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        processor = PrefetchBatchProcessor(
+            slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
+            tokenizer=tokenizer,
+            batch_size=32,
+            n_epochs=3,
+            verbose=False,
+            by_fragment=False,
+        )
+
+        # Test reset for epoch
+        processor.reset_for_epoch(1)
+        assert processor.current_epoch == 1
+        assert processor.batch_id == 0
+
+    def test_prefetch_batch_processor_load_fragment(self, tiny_slaf):
+        """Test processor batch loading in fragment mode."""
+        window = ScGPTWindow()
+        shuffle = RandomShuffle()
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        processor = PrefetchBatchProcessor(
+            slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
+            tokenizer=tokenizer,
+            batch_size=32,
+            verbose=False,
+            by_fragment=True,
+        )
+
+        # Test that we can load batches
+        batch = processor.load_prefetch_batch()
+        assert hasattr(batch, "input_ids")
+        assert hasattr(batch, "attention_mask")
+        assert hasattr(batch, "cell_integer_ids")
+
+    def test_prefetch_batch_processor_load_batch_mode(self, tiny_slaf):
+        """Test processor batch loading in batch mode."""
+        window = ScGPTWindow()
+        shuffle = RandomShuffle()
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        processor = PrefetchBatchProcessor(
+            slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
+            tokenizer=tokenizer,
+            batch_size=32,
+            verbose=False,
+            by_fragment=False,
+        )
+
+        # Test that we can load batches
+        batch = processor.load_prefetch_batch()
+        assert hasattr(batch, "input_ids")
+        assert hasattr(batch, "attention_mask")
+        assert hasattr(batch, "cell_integer_ids")
+
     def test_prefetch_batch_dataclass(self):
         """Test PrefetchBatch dataclass"""
         # Create mock tensors
@@ -730,6 +850,122 @@ class TestPrefetchBatchProcessing:
 
         assert processor.n_expression_bins == 10
         assert processor.use_binned_expressions is True
+
+    def test_dataset_fragment_parameter(self, tiny_slaf):
+        """Test the by_fragment parameter functionality."""
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        # Test fragment-based loading
+        dataset_fragment = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=tokenizer,
+            batch_size=32,
+            verbose=False,
+            by_fragment=True,
+        )
+
+        assert dataset_fragment.by_fragment is True
+
+        # Test batch-based loading
+        dataset_batch = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=tokenizer,
+            batch_size=32,
+            verbose=False,
+            by_fragment=False,
+        )
+
+        assert dataset_batch.by_fragment is False
+
+    def test_dataset_iteration_fragment_mode(self, tiny_slaf):
+        """Test dataset iteration in fragment mode."""
+        tokenizer = SLAFTokenizer(tiny_slaf)
+        dataset = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=tokenizer,
+            batch_size=32,
+            verbose=False,
+            by_fragment=True,
+        )
+
+        # Test that we can iterate through batches
+        batch_count = 0
+        for batch in dataset:
+            assert "input_ids" in batch
+            assert "attention_mask" in batch
+            assert "cell_ids" in batch
+            batch_count += 1
+            if batch_count >= 3:  # Just test first few batches
+                break
+
+        assert batch_count > 0
+
+    def test_dataset_iteration_batch_mode(self, tiny_slaf):
+        """Test dataset iteration in batch mode."""
+        tokenizer = SLAFTokenizer(tiny_slaf)
+        dataset = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=tokenizer,
+            batch_size=32,
+            verbose=False,
+            by_fragment=False,
+        )
+
+        # Test that we can iterate through batches
+        batch_count = 0
+        for batch in dataset:
+            assert "input_ids" in batch
+            assert "attention_mask" in batch
+            assert "cell_ids" in batch
+            batch_count += 1
+            if batch_count >= 3:  # Just test first few batches
+                break
+
+        assert batch_count > 0
+
+    def test_dataset_raw_mode_fragment(self, tiny_slaf):
+        """Test dataset in raw mode with fragment loading."""
+        dataset = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=None,
+            batch_size=32,
+            raw_mode=True,
+            verbose=False,
+            by_fragment=True,
+        )
+
+        # Test that we can iterate through raw batches
+        batch_count = 0
+        for batch in dataset:
+            assert "cell_ids" in batch
+            assert "x" in batch
+            batch_count += 1
+            if batch_count >= 3:  # Just test first few batches
+                break
+
+        assert batch_count > 0
+
+    def test_dataset_raw_mode_batch(self, tiny_slaf):
+        """Test dataset in raw mode with batch loading."""
+        dataset = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=None,
+            batch_size=32,
+            raw_mode=True,
+            verbose=False,
+            by_fragment=False,
+        )
+
+        # Test that we can iterate through raw batches
+        batch_count = 0
+        for batch in dataset:
+            assert "cell_ids" in batch
+            assert "x" in batch
+            batch_count += 1
+            if batch_count >= 3:  # Just test first few batches
+                break
+
+        assert batch_count > 0
 
 
 if __name__ == "__main__":

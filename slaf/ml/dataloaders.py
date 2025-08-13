@@ -228,6 +228,7 @@ class SLAFDataLoader:
         raw_mode: bool = False,  # Add raw_mode parameter
         verbose: bool = True,  # Add verbose parameter
         batches_per_chunk: int = 50,  # Add batches_per_chunk parameter
+        by_fragment: bool = False,  # Add by_fragment parameter for fragment-based loading
     ):
         """
         Initialize the SLAF DataLoader with training configuration.
@@ -256,6 +257,12 @@ class SLAFDataLoader:
             verbose: If True, print detailed timing and progress information.
                     If False, suppress all SLAF internal prints for clean output.
                     Default: True.
+            batches_per_chunk: Number of Lance batches to load per chunk for batch-based loading.
+                             Higher values use more memory but may improve throughput.
+                             Range: 10-200, default: 50.
+            by_fragment: If True, use fragment-based loading instead of batch-based loading.
+                        Fragment-based loading provides higher entropy but may be slightly slower.
+                        Default: False.
 
         Raises:
             ValueError: If tokenizer_type is not supported or parameters are invalid.
@@ -296,6 +303,14 @@ class SLAFDataLoader:
             >>> print(f"Raw mode: {dataloader.raw_mode}")
             Raw mode: True
 
+            >>> # Fragment-based loading for higher entropy
+            >>> dataloader = SLAFDataLoader(
+            ...     slaf_array=slaf_array,
+            ...     by_fragment=True
+            ... )
+            >>> print(f"Fragment-based loading: {dataloader.by_fragment}")
+            Fragment-based loading: True
+
             >>> # Error handling for invalid tokenizer type
             >>> try:
             ...     dataloader = SLAFDataLoader(slaf_array, tokenizer_type="invalid")
@@ -318,6 +333,7 @@ class SLAFDataLoader:
         self.raw_mode = raw_mode  # Add raw_mode attribute
         self.verbose = verbose  # Add verbose attribute
         self.batches_per_chunk = batches_per_chunk  # Add batches_per_chunk attribute
+        self.by_fragment = by_fragment  # Add by_fragment attribute
 
         # Device-agnostic: always return CPU tensors
         self.device = None
@@ -356,6 +372,7 @@ class SLAFDataLoader:
             raw_mode=raw_mode,  # Pass raw_mode to dataset
             verbose=verbose,  # Pass verbose to dataset
             batches_per_chunk=batches_per_chunk,  # Pass batches_per_chunk to dataset
+            by_fragment=by_fragment,  # Pass by_fragment to dataset
         )
 
     def __iter__(self):
@@ -441,17 +458,17 @@ class SLAFDataLoader:
 
         Note: Since SLAFDataLoader uses an IterableDataset that streams data,
         the exact number of batches is not known in advance. This method
-        returns -1 to indicate an unknown length.
+        returns 0 to indicate an unknown length for streaming datasets.
 
         Returns:
-            int: Always returns -1 to indicate unknown length for streaming datasets.
+            int: Always returns 0 to indicate unknown length for streaming datasets.
 
         Examples:
             >>> # Check dataset length
             >>> slaf_array = SLAFArray("path/to/data.slaf")
             >>> dataloader = SLAFDataLoader(slaf_array)
             >>> print(f"Dataset length: {len(dataloader)}")
-            Dataset length: -1
+            Dataset length: 0
 
             >>> # IterableDataset behavior
             >>> batch_count = 0
@@ -464,9 +481,9 @@ class SLAFDataLoader:
 
             >>> # Length is consistent
             >>> print(f"Length check: {len(dataloader)}")
-            Length check: -1
+            Length check: 0
         """
-        return -1  # Indicates unknown length
+        return 0  # Indicates unknown length
 
     def __del__(self):
         """

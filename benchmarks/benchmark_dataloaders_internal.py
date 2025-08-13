@@ -66,6 +66,17 @@ class ScalingResult:
     total_batches: int
 
 
+@dataclass
+class FragmentVsBatchResult:
+    """Results from fragment vs batch loading comparison."""
+
+    strategy: str  # "fragment" or "batch"
+    throughput_cells_per_sec: float
+    total_cells: int
+    total_batches: int
+    measurement_time: float
+
+
 class InternalDataloaderBenchmark:
     """Benchmark SLAF dataloaders with different tokenization strategies."""
 
@@ -662,6 +673,172 @@ class InternalDataloaderBenchmark:
             return max_throughput / min_throughput
         return 1.0
 
+    def benchmark_fragment_vs_batch(self) -> list[FragmentVsBatchResult]:
+        """Benchmark fragment-based vs batch-based loading strategies."""
+
+        self.console.print(
+            Panel.fit(
+                "[bold green]SLAF Fragment vs Batch Loading Benchmark[/bold green]\n"
+                "Testing fragment-based vs batch-based loading strategies",
+                border_style="green",
+            )
+        )
+
+        strategies = [
+            ("fragment", True),
+            ("batch", False),
+        ]
+
+        results = []
+
+        for strategy_name, by_fragment in strategies:
+            self.console.print(
+                f"\n[bold blue]Testing {strategy_name}-based loading...[/bold blue]"
+            )
+
+            # Create dataloader with fragment or batch strategy
+            dataloader = SLAFDataLoader(
+                slaf_array=self.slaf_array,
+                batch_size=32,
+                n_epochs=1000,
+                raw_mode=True,
+                verbose=False,
+                by_fragment=by_fragment,
+            )
+
+            # Warm up
+            self.console.print("  Warming up...")
+            warmup_batches = 3
+            for i, _batch in enumerate(dataloader):
+                if i >= warmup_batches:
+                    break
+
+            # Measurement phase
+            self.console.print("  Measuring...")
+            start_time = time.time()
+            measurement_duration = 10.0
+
+            total_cells = 0
+            batch_count = 0
+
+            with self.create_progress_bar(
+                f"Training: {strategy_name}-based loading", "training"
+            ) as pbar:
+                for batch in dataloader:
+                    batch_count += 1
+
+                    # Count cells from the batch
+                    if "cell_ids" in batch:
+                        batch_size = len(batch["cell_ids"])
+                    else:
+                        batch_size = 32  # Fallback
+
+                    total_cells += batch_size
+
+                    # Calculate current throughput
+                    elapsed = time.time() - start_time
+                    current_throughput = total_cells / elapsed if elapsed > 0 else 0
+
+                    # Update progress bar
+                    batch_info = {
+                        "total_time": 0,  # Not tracking individual batch times
+                        "throughput": current_throughput,
+                        "cells": batch_size,
+                    }
+
+                    postfix = self.format_training_postfix(batch_info)
+                    pbar.set_postfix_str(postfix)
+                    pbar.update(1)
+
+                    # Stop after measurement duration
+                    if elapsed >= measurement_duration:
+                        break
+
+            elapsed_time = time.time() - start_time
+
+            # Clean up
+            del dataloader
+            gc.collect()
+
+            # Calculate metrics
+            throughput_cells_per_sec = (
+                total_cells / elapsed_time if elapsed_time > 0 else 0
+            )
+
+            result = FragmentVsBatchResult(
+                strategy=strategy_name,
+                throughput_cells_per_sec=throughput_cells_per_sec,
+                total_cells=total_cells,
+                total_batches=batch_count,
+                measurement_time=elapsed_time,
+            )
+
+            results.append(result)
+
+            self.console.print(
+                f"  Result: {throughput_cells_per_sec:.0f} cells/sec, {total_cells:,} cells, {batch_count} batches"
+            )
+
+        return results
+
+    def print_fragment_vs_batch_results(self, results: list[FragmentVsBatchResult]):
+        """Print fragment vs batch results in a formatted table."""
+
+        self.console.print(
+            "\n[bold blue]Fragment vs Batch Loading Performance[/bold blue]"
+        )
+        table = Table(title="Fragment vs Batch Loading Comparison")
+
+        table.add_column("Strategy", style="cyan", no_wrap=True)
+        table.add_column("Throughput (cells/sec)", style="magenta", justify="right")
+        table.add_column("Total Cells", style="blue", justify="right")
+        table.add_column("Total Batches", style="blue", justify="right")
+
+        for result in results:
+            table.add_row(
+                f"{result.strategy.capitalize()}-Based Loading",
+                f"{result.throughput_cells_per_sec:.0f}",
+                f"{result.total_cells:,}",
+                f"{result.total_batches}",
+            )
+
+        self.console.print(table)
+
+        # Calculate performance comparison
+        if len(results) == 2:
+            fragment_result = next(r for r in results if r.strategy == "fragment")
+            batch_result = next(r for r in results if r.strategy == "batch")
+
+            if batch_result.throughput_cells_per_sec > 0:
+                throughput_improvement = (
+                    fragment_result.throughput_cells_per_sec
+                    / batch_result.throughput_cells_per_sec
+                    - 1
+                ) * 100
+            else:
+                throughput_improvement = (
+                    float("inf") if fragment_result.throughput_cells_per_sec > 0 else 0
+                )
+
+            self.console.print("\n[bold green]Performance Comparison[/bold green]")
+            self.console.print(
+                f"Fragment vs Batch throughput: {throughput_improvement:+.1f}%"
+            )
+
+            # Add insights
+            if throughput_improvement > 0:
+                self.console.print(
+                    "\n[bold yellow]Key Insight:[/bold yellow] Fragment-based loading provides higher throughput."
+                )
+            elif throughput_improvement < 0:
+                self.console.print(
+                    "\n[bold yellow]Key Insight:[/bold yellow] Batch-based loading provides higher throughput."
+                )
+            else:
+                self.console.print(
+                    "\n[bold yellow]Key Insight:[/bold yellow] Both strategies provide similar throughput."
+                )
+
 
 def main():
     """Run the internal dataloader benchmarks."""
@@ -678,6 +855,10 @@ def main():
     # Run batch scaling benchmarks
     scaling_results = benchmark.run_scaling_benchmarks()
     benchmark.print_scaling_results(scaling_results)
+
+    # Run fragment vs batch benchmark
+    fragment_vs_batch_results = benchmark.benchmark_fragment_vs_batch()
+    benchmark.print_fragment_vs_batch_results(fragment_vs_batch_results)
 
 
 if __name__ == "__main__":
