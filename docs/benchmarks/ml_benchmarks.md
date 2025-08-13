@@ -33,20 +33,55 @@ We used the [SLAF converter](../api/data/#slafconverter) (see [Migrating to SLAF
 
 We used a batch size of 32, 3 warmup batches, and a measurement duration of 10 seconds for all internal benchmarks.
 
+### **Tokenization Strategy Comparison**
+
+We benchmarked different tokenization strategies to understand the performance impact of various preprocessing options:
+
+| Tokenization Strategy                   | Throughput (cells/sec) | Throughput (tokens/sec) |
+| --------------------------------------- | ---------------------- | ----------------------- |
+| scGPT with binning                      | 6,633                  | 13,598,202              |
+| scGPT without binning                   | 6,750                  | 13,839,536              |
+| Geneformer with percentile filtering    | 9,246                  | 18,937,785              |
+| Geneformer without percentile filtering | 9,496                  | 19,448,877              |
+| Raw mode (no tokenization)              | 25,184                 | N/A                     |
+
+!!! success "Strategy Insights"
+
+    - **Geneformer strategies** show ~40% higher throughput than scGPT strategies
+    - **Binning and filtering** have minimal performance impact (~2% difference)
+    - **Raw mode** provides 2.8x higher throughput than tokenized modes, demonstrating the tokenization overhead
+
 ### **Raw Mode Performance Scaling**
 
 Raw mode bypasses tokenization and returns Polars DataFrames that have the exact schema as sparse CSR tensors, demonstrating SLAF's base data loading performance.
 
 | Batch Size | Throughput (cells/sec) | Total Cells | Measurement Time (s) |
 | ---------- | ---------------------- | ----------- | -------------------- |
-| 32         | 25,272                 | 252,733     | 10.0                 |
-| 64         | 24,937                 | 249,685     | 10.0                 |
-| 128        | 25,748                 | 257,671     | 10.0                 |
-| 256        | 24,098                 | 241,176     | 10.0                 |
+| 32         | 24,140                 | 241,412     | 10.0                 |
+| 64         | 28,084                 | 280,851     | 10.0                 |
+| 128        | 29,545                 | 295,637     | 10.0                 |
+| 256        | 30,575                 | 305,770     | 10.0                 |
 
 !!! success "Optimization Validation"
 
-    Raw mode throughput remains remarkably consistent across batch sizes, indicating that SLAF's data loading pipeline is well-optimized and not bottlenecked by batch size variations.
+    Raw mode throughput shows **1.3x improvement** from batch size 32 to 256, demonstrating that SLAF's data loading pipeline scales efficiently with larger batch sizes while maintaining high performance.
+
+### **Fragment vs Batch Loading Comparison**
+
+SLAF supports two loading strategies: fragment-based and batch-based loading. Fragment-based loading processes entire Lance fragments at once, while batch-based loading processes multiple Lance batches sequentially.
+
+| Strategy               | Throughput (cells/sec) | Total Cells | Total Batches |
+| ---------------------- | ---------------------- | ----------- | ------------- |
+| Fragment-Based Loading | 21,735                 | 229,669     | 7,180         |
+| Batch-Based Loading    | 19,512                 | 195,356     | 6,441         |
+
+!!! note "Fragment Strategy Performance"
+
+    Fragment-based loading shows modestly higher throughput than batch-based loading in this benchmark, but test-retest repeatability shows high variance. The performance difference should not be overinterpreted as it may vary significantly across different runs and hardware configurations.
+
+!!! info "Strategy Selection"
+
+    Batch-based loading is the default strategy in SLAF as it has lower memory overhead. Fragment-based loading is available as an alternative with just a single additional argument (`by_fragment=True`) to the SLAFDataLoader for users who prefer processing larger data chunks.
 
 ### **Tokenized Mode: Tokens/sec Scaling**
 
@@ -54,14 +89,14 @@ Tokenized mode provides pre-tokenized sequences ready for GPU training, demonstr
 
 | Batch Size | Throughput (cells/sec) | Throughput (tokens/sec) | Total Cells | Measurement Time (s) |
 | ---------- | ---------------------- | ----------------------- | ----------- | -------------------- |
-| 32         | 8,889                  | 18,205,336              | 89,100      | 10.0                 |
-| 64         | 9,388                  | 19,227,176              | 93,927      | 10.0                 |
-| 128        | 9,368                  | 19,185,090              | 93,991      | 10.0                 |
-| 256        | 9,562                  | 19,583,937              | 95,875      | 10.0                 |
+| 32         | 9,334                  | 19,115,469              | 93,604      | 10.0                 |
+| 64         | 9,296                  | 19,037,797              | 93,025      | 10.0                 |
+| 128        | 9,254                  | 18,951,337              | 92,766      | 10.0                 |
+| 256        | 9,387                  | 19,225,378              | 94,119      | 10.0                 |
 
 !!! success "Tokenization Efficiency"
 
-    Token throughput remains constant across batch sizes, demonstrating that SLAF's tokenization pipeline is not the bottleneck. This validates that tokens/sec is the meaningful metric for GPU training workloads.
+    Token throughput remains remarkably constant across batch sizes (1.0x scaling), demonstrating that SLAF's tokenization pipeline is well-optimized and not the bottleneck. This validates that tokens/sec is the meaningful metric for GPU training workloads.
 
 ## **External Benchmarks**
 
@@ -79,7 +114,7 @@ We compared SLAF against three state-of-the-art dataloaders:
 
 ### **Methodology**
 
-To match the benchmarks from the [scDataset paper](https://arxiv.org/pdf/2506.01883) as closely as possible, we used a `batch_size=64` across all comparisons. For scDataset itself, we used the optimal parameters from the paper: `block_size=4`, `fetch_factor=16`. However, we couldn't use `num_workers=12` out of the box because h5ad datasets aren't pickle-able and PyTorch DataLoaders expect this since they use multiprocessing.
+To match the benchmarks from the [scDataset paper](https://arxiv.org/pdf/2506.01883) as closely as possible, we used a `batch_size=64` across all comparisons. For scDataset itself, we used the optimal parameters in our hardware (`block_size=8`, `fetch_factor=64`, which were different from the ones found to be optimal in the paper). However, we couldn't use `num_workers=12` out of the box because h5ad datasets aren't pickle-able and PyTorch DataLoaders expect this since they use multiprocessing.
 
 ### **Tier 1: Raw Data Loading Comparison**
 
@@ -87,18 +122,18 @@ Raw data loading performance measures the base throughput of each system without
 
 | System        | Throughput (cells/sec) |
 | ------------- | ---------------------- |
-| **SLAF**      | **23,053**             |
-| scDataset     | 10,976                 |
-| AnnDataLoader | 372                    |
-| AnnLoader     | 206                    |
+| **SLAF**      | **22,451**             |
+| scDataset     | 10,785                 |
+| AnnDataLoader | 392                    |
+| AnnLoader     | 240                    |
 
 !!! success "SOTA Performance"
 
-    SLAF achieves **2.1x higher throughput** than scDataset and **62x higher throughput** than AnnDataLoader in raw data loading.
+    SLAF achieves **2.1x higher throughput** than scDataset and **57x higher throughput** than AnnDataLoader in raw data loading.
 
 !!! info "scDataset Performance Analysis"
 
-    Our comprehensive benchmarks reveal that scDataset can achieve excellent performance with proper parameter tuning. We observed **10,976 cells/sec** with optimal parameters (`block_size=8, fetch_factor=64`), which is **5.5x higher** than the paper's reported ~2,000 cells/sec, even without using multiprocessing. Note that these are completely different systems though (M1 Max vs NVIDIA DGX CPU).
+    Our comprehensive benchmarks reveal that scDataset can achieve excellent performance with proper parameter tuning. We observed **10,785 cells/sec** with optimized parameters, which is **5.4x higher** than the paper's reported ~2,000 cells/sec, even without using multiprocessing. Note that these are completely different systems though (M1 Max vs NVIDIA DGX CPU).
 
     However, we found significant limitations with multiprocessing due to pickling issues with h5py-backed AnnData objects. See our [detailed scDataset benchmarks](scdataset_benchmarks.md) for complete analysis including parameter scaling and multiprocessing limitations.
 
@@ -116,11 +151,11 @@ Raw data loading benchmarks are great, provided that we intend to train on gene 
 
 This GPU-ready throughput measures end-to-end performance including tokenization (that includes windowing, ranking, vocabulary mapping and padding), which is critical for training workflows involving models that turn cells into sentences.
 
-Even though SLAF's tokenizing dataloaders do more work, we find that their throughput exceeds scDataset's raw-data dataloader by 15-20x.
+Even though SLAF's tokenizing dataloaders do more work, we find that their throughput exceeds scDataset's raw-data dataloader by 1.8x.
 
 | System   | Throughput (cells/sec) | Throughput (tokens/sec) |
 | -------- | ---------------------- | ----------------------- |
-| **SLAF** | **9,575**              | **19,610,025**          |
+| **SLAF** | **8,415**              | **17,234,044**          |
 
 !!! success "GPU-Ready Cell Sentences"
 
@@ -138,7 +173,7 @@ Even though SLAF's tokenizing dataloaders do more work, we find that their throu
 
 !!! info "In-memory formats matter"
 
-    The performance difference between AnnDataLoader (372 cells/sec) and scDataset (10,976 cells/sec) is dramatic. While scDataset is smarter at batching and randomization, since our benchmark tests them on loading from h5ad, it's important to compare apples to apples dataloader outputs. AnnDataLoader and AnnLoader return `torch.sparse_csr` tensors whereas scDataset returns `scipy.sparse.csr_matrix`.
+    The performance difference between AnnDataLoader (392 cells/sec) and scDataset (10,785 cells/sec) is dramatic. While scDataset is smarter at batching and randomization, since our benchmark tests them on loading from h5ad, it's important to compare apples to apples dataloader outputs. AnnDataLoader and AnnLoader return `torch.sparse_csr` tensors whereas scDataset returns `scipy.sparse.csr_matrix`.
 
     In our work, we noticed different overheads for conversion from polars dataframe (SLAF's preferred format for raw data) to torch and scipy sparse formats, and ultimately decided to keep raw outputs in polars. The performance of AnnLoader and AnnDataLoader relative to scDataset is almost certainly due to the overhead of conversion from scipy sparse arrays to torch arrays and worth benchmarking more carefully to identify low-hanging fruit for optimizations in both AnnLoader and AnnDataLoader.
 

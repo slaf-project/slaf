@@ -116,11 +116,6 @@ class TestSLAFDataLoader:
 
         assert batch_count > 0
 
-    def test_dataloader_length(self, tiny_slaf):
-        """Test that dataloader length returns -1 for streaming"""
-        dataloader = SLAFDataLoader(tiny_slaf)
-        assert dataloader.__len__() == -1  # Streaming datasets have unknown length
-
     def test_consistent_batch_sizes(self, tiny_slaf):
         """Test that batches have consistent sizes"""
         dataloader = SLAFDataLoader(tiny_slaf, batch_size=8)
@@ -431,6 +426,149 @@ class TestSLAFDataLoader:
         # Should see some epochs (may not see all epochs in limited test)
         assert len(epochs_seen) >= 1, f"Expected at least 1 epoch, got {epochs_seen}"
         assert batch_count > 0
+
+    def test_dataloader_fragment_parameter(self, tiny_slaf):
+        """Test the by_fragment parameter functionality."""
+        # Test fragment-based loading
+        dataloader_fragment = SLAFDataLoader(
+            tiny_slaf,
+            batch_size=32,
+            raw_mode=True,
+            verbose=False,
+            by_fragment=True,
+        )
+
+        assert dataloader_fragment.by_fragment is True
+
+        # Test batch-based loading
+        dataloader_batch = SLAFDataLoader(
+            tiny_slaf,
+            batch_size=32,
+            raw_mode=True,
+            verbose=False,
+            by_fragment=False,
+        )
+
+        assert dataloader_batch.by_fragment is False
+
+    def test_dataloader_iteration_fragment_mode(self, tiny_slaf):
+        """Test dataloader iteration in fragment mode."""
+        dataloader = SLAFDataLoader(
+            tiny_slaf,
+            batch_size=32,
+            raw_mode=True,
+            verbose=False,
+            by_fragment=True,
+        )
+
+        # Test that we can iterate through batches
+        batch_count = 0
+        for batch in dataloader:
+            assert "cell_ids" in batch
+            assert "x" in batch
+            batch_count += 1
+            if batch_count >= 3:  # Just test first few batches
+                break
+
+        assert batch_count > 0
+
+    def test_dataloader_iteration_batch_mode(self, tiny_slaf):
+        """Test dataloader iteration in batch mode."""
+        dataloader = SLAFDataLoader(
+            tiny_slaf,
+            batch_size=32,
+            raw_mode=True,
+            verbose=False,
+            by_fragment=False,
+        )
+
+        # Test that we can iterate through batches
+        batch_count = 0
+        for batch in dataloader:
+            assert "cell_ids" in batch
+            assert "x" in batch
+            batch_count += 1
+            if batch_count >= 3:  # Just test first few batches
+                break
+
+        assert batch_count > 0
+
+    def test_dataloader_tokenized_mode_fragment(self, tiny_slaf):
+        """Test dataloader in tokenized mode with fragment loading."""
+        dataloader = SLAFDataLoader(
+            tiny_slaf,
+            batch_size=32,
+            raw_mode=False,
+            verbose=False,
+            by_fragment=True,
+        )
+
+        # Test that we can iterate through tokenized batches
+        batch_count = 0
+        for batch in dataloader:
+            assert "input_ids" in batch
+            assert "attention_mask" in batch
+            assert "cell_ids" in batch
+            batch_count += 1
+            if batch_count >= 3:  # Just test first few batches
+                break
+
+        assert batch_count > 0
+
+    def test_dataloader_tokenized_mode_batch(self, tiny_slaf):
+        """Test dataloader in tokenized mode with batch loading."""
+        dataloader = SLAFDataLoader(
+            tiny_slaf,
+            batch_size=32,
+            raw_mode=False,
+            verbose=False,
+            by_fragment=False,
+        )
+
+        # Test that we can iterate through tokenized batches
+        batch_count = 0
+        for batch in dataloader:
+            assert "input_ids" in batch
+            assert "attention_mask" in batch
+            assert "cell_ids" in batch
+            batch_count += 1
+            if batch_count >= 3:  # Just test first few batches
+                break
+
+        assert batch_count > 0
+
+    def test_dataloader_parameters_consistency(self, tiny_slaf):
+        """Test that all parameters are properly passed through."""
+        dataloader = SLAFDataLoader(
+            tiny_slaf,
+            batch_size=64,
+            max_genes=1024,
+            vocab_size=10000,
+            n_expression_bins=5,
+            n_epochs=5,
+            raw_mode=True,
+            verbose=True,
+            batches_per_chunk=25,
+            by_fragment=True,
+        )
+
+        assert dataloader.batch_size == 64
+        assert dataloader.max_genes == 1024
+        assert dataloader.n_epochs == 5
+        assert dataloader.raw_mode is True
+        assert dataloader.verbose is True
+        assert dataloader.batches_per_chunk == 25
+        assert dataloader.by_fragment is True
+
+    def test_dataloader_length(self, tiny_slaf):
+        """Test that dataloader length returns 0 for streaming datasets."""
+        dataloader = SLAFDataLoader(
+            tiny_slaf,
+            batch_size=32,
+            verbose=False,
+        )
+
+        assert len(dataloader) == 0  # Streaming datasets have unknown length (return 0)
 
 
 class TestDeviceDetection:

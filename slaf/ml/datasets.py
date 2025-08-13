@@ -317,6 +317,8 @@ class PrefetchBatchProcessor:
         raw_mode: bool = False,  # Add raw_mode parameter
         verbose: bool = True,  # Add verbose parameter
         log_metrics: bool = False,  # Add log_metrics parameter
+        batch_size: int = 32,  # Add batch_size parameter
+        by_fragment: bool = False,  # Add by_fragment parameter for fragment-based loading
     ):
         """Initialize the PrefetchBatchProcessor."""
         self.slaf_array = slaf_array
@@ -332,7 +334,8 @@ class PrefetchBatchProcessor:
         self.raw_mode = raw_mode
         self.verbose = verbose
         self.log_metrics = log_metrics
-        self.batches_per_chunk = batches_per_chunk
+        self.batch_size = batch_size
+        self.by_fragment = by_fragment
 
         # Initialize state
         self.batch_id = 0
@@ -349,7 +352,13 @@ class PrefetchBatchProcessor:
         self.expression_dataset = lance.dataset(
             f"{self.slaf_array.slaf_path}/expression.lance"
         )
-        self.batch_generator = self.expression_dataset.to_batches()
+
+        if self.by_fragment:
+            # Fragment-based approach: iterate through fragments
+            self.fragment_iterator = iter(self.expression_dataset.get_fragments())
+        else:
+            # Sequential approach: use batch generator
+            self.batch_generator = self.expression_dataset.to_batches()
 
         # Initialize timing variables for consolidated reporting
         self._last_load_time = 0.0
@@ -425,8 +434,11 @@ class PrefetchBatchProcessor:
         self.batch_id = 0
         self.partial_cell_data = {}  # Reset partial cell data
 
-        # Reinitialize the batch generator
-        self.batch_generator = self.expression_dataset.to_batches()
+        # Reinitialize the data iterator
+        if self.by_fragment:
+            self.fragment_iterator = iter(self.expression_dataset.get_fragments())
+        else:
+            self.batch_generator = self.expression_dataset.to_batches()
 
         print_epoch_transition(f"Reset batch generator for epoch {epoch}", self.verbose)
 
@@ -514,33 +526,52 @@ class PrefetchBatchProcessor:
         while True:
             start_time = time.time()
 
-            # Load multiple batches
-            batch_dfs = []
+            # Load data based on strategy
             load_start = time.time()
 
-            for _ in range(self.batches_per_chunk):
+            if self.by_fragment:
+                # Fragment-based approach: load one fragment at a time
                 try:
-                    batch = next(self.batch_generator)
-                    batch_df = pl.from_arrow(batch)
-                    batch_dfs.append(batch_df)
+                    fragment = next(self.fragment_iterator)
+                    combined_df = pl.from_arrow(fragment.to_table())
                 except StopIteration:
-                    break
+                    # Check if we should start a new epoch
+                    if self.current_epoch + 1 < self.n_epochs:
+                        print_epoch_transition(
+                            f"Epoch {self.current_epoch} complete, starting epoch {self.current_epoch + 1}",
+                            self.verbose,
+                        )
+                        self.reset_for_epoch(self.current_epoch + 1)
+                        # Continue the loop to load the first fragment of the new epoch
+                        continue
+                    else:
+                        raise StopIteration("No more epochs available") from None
+            else:
+                # Sequential approach: load multiple batches
+                batch_dfs = []
+                for _ in range(self.batches_per_chunk):
+                    try:
+                        batch = next(self.batch_generator)
+                        batch_df = pl.from_arrow(batch)
+                        batch_dfs.append(batch_df)
+                    except StopIteration:
+                        break
 
-            if not batch_dfs:
-                # Check if we should start a new epoch
-                if self.current_epoch + 1 < self.n_epochs:
-                    print_epoch_transition(
-                        f"Epoch {self.current_epoch} complete, starting epoch {self.current_epoch + 1}",
-                        self.verbose,
-                    )
-                    self.reset_for_epoch(self.current_epoch + 1)
-                    # Continue the loop to load the first batch of the new epoch
-                    continue
-                else:
-                    raise StopIteration("No more epochs available")
+                if not batch_dfs:
+                    # Check if we should start a new epoch
+                    if self.current_epoch + 1 < self.n_epochs:
+                        print_epoch_transition(
+                            f"Epoch {self.current_epoch} complete, starting epoch {self.current_epoch + 1}",
+                            self.verbose,
+                        )
+                        self.reset_for_epoch(self.current_epoch + 1)
+                        # Continue the loop to load the first batch of the new epoch
+                        continue
+                    else:
+                        raise StopIteration("No more epochs available") from None
 
-            # Combine all batches
-            combined_df = pl.concat(batch_dfs)  # type: ignore
+                # Combine all batches
+                combined_df = pl.concat(batch_dfs)  # type: ignore
             load_time = time.time() - load_start
 
             # Record lance loading timing
@@ -555,7 +586,10 @@ class PrefetchBatchProcessor:
 
                 # Store timing info for consolidated report
                 self._last_load_time = load_time
-                self._last_batch_dfs_count = len(batch_dfs)
+                if self.by_fragment:
+                    self._last_batch_dfs_count = 1  # One fragment
+                else:
+                    self._last_batch_dfs_count = len(batch_dfs)
                 self._last_total_rows = combined_df.shape[0]
                 self._last_memory_mb = memory_mb
 
@@ -596,7 +630,7 @@ class PrefetchBatchProcessor:
                     shuffled_chunks = self.shuffle.apply(
                         complete_df,  # type: ignore
                         self.seed + self.batch_id + self.current_epoch * 10000,
-                        batch_size=32,  # TODO: make this configurable
+                        batch_size=self.batch_size,  # Use the configurable batch_size
                     )
 
                     shuffle_time = time.time() - shuffle_start
@@ -619,8 +653,9 @@ class PrefetchBatchProcessor:
                     self.total_prefetch_cells += total_cells_in_chunks
 
                     # Consolidate all prefetch batch reporting into one cyan block
-                    prefetch_report = f"Raw prefetch batch {self.batch_id} (epoch {self.current_epoch}):\n"
-                    prefetch_report += f"   Lance loading: {self._last_load_time * 1000:.1f}ms ({self._last_batch_dfs_count} batches, {self._last_total_rows} rows)\n"
+                    strategy_name = "fragment" if self.by_fragment else "batch"
+                    prefetch_report = f"Raw prefetch {strategy_name} {self.batch_id} (epoch {self.current_epoch}):\n"
+                    prefetch_report += f"   Lance loading: {self._last_load_time * 1000:.1f}ms ({self._last_batch_dfs_count} {strategy_name}es, {self._last_total_rows} rows)\n"
                     prefetch_report += (
                         f"   Processing: {shuffle_time * 1000:.1f}ms shuffle\n"
                     )
@@ -697,8 +732,9 @@ class PrefetchBatchProcessor:
                     # Print consolidated timing breakdown every 10 batches
                     if self.batch_id % 10 == 0:
                         # Consolidate all prefetch batch reporting into one cyan block
-                        prefetch_report = f"Prefetch batch {self.batch_id} (epoch {self.current_epoch}):\n"
-                        prefetch_report += f"   Lance loading: {self._last_load_time * 1000:.1f}ms ({self._last_batch_dfs_count} batches, {self._last_total_rows} rows)\n"
+                        strategy_name = "fragment" if self.by_fragment else "batch"
+                        prefetch_report = f"Prefetch {strategy_name} {self.batch_id} (epoch {self.current_epoch}):\n"
+                        prefetch_report += f"   Lance loading: {self._last_load_time * 1000:.1f}ms ({self._last_batch_dfs_count} {strategy_name}es, {self._last_total_rows} rows)\n"
                         prefetch_report += f"   Processing: {window_time * 1000:.1f}ms window, {shuffle_time * 1000:.1f}ms shuffle, {tokenize_time * 1000:.1f}ms tokenize\n"
                         prefetch_report += f"   Total: {total_time * 1000:.1f}ms, {cells_in_batch} cells, {self._last_memory_mb:.1f} MB"
 
@@ -1104,6 +1140,10 @@ class SLAFIterableDataset(IterableDataset):
         n_epochs: Number of epochs to run. The generator will automatically reset
                  after each epoch, enabling multi-epoch training on small datasets.
                  Default: 1.
+        raw_mode: Whether to process data in raw mode (no windowing/shuffling) (default: False)
+        verbose: Whether to print verbose output (default: True)
+        batches_per_chunk: Number of Lance batches to load per chunk (default: 50)
+        by_fragment: Whether to use fragment-based loading instead of batch-based loading (default: False)
 
     Examples:
         >>> # Single epoch training
@@ -1116,6 +1156,15 @@ class SLAFIterableDataset(IterableDataset):
         >>> dataset = SLAFIterableDataset(slaf_array, tokenizer, n_epochs=10)
         >>> for batch in dataset:
         ...     # Training loop - will automatically go through 10 epochs
+        ...     pass
+
+        >>> # Fragment-based loading for higher entropy
+        >>> dataset = SLAFIterableDataset(
+        ...     slaf_array, tokenizer,
+        ...     by_fragment=True
+        ... )
+        >>> for batch in dataset:
+        ...     # Training loop with fragment-based loading
         ...     pass
     """
 
@@ -1134,6 +1183,7 @@ class SLAFIterableDataset(IterableDataset):
         raw_mode: bool = False,  # Add raw_mode parameter
         verbose: bool = True,  # Add verbose parameter
         batches_per_chunk: int = 50,  # Add batches_per_chunk parameter
+        by_fragment: bool = False,  # Add by_fragment parameter for fragment-based loading
     ):
         super().__init__()
         self.slaf_array = slaf_array
@@ -1149,6 +1199,7 @@ class SLAFIterableDataset(IterableDataset):
         self.n_epochs = n_epochs
         self.raw_mode = raw_mode  # Add raw_mode attribute
         self.verbose = verbose  # Add verbose attribute
+        self.by_fragment = by_fragment  # Add by_fragment attribute
 
         # Pre-allocate cell IDs buffer for better performance
         if TORCH_AVAILABLE:
@@ -1195,10 +1246,12 @@ class SLAFIterableDataset(IterableDataset):
             raw_mode=raw_mode,  # Pass raw_mode to batch processor
             verbose=verbose,  # Pass verbose to batch processor
             log_metrics=False,  # Pass log_metrics to batch processor
+            batch_size=batch_size,  # Pass batch_size to batch processor
+            by_fragment=by_fragment,  # Pass by_fragment to batch processor
         )
         self.prefetcher = AsyncPrefetcher(
             batch_processor=self.batch_processor,
-            max_queue_size=500,
+            max_queue_size=5000,
         )
 
         # Start async prefetching
@@ -1517,6 +1570,3 @@ class SLAFIterableDataset(IterableDataset):
             Manual cleanup completed
         """
         self.prefetcher.stop()
-
-    # Tokenization is now handled at the PrefetchBatchProcessor level
-    # These methods are no longer needed since we consume pre-tokenized data

@@ -471,8 +471,8 @@ class ExternalDataloaderBenchmark:
             sc_dataset = scDataset(
                 data_collection=collection,
                 batch_size=self.batch_size,
-                block_size=4,
-                fetch_factor=16,
+                block_size=8,
+                fetch_factor=64,
                 fetch_transform=fetch_transform_adata,  # Use module-level callback
             )
 
