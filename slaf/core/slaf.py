@@ -297,16 +297,27 @@ class SLAFArray:
         self._var_columns = list(self._var.columns)
 
         # Build cell start indices for efficient row access (zero-copy Polars)
-        if "n_genes" in self._obs.columns:
+        if "cell_start_index" in self._obs.columns:
+            # Use precomputed cell_start_index column
+            logger.info("Using precomputed cell_start_index from cells table")
+            # The cell_start_index column contains n_cells values (cumulative sums with leading 0)
+            # We need to append the total expression count for boundary checking
+            total_expression_count = self.expression.count_rows()
+            self._cell_start_index = pl.concat(
+                [self._obs["cell_start_index"], pl.Series([total_expression_count])]
+            )
+        elif "n_genes" in self._obs.columns:
             # Use existing n_genes column
             cumsum = self._obs["n_genes"].cum_sum()
+            self._cell_start_index = pl.concat([pl.Series([0]), cumsum])
         elif "gene_count" in self._obs.columns:
             # Use existing gene_count column
             cumsum = self._obs["gene_count"].cum_sum()
+            self._cell_start_index = pl.concat([pl.Series([0]), cumsum])
         else:
             # Calculate n_genes per cell from expression data
             logger.info(
-                "n_genes or gene_count column not found, calculating from expression data..."
+                "No precomputed cell_start_index found, calculating from expression data..."
             )
 
             # Query expression data to count genes per cell
@@ -336,8 +347,7 @@ class SLAFArray:
             )
 
             cumsum = obs_with_counts["n_genes"].cum_sum()
-
-        self._cell_start_index = pl.concat([pl.Series([0]), cumsum])
+            self._cell_start_index = pl.concat([pl.Series([0]), cumsum])
 
         # Restore dtypes for obs using polars
         obs_dtypes = self.config.get("obs_dtypes", {})
