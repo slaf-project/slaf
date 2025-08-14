@@ -3,7 +3,6 @@ import threading
 from pathlib import Path
 from typing import Any
 
-import duckdb
 import lance
 import numpy as np
 import polars as pl
@@ -31,7 +30,7 @@ class SLAFArray:
     with the single-cell analysis ecosystem.
 
     Key Features:
-        - SQL-native querying with DuckDB integration
+        - SQL-native querying with Polars integration
         - Lazy evaluation for memory efficiency
         - Direct access to cell and gene metadata
         - High-performance storage with Lance format
@@ -297,16 +296,27 @@ class SLAFArray:
         self._var_columns = list(self._var.columns)
 
         # Build cell start indices for efficient row access (zero-copy Polars)
-        if "n_genes" in self._obs.columns:
+        if "cell_start_index" in self._obs.columns:
+            # Use precomputed cell_start_index column
+            logger.info("Using precomputed cell_start_index from cells table")
+            # The cell_start_index column contains n_cells values (cumulative sums with leading 0)
+            # We need to append the total expression count for boundary checking
+            total_expression_count = self.expression.count_rows()
+            self._cell_start_index = pl.concat(
+                [self._obs["cell_start_index"], pl.Series([total_expression_count])]
+            )
+        elif "n_genes" in self._obs.columns:
             # Use existing n_genes column
             cumsum = self._obs["n_genes"].cum_sum()
+            self._cell_start_index = pl.concat([pl.Series([0]), cumsum])
         elif "gene_count" in self._obs.columns:
             # Use existing gene_count column
             cumsum = self._obs["gene_count"].cum_sum()
+            self._cell_start_index = pl.concat([pl.Series([0]), cumsum])
         else:
             # Calculate n_genes per cell from expression data
             logger.info(
-                "n_genes or gene_count column not found, calculating from expression data..."
+                "No precomputed cell_start_index found, calculating from expression data..."
             )
 
             # Query expression data to count genes per cell
@@ -336,8 +346,7 @@ class SLAFArray:
             )
 
             cumsum = obs_with_counts["n_genes"].cum_sum()
-
-        self._cell_start_index = pl.concat([pl.Series([0]), cumsum])
+            self._cell_start_index = pl.concat([pl.Series([0]), cumsum])
 
         # Restore dtypes for obs using polars
         obs_dtypes = self.config.get("obs_dtypes", {})
@@ -421,7 +430,7 @@ class SLAFArray:
         """
         Execute SQL query on the SLAF dataset.
 
-        Executes SQL queries directly on the underlying Lance tables using DuckDB.
+        Executes SQL queries directly on the underlying Lance tables using Polars.
         The query can reference three tables: 'cells', 'genes', and 'expression'.
         This enables complex aggregations, joins, and filtering operations.
 
@@ -477,24 +486,18 @@ class SLAFArray:
             >>> print(f"Found {len(result)} expression patterns")
             Found 5 expression patterns
         """
-        # Create a new DuckDB connection for this query to avoid connection issues
+        # Create Polars context with all three Lance datasets
+        ctx = pl.SQLContext()
 
-        # Create a new connection
-        con = duckdb.connect()
+        # Register Lance datasets with Polars context
+        ctx.register("expression", pl.scan_pyarrow_dataset(self.expression))
+        ctx.register("cells", pl.scan_pyarrow_dataset(self.cells))
+        ctx.register("genes", pl.scan_pyarrow_dataset(self.genes))
 
-        # Reference Lance datasets in local scope so DuckDB can find them
-        expression = self.expression  # noqa: F841
-        cells = self.cells  # noqa: F841
-        genes = self.genes  # noqa: F841
+        # Execute the query using Polars SQL
+        result = ctx.execute(sql).collect()
 
-        # Execute the query
-        result = con.execute(sql).fetchdf()
-
-        # Close the connection
-        con.close()
-
-        # Convert pandas DataFrame to polars DataFrame
-        return pl.from_pandas(result)
+        return result
 
     def filter_cells(self, **filters: Any) -> pl.DataFrame:
         """

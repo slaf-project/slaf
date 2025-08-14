@@ -23,8 +23,16 @@ def compare_metadata_essentials(lazy_df, native_df, description=""):
     """
     # Check basic properties
     assert len(lazy_df) == len(native_df), f"{description}: Length mismatch"
-    assert list(lazy_df.columns) == list(native_df.columns), (
-        f"{description}: Column mismatch"
+
+    # Handle the case where SLAF metadata has additional columns (like cell_start_index)
+    # We only check that all native columns exist in the lazy metadata
+    native_columns = set(native_df.columns)
+    lazy_columns = set(lazy_df.columns)
+
+    # Check that all native columns are present in lazy metadata
+    missing_columns = native_columns - lazy_columns
+    assert len(missing_columns) == 0, (
+        f"{description}: Missing columns in lazy metadata: {missing_columns}"
     )
 
     # Check index
@@ -33,7 +41,9 @@ def compare_metadata_essentials(lazy_df, native_df, description=""):
     )
 
     # For categorical columns, check categories and values
-    for col in lazy_df.columns:
+    # Only check columns that exist in both DataFrames
+    common_columns = native_columns & lazy_columns
+    for col in common_columns:
         if isinstance(native_df[col].dtype, pd.CategoricalDtype):
             # Check that both are categorical
             assert isinstance(lazy_df[col].dtype, pd.CategoricalDtype), (

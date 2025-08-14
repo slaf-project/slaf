@@ -868,7 +868,7 @@ def main():
     """Run the external dataloader benchmarks."""
 
     # Use a smaller dataset for development
-    slaf_path = "../slaf-datasets/plate1_Tahoe100M.slaf"
+    slaf_path = "../slaf-datasets/plate1_Tahoe100M_v21.slaf"
     h5ad_path = "../slaf-datasets/plate1_Tahoe100M.h5ad"
 
     benchmark = ExternalDataloaderBenchmark(slaf_path, h5ad_path)

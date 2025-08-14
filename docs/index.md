@@ -6,7 +6,7 @@
     <img src="assets/slaf-logo-dark.svg" alt="SLAF Logo" class="dark-logo"/>
   </div>
   <div class="hero-text">
-    <strong>SLAF</strong> is a high-performance format for single-cell data that combines the power of SQL with lazy evaluation, built on top of the <a href="https://lancedb.github.io/lance/">Lance</a> table format, <a href="https://duckdb.org/">DuckDB</a> and <a href="pola.rs">Polars</a>.
+    <strong>SLAF</strong> is a high-performance format for single-cell data that combines the power of SQL with lazy evaluation, built on top of the <a href="https://lancedb.github.io/lance/">Lance</a> table format and <a href="pola.rs">Polars</a>.
   </div>
 </div>
 

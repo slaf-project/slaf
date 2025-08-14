@@ -9,22 +9,21 @@ requires-python = ">=3.10,<3.14"
 
 dependencies = [
     # Core dependencies - essential for basic SLAF functionality
-    "duckdb>=1.3.0", # SQL queries in core/slaf.py
     "pylance>=0.31.0", # Lance format storage in core/slaf.py
-    "polars>=1.31.0", # DataFrame operations across all modules
-    "numpy>=2.2.0", # Numerical operations across all modules
-    "pandas>=2.3.0", # DataFrame operations in data, integrations, ml
+    "polars>=1.31.0",  # DataFrame operations and SQL queries across all modules
+    "numpy>=2.2.0",    # Numerical operations across all modules
+    "pandas>=2.3.0",   # DataFrame operations in data, integrations, ml
     "pyarrow>=20.0.0", # Data conversion in data/converter.py
-    "scipy>=1.15.0", # Sparse operations in core and data
-    "loguru>=0.7.0", # Logging functionality across all modules
+    "scipy>=1.15.0",   # Sparse operations in core and data
+    "loguru>=0.7.0",   # Logging functionality across all modules
     # Data conversion - essential for CLI functionality
-    "scanpy>=1.11.2", # For h5ad file conversion
-    "h5py>=3.10.0", # For chunked H5AD reading
+    "scanpy>=1.11.2",   # For h5ad file conversion
+    "h5py>=3.10.0",     # For chunked H5AD reading
     "requests>=2.32.4", # For downloading datasets
     # CLI and utilities
-    "typer>=0.9.0", # CLI framework
-    "rich>=14.0.0", # Rich console output
-    "tqdm>=4.67.0", # Progress bars
+    "typer>=0.9.0",        # CLI framework
+    "rich>=14.0.0",        # Rich console output
+    "tqdm>=4.67.0",        # Progress bars
     "build>=1.2.2.post1",
     "lancedb>=0.24.2",
     "vortex-data>=0.33.2",

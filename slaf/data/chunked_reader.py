@@ -205,14 +205,14 @@ class BaseChunkedReader(ABC):
 
 class ChunkedH5ADReader(BaseChunkedReader):
     """
-    A chunked reader for h5ad files using h5py for memory-efficient processing.
+    A chunked reader for h5ad files using scanpy's backed mode for memory-efficient processing.
 
-    This reader provides memory-efficient access to h5ad files by reading data
-    in chunks rather than loading the entire dataset into memory. It supports
-    both sparse and dense expression matrices.
+    This reader provides memory-efficient access to h5ad files by leveraging scanpy's
+    backed reading capabilities. It supports both sparse and dense expression matrices
+    and provides a consistent interface for chunked processing.
 
     Key Features:
-        - Memory-efficient chunked reading
+        - Memory-efficient chunked reading using scanpy backed mode
         - Support for sparse and dense matrices
         - Automatic metadata extraction
         - Context manager support
@@ -234,13 +234,14 @@ class ChunkedH5ADReader(BaseChunkedReader):
         Cell metadata columns: ['cell_type', 'total_counts', 'batch']
     """
 
-    def __init__(self, filename: str):
+    def __init__(self, filename: str, chunk_size: int = 25000):
         """
         Initialize the chunked h5ad reader.
 
         Args:
             filename: Path to the h5ad file. Must be a valid h5ad file with
                      proper AnnData structure.
+            chunk_size: Size of chunks for processing. Default: 25,000 elements.
 
         Raises:
             FileNotFoundError: If the h5ad file doesn't exist.
@@ -252,6 +253,11 @@ class ChunkedH5ADReader(BaseChunkedReader):
             >>> print(f"File path: {reader.file_path}")
             File path: pbmc3k.h5ad
 
+            >>> # Initialize with custom chunk size
+            >>> reader = ChunkedH5ADReader("large_dataset.h5ad", chunk_size=50000)
+            >>> print(f"Chunk size: {reader.chunk_size}")
+            Chunk size: 50000
+
             >>> # Error handling for missing file
             >>> try:
             ...     reader = ChunkedH5ADReader("nonexistent.h5ad")
@@ -260,16 +266,22 @@ class ChunkedH5ADReader(BaseChunkedReader):
             Error: [Errno 2] No such file or directory: 'nonexistent.h5ad'
         """
         super().__init__(filename)
-        self.file: h5py.File | None = None
+        self.adata = None
+        self.chunk_size = chunk_size
 
     def _open_file(self) -> None:
-        """Open the h5ad file"""
-        self.file = h5py.File(self.file_path, "r")
+        """Open the h5ad file using scanpy backed mode"""
+        import scanpy as sc
+
+        self.adata = sc.read_h5ad(self.file_path, backed="r")
+        assert self.adata is not None
+        self.file = self.adata.file
 
     def _close_file(self) -> None:
         """Close the h5ad file"""
-        if self.file:
-            self.file.close()
+        if self.adata is not None:
+            self.adata.file.close()
+            self.adata = None
             self.file = None
 
     @property
@@ -282,26 +294,11 @@ class ChunkedH5ADReader(BaseChunkedReader):
 
         Raises:
             RuntimeError: If the file is not opened (use context manager).
-            ValueError: If the dataset structure is invalid.
         """
         if self._n_obs is None:
-            if self.file is None:
+            if self.adata is None:
                 raise RuntimeError("File not opened. Use context manager.")
-            # For sparse matrices, we need to infer shape from indptr
-            if self._is_sparse():
-                indptr = self.file["X"]["indptr"][:]
-                # Type assertion for h5py dataset
-                if isinstance(indptr, np.ndarray):
-                    self._n_obs = int(len(indptr)) - 1
-                else:
-                    raise ValueError("Expected numpy array for indptr")
-            else:
-                # For dense matrices, use shape directly
-                X_dataset = self.file["X"]
-                if isinstance(X_dataset, h5py.Dataset):
-                    self._n_obs = int(X_dataset.shape[0])
-                else:
-                    raise ValueError("Expected h5py.Dataset for X")
+            self._n_obs = self.adata.n_obs
         return self._n_obs
 
     @property
@@ -314,202 +311,42 @@ class ChunkedH5ADReader(BaseChunkedReader):
 
         Raises:
             RuntimeError: If the file is not opened (use context manager).
-            ValueError: If the dataset structure is invalid.
         """
         if self._n_vars is None:
-            if self.file is None:
+            if self.adata is None:
                 raise RuntimeError("File not opened. Use context manager.")
-            # For sparse matrices, we need to infer shape from indices
-            if self._is_sparse():
-                indices = self.file["X"]["indices"][:]
-                # Type assertion for h5py dataset
-                if isinstance(indices, np.ndarray):
-                    max_idx = int(indices.max()) if len(indices) > 0 else -1
-                    self._n_vars = max_idx + 1 if max_idx >= 0 else 0
-                else:
-                    raise ValueError("Expected numpy array for indices")
-            else:
-                # For dense matrices, use shape directly
-                X_dataset = self.file["X"]
-                if isinstance(X_dataset, h5py.Dataset):
-                    self._n_vars = int(X_dataset.shape[1])
-                else:
-                    raise ValueError("Expected h5py.Dataset for X")
+            self._n_vars = self.adata.n_vars
         return self._n_vars
 
     @property
     def obs_names(self) -> np.ndarray:
         """Get observation names (cell barcodes)"""
         if self._obs_names is None:
-            if self.file is None:
+            if self.adata is None:
                 raise RuntimeError("File not opened. Use context manager.")
-            obs_group = self.file["obs"]
-            if isinstance(obs_group, h5py.Group) and "_index" in obs_group:
-                index_dataset = obs_group["_index"]
-                if isinstance(index_dataset, h5py.Dataset):
-                    self._obs_names = index_dataset[:]
-                    # Handle bytes to string conversion if needed
-                    if (
-                        hasattr(self._obs_names, "dtype")
-                        and self._obs_names.dtype.kind == "S"
-                    ):
-                        self._obs_names = self._obs_names.astype(str)
-                else:
-                    raise ValueError("Expected h5py.Dataset for _index")
-            else:
-                self._obs_names = np.array([f"cell_{i}" for i in range(self.n_obs)])
-        assert self._obs_names is not None
+            self._obs_names = self.adata.obs_names.values
         return self._obs_names
 
     @property
     def var_names(self) -> np.ndarray:
         """Get variable names (gene names)"""
         if self._var_names is None:
-            if self.file is None:
+            if self.adata is None:
                 raise RuntimeError("File not opened. Use context manager.")
-            var_group = self.file["var"]
-            if isinstance(var_group, h5py.Group) and "_index" in var_group:
-                index_dataset = var_group["_index"]
-                if isinstance(index_dataset, h5py.Dataset):
-                    self._var_names = index_dataset[:]
-                    # Handle bytes to string conversion if needed
-                    if (
-                        hasattr(self._var_names, "dtype")
-                        and self._var_names.dtype.kind == "S"
-                    ):
-                        self._var_names = self._var_names.astype(str)
-                else:
-                    raise ValueError("Expected h5py.Dataset for _index")
-            elif isinstance(var_group, h5py.Group) and "gene_id" in var_group:
-                # Handle case where gene names are stored in gene_id column
-                gene_id_dataset = var_group["gene_id"]
-                if isinstance(gene_id_dataset, h5py.Dataset):
-                    self._var_names = gene_id_dataset[:]
-                    # Handle bytes to string conversion if needed
-                    if (
-                        hasattr(self._var_names, "dtype")
-                        and self._var_names.dtype.kind == "S"
-                    ):
-                        self._var_names = self._var_names.astype(str)
-                else:
-                    raise ValueError("Expected h5py.Dataset for gene_id")
-            else:
-                self._var_names = np.array([f"gene_{i}" for i in range(self.n_vars)])
-        assert self._var_names is not None
+            self._var_names = self.adata.var_names.values
         return self._var_names
 
     def get_obs_metadata(self) -> pd.DataFrame:
         """Get observation metadata as pandas DataFrame"""
-        if self.file is None:
+        if self.adata is None:
             raise RuntimeError("File not opened. Use context manager.")
-        obs = self.file["obs"]
-
-        if isinstance(obs, h5py.Dataset):
-            arr = obs[:]
-            if arr.dtype.fields is None or len(arr.dtype.fields) == 0:
-                obs = self.file["obs"]
-            else:
-                df = pd.DataFrame.from_records(arr)
-                if "_index" in df.columns:
-                    df.index = df["_index"].astype(str)
-                    df = df.drop(columns=["_index"])
-                return df
-        # Group-of-datasets logic
-        obs_data = {}
-        for key in obs.keys():  # type: ignore
-            item = obs[key]  # type: ignore
-            if isinstance(item, h5py.Dataset) and key != "_index":
-                data = item[:]
-                if data.dtype.kind in ("S", "O", "U"):
-                    data = data.astype(str)
-                obs_data[key] = data
-            elif isinstance(item, h5py.Group):
-                # AnnData categorical encoding: group with 'categories' and 'codes'
-                if "categories" in item and "codes" in item:
-                    categories = item["categories"][:]  # type: ignore
-                    if categories.dtype.kind in ("S", "O", "U"):
-                        categories = categories.astype(str)
-                    codes = item["codes"][:]  # type: ignore
-                    # Map codes to categories, handling -1 as missing
-                    col = np.array(
-                        [
-                            categories[c] if c >= 0 and c < len(categories) else None
-                            for c in codes
-                        ],
-                        dtype=object,
-                    )
-                    obs_data[key] = col
-                # else: ignore other group formats for now
-        # Handle index
-        if "_index" in obs:
-            index = obs["_index"][:]
-            if hasattr(index, "dtype") and index.dtype.kind in ("S", "O", "U"):
-                index = index.astype(str)
-            else:
-                index = index.astype(str)
-            df = pd.DataFrame(obs_data, index=index)
-            df.index.name = "index"  # Match scanpy behavior
-            return df
-        elif "index" in obs_data:
-            # Handle case where 'index' is a regular column (like in this dataset)
-            index_values = obs_data.pop("index")
-            df = pd.DataFrame(obs_data, index=index_values)
-            df.index.name = "index"  # Match scanpy behavior
-            return df
-        else:
-            df = pd.DataFrame(obs_data)
-            # Set the index to the actual cell names
-            df.index = self.obs_names
-            return df
+        return self.adata.obs.copy()
 
     def get_var_metadata(self) -> pd.DataFrame:
         """Get variable metadata as pandas DataFrame"""
-        if self.file is None:
+        if self.adata is None:
             raise RuntimeError("File not opened. Use context manager.")
-        var = self.file["var"]
-        if isinstance(var, h5py.Dataset):
-            arr = var[:]
-            if arr.dtype.fields is None or len(arr.dtype.fields) == 0:
-                var = self.file["var"]
-            else:
-                df = pd.DataFrame.from_records(arr)
-                if "_index" in df.columns:
-                    df.index = df["_index"].astype(str)
-                    df = df.drop(columns=["_index"])
-                return df
-        var_data = {}
-        for key in var.keys():
-            item = var[key]
-            if isinstance(item, h5py.Dataset) and key != "_index":
-                data = item[:]
-                if data.dtype.kind in ("S", "O", "U"):
-                    data = data.astype(str)
-                var_data[key] = data
-        if "_index" in var:
-            index = var["_index"][:]
-            if index.dtype.kind in ("S", "O", "U"):
-                index = index.astype(str)
-            df = pd.DataFrame(var_data, index=index)
-            df.index.name = "index"  # Match scanpy behavior
-            return df
-        elif "index" in var_data:
-            # Handle case where 'index' is a regular column (like in this dataset)
-            index_values = var_data.pop("index")
-            df = pd.DataFrame(var_data, index=index_values)
-            df.index.name = "index"  # Match scanpy behavior
-            return df
-        else:
-            df = pd.DataFrame(var_data)
-            # Set the index to the actual gene names
-            df.index = self.var_names
-            return df
-
-    def _is_sparse(self) -> bool:
-        """Check if the data is stored in sparse format"""
-        if self.file is None:
-            raise RuntimeError("File not opened. Use context manager.")
-        X_group = self.file["X"]
-        return isinstance(X_group, h5py.Group) and "data" in X_group
+        return self.adata.var.copy()
 
     def iter_chunks(
         self, chunk_size: int = 1000, obs_chunk: bool = True
@@ -545,42 +382,24 @@ class ChunkedH5ADReader(BaseChunkedReader):
 
     def _read_chunk_as_arrow(self, start_row: int, end_row: int) -> pa.Table:
         """Read a chunk and return as Arrow table directly"""
-        if self._is_sparse():
-            return self._read_sparse_chunk_as_arrow(start_row, end_row)
-        else:
-            return self._read_dense_chunk_as_arrow(start_row, end_row)
-
-    def _read_sparse_chunk_as_arrow(self, start_row: int, end_row: int) -> pa.Table:
-        """Read a sparse chunk and return as Arrow table directly"""
-        if self.file is None:
+        if self.adata is None:
             raise RuntimeError("File not opened. Use context manager.")
-        X_group = self.file["X"]
 
-        if "data" in X_group and "indices" in X_group and "indptr" in X_group:
-            # CSR format
-            indptr = X_group["indptr"][start_row : end_row + 1]
-            start_idx = indptr[0]
-            end_idx = indptr[-1]
+        # Use scanpy's backed slicing to get the chunk
+        chunk_adata = self.adata[start_row:end_row, :]
 
-            data = X_group["data"][start_idx:end_idx]
-            indices = X_group["indices"][start_idx:end_idx]
+        # Convert sparse matrix to Arrow arrays using optimized approach
+        if sparse.issparse(chunk_adata.X):
+            # Convert to COO format
+            coo = chunk_adata.X.tocoo()
 
-            # Adjust indptr to start from 0
-            indptr = indptr - start_idx
-
-            # Convert to COO format for Arrow table
-            # Create row indices from indptr
-            row_indices = []
-            for i in range(len(indptr) - 1):
-                row_indices.extend([i] * (indptr[i + 1] - indptr[i]))
-
-            if row_indices:
+            if coo.nnz > 0:
                 # Create Arrow arrays directly
-                cell_integer_ids = np.array(row_indices, dtype=np.uint32) + start_row
-                gene_integer_ids = indices.astype(np.uint16)
-                values = data.astype(np.uint16)
+                cell_integer_ids = coo.row.astype(np.uint32) + start_row
+                gene_integer_ids = coo.col.astype(np.uint16)
+                values = coo.data.astype(np.uint16)
 
-                return pa.table(
+                result = pa.table(
                     {
                         "cell_integer_id": pa.array(cell_integer_ids),
                         "gene_integer_id": pa.array(gene_integer_ids),
@@ -589,7 +408,7 @@ class ChunkedH5ADReader(BaseChunkedReader):
                 )
             else:
                 # Empty chunk
-                return pa.table(
+                result = pa.table(
                     {
                         "cell_integer_id": pa.array([], type=pa.uint32()),
                         "gene_integer_id": pa.array([], type=pa.uint16()),
@@ -597,22 +416,55 @@ class ChunkedH5ADReader(BaseChunkedReader):
                     }
                 )
         else:
-            raise ValueError("Unsupported sparse matrix format")
+            # Dense matrix - convert to COO (this should be rare)
+            coo = sparse.coo_matrix(chunk_adata.X)
 
-    def _read_dense_chunk_as_arrow(self, start_row: int, end_row: int) -> pa.Table:
-        """Read a dense chunk and return as Arrow table directly"""
-        if self.file is None:
+            if coo.nnz > 0:
+                cell_integer_ids = coo.row.astype(np.uint32) + start_row
+                gene_integer_ids = coo.col.astype(np.uint16)
+                values = coo.data.astype(np.uint16)
+
+                result = pa.table(
+                    {
+                        "cell_integer_id": pa.array(cell_integer_ids),
+                        "gene_integer_id": pa.array(gene_integer_ids),
+                        "value": pa.array(values),
+                    }
+                )
+            else:
+                result = pa.table(
+                    {
+                        "cell_integer_id": pa.array([], type=pa.uint32()),
+                        "gene_integer_id": pa.array([], type=pa.uint16()),
+                        "value": pa.array([], type=pa.uint16()),
+                    }
+                )
+
+        return result
+
+    def _get_chunk_impl(self, obs_slice: slice, var_slice: slice) -> pa.Table:
+        """Implementation of chunk retrieval for h5ad files"""
+        if self.adata is None:
             raise RuntimeError("File not opened. Use context manager.")
-        X_dataset = self.file["X"]
-        chunk_data = X_dataset[start_row:end_row, :]
 
-        # Convert dense matrix to COO format
-        coo = sparse.coo_matrix(chunk_data)
+        start_row = obs_slice.start or 0
+        end_row = obs_slice.stop or self.n_obs
+        start_col = var_slice.start or 0
+        end_col = var_slice.stop or self.n_vars
+
+        # Use scanpy's backed slicing to get the chunk
+        chunk_adata = self.adata[start_row:end_row, start_col:end_col]
+
+        # Convert to COO format
+        if sparse.issparse(chunk_adata.X):
+            coo = chunk_adata.X.tocoo()
+        else:
+            coo = sparse.coo_matrix(chunk_adata.X)
 
         if coo.nnz > 0:
             # Create Arrow arrays directly
             cell_integer_ids = coo.row.astype(np.uint32) + start_row
-            gene_integer_ids = coo.col.astype(np.uint16)
+            gene_integer_ids = coo.col.astype(np.uint16) + start_col
             values = coo.data.astype(np.uint16)
 
             return pa.table(
@@ -632,34 +484,6 @@ class ChunkedH5ADReader(BaseChunkedReader):
                 }
             )
 
-    def _get_chunk_impl(self, obs_slice: slice, var_slice: slice) -> pa.Table:
-        """Implementation of chunk retrieval for h5ad files"""
-        start_row = obs_slice.start or 0
-        end_row = obs_slice.stop or self.n_obs
-
-        # Get the full chunk first
-        chunk_table = self._read_chunk_as_arrow(start_row, end_row)
-
-        # Apply variable slicing if needed
-        if var_slice.start != 0 or var_slice.stop != self.n_vars:
-            # Filter by gene_integer_id
-            gene_integer_ids = chunk_table.column("gene_integer_id").to_numpy()
-            mask = (gene_integer_ids >= var_slice.start) & (
-                gene_integer_ids < var_slice.stop
-            )
-            chunk_table = chunk_table.filter(pa.array(mask))
-
-            # Adjust gene_integer_id to be relative to the slice
-            if var_slice.start > 0:
-                gene_integer_ids = (
-                    chunk_table.column("gene_integer_id").to_numpy() - var_slice.start
-                )
-                chunk_table = chunk_table.set_column(
-                    1, "gene_integer_id", pa.array(gene_integer_ids)
-                )
-
-        return chunk_table
-
     def get_gene_expression(
         self, gene_names: list, chunk_size: int = 1000
     ) -> Iterator[pd.DataFrame]:
@@ -678,83 +502,36 @@ class ChunkedH5ADReader(BaseChunkedReader):
         pd.DataFrame
             DataFrame with gene expression data for the chunk
         """
-        # Find gene indices
-        var_names = self.var_names
+        if self.adata is None:
+            raise RuntimeError("File not opened. Use context manager.")
+
+        # Find gene indices using scanpy's var_names
+        var_names = self.adata.var_names
         gene_indices = []
         for gene in gene_names:
-            # Handle byte string to string conversion if needed
-            if isinstance(gene, bytes):
-                gene_str = gene.decode("utf-8")
+            if gene in var_names:
+                gene_indices.append(var_names.get_loc(gene))
             else:
-                gene_str = gene
-
-            # Handle case where var_names contains byte strings
-            if var_names.dtype.kind == "S" or (
-                hasattr(var_names, "dtype")
-                and var_names.dtype.kind == "O"
-                and any(isinstance(x, bytes) for x in var_names)
-            ):
-                # Convert var_names to strings for comparison
-                var_names_str = np.array(
-                    [
-                        x.decode("utf-8") if isinstance(x, bytes) else str(x)
-                        for x in var_names
-                    ]
-                )
-                if gene_str in var_names_str:
-                    gene_indices.append(np.where(var_names_str == gene_str)[0][0])
-                else:
-                    warnings.warn(f"Gene {gene} not found in dataset", stacklevel=2)
-            else:
-                if gene_str in var_names:
-                    gene_indices.append(np.where(var_names == gene_str)[0][0])
-                else:
-                    warnings.warn(f"Gene {gene} not found in dataset", stacklevel=2)
+                warnings.warn(f"Gene {gene} not found in dataset", stacklevel=2)
 
         if not gene_indices:
             return
 
         # Iterate over chunks and extract gene expression
-        for chunk_table, _obs_slice in self.iter_chunks(chunk_size=chunk_size):
-            # Convert Arrow table to DataFrame for gene extraction
-            chunk_df = chunk_table.to_pandas()
+        total_obs = self.n_obs
+        for start in range(0, total_obs, chunk_size):
+            end = min(start + chunk_size, total_obs)
 
-            # Filter for specific genes
-            gene_mask = chunk_df["gene_integer_id"].isin(gene_indices)
-            chunk_genes = chunk_df[gene_mask]
+            # Use scanpy's backed slicing to get the chunk
+            chunk_adata = self.adata[start:end, gene_indices]
 
-            # Always yield a DataFrame for this chunk, even if empty
-            if not chunk_genes.empty:
-                # Pivot to get genes as columns
-                chunk_genes_pivot = chunk_genes.pivot(
-                    index="cell_integer_id", columns="gene_integer_id", values="value"
-                ).fillna(0)
+            # Convert to DataFrame
+            chunk_df = chunk_adata.to_df()
 
-                # Create DataFrame with gene names as columns
-                chunk_df_final = pd.DataFrame(
-                    chunk_genes_pivot.values,
-                    index=[f"cell_{i}" for i in chunk_genes_pivot.index],
-                    columns=[
-                        gene_names[i]
-                        for i in gene_indices
-                        if i in chunk_genes_pivot.columns
-                    ],
-                )
+            # Rename columns to gene names
+            chunk_df.columns = [gene_names[i] for i in gene_indices]
 
-                # Ensure all requested genes are present (fill with zeros if missing)
-                for i, _gene_idx in enumerate(gene_indices):
-                    if gene_names[i] not in chunk_df_final.columns:
-                        chunk_df_final[gene_names[i]] = 0
-
-                # Reorder columns to match the requested gene order
-                chunk_df_final = chunk_df_final[[gene_names[i] for i in gene_indices]]
-            else:
-                # Create empty DataFrame with correct structure
-                chunk_df_final = pd.DataFrame(
-                    columns=[gene_names[i] for i in gene_indices]
-                )
-
-            yield chunk_df_final
+            yield chunk_df
 
 
 class Chunked10xMTXReader(BaseChunkedReader):
@@ -1387,7 +1164,7 @@ class Chunked10xH5Reader(BaseChunkedReader):
         return chunk_table
 
 
-def create_chunked_reader(file_path: str) -> BaseChunkedReader:
+def create_chunked_reader(file_path: str, chunk_size: int = 25000) -> BaseChunkedReader:
     """
     Factory function to create the appropriate chunked reader based on file format.
 
@@ -1395,6 +1172,8 @@ def create_chunked_reader(file_path: str) -> BaseChunkedReader:
     -----------
     file_path : str
         Path to the data file or directory
+    chunk_size : int
+        Size of chunks for processing. Default: 25,000 elements.
 
     Returns:
     --------
@@ -1415,7 +1194,7 @@ def create_chunked_reader(file_path: str) -> BaseChunkedReader:
         raise ValueError(f"Cannot create chunked reader: {e}") from e
 
     if format_type == "h5ad":
-        return ChunkedH5ADReader(file_path)
+        return ChunkedH5ADReader(file_path, chunk_size=chunk_size)
     elif format_type == "10x_mtx":
         return Chunked10xMTXReader(file_path)
     elif format_type == "10x_h5":
