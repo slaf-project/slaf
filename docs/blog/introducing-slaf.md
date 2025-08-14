@@ -125,7 +125,7 @@ Parquet stores data in compressed columnar chunks called "row groups" and stores
 - **Optimized metadata**: Efficient random access patterns with minimal metadata overhead
 - **Zero infrastructure**: A file on disk is a full database, like the next generation SQLite
 
-[DuckDB](https://duckdb.org/) takes a different but complementary approach: an embedded OLAP database written in C++ that provides a full database experience with zero infrastructure. While Lance focuses on the table format, DuckDB focuses on both its own storage format and a highly extensible query engine. Both eliminate the need for servers and configuration.
+[Polars](https://pola.rs/) takes a different but complementary approach: a high-performance DataFrame library written in Rust that provides blazing-fast SQL query execution with zero infrastructure. While Lance focuses on the table format, Polars focuses on both its own DataFrame operations and a highly extensible query engine. Both eliminate the need for servers and configuration.
 
 !!! success "Key Innovation #5"
 
@@ -133,7 +133,7 @@ Parquet stores data in compressed columnar chunks called "row groups" and stores
 
 ### The OLAP Query Engine Revolution: Fast Languages + Lazy Execution
 
-The final piece was query engines written in faster languages than Python. [Polars](https://polars.rs/) is written in Rust and executes chained query workloads lazily. [DuckDB](https://duckdb.org/) is an embedded OLAP database and query engine written in C++ that can push down complex queries to the storage layer.
+The final piece was query engines written in faster languages than Python. [Polars](https://polars.rs/) is written in Rust and executes chained query workloads lazily with blazing-fast SQL execution that can push down complex queries to the storage layer.
 
 By combining high-performance query engines with metadata-rich table formats like Parquet and Lance, you get superpowers: complex queries that only touch the data they need.
 
@@ -226,7 +226,7 @@ SLAF combines the best ideas from multiple domains into a unified solution:
 
 - **Zarr-inspired**: Zero-copy, query-in-place access to cloud storage
 - **Dask-inspired**: Lazy computation graphs that optimize before execution
-- **Lance + DuckDB-inspired**: OLAP-powered SQL with pushdown optimization
+- **Lance + Polars-inspired**: OLAP-powered SQL with pushdown optimization
 - **Scanpy-compatible**: Drop-in replacement for existing workflows
 
 For a detailed technical deep dive into SLAF's architecture, including SQL-native relational schema, lazy evaluation, cloud-native concurrent access, and foundation model training support, see [How SLAF Works](../user-guide/how-slaf-works.md).

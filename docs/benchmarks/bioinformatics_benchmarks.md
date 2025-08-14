@@ -42,7 +42,7 @@ SLAF Dataset
 
 ## **Metadata Filtering & Quality Control**
 
-SLAF provides **efficient metadata-only queries** that avoid loading expression data when only cell/gene metadata is needed, similar to using Polars or DuckDB for structured data queries.
+SLAF provides **efficient metadata-only queries** that avoid loading expression data when only cell/gene metadata is needed, similar to using Polars for structured data queries.
 
 ### Traditional Approach (Load Everything)
 
@@ -97,7 +97,7 @@ cluster_cells = slaf.filter_cells(leiden=["0", "1", "2"])
 | S9       | 187.1                  | 2.2             | 86.7x         | 135.2x            | Cells with 800-2000 total counts            |
 | S10      | 181.0                  | 3.0             | 60.7x         | 97.3x             | Cells with 200-1500 genes                   |
 
-**Key Insight**: The speedup comes from **faster metadata loading** (SLAF loads only metadata vs h5ad loading everything), while memory efficiency comes from **loading only the data you need**. This is similar to using Polars/DuckDB for structured data queries instead of pandas.
+**Key Insight**: The speedup comes from **faster metadata loading** (SLAF loads only metadata vs h5ad loading everything), while memory efficiency comes from **loading only the data you need**. This is similar to using Polars for structured data queries instead of pandas.
 
 ## **Lazy Slicing (Expression Analysis)**
 
