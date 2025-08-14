@@ -373,5 +373,4 @@ slaf info dataset.slaf
 Built on top of
 
 - [Lance](https://lancedb.github.io/lance/) for cloud-native, efficient columnar storage
-- [DuckDB](https://duckdb.org/) for lazy, composable OLAP queries pushed down to Lance
 - [Polars](https://pola.rs/) for lazy, composable, in-memory, zero-copy data processing
