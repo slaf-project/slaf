@@ -36,7 +36,7 @@ class TestSLAFConverter:
         # Check config version
         with open(output_path / "config.json") as f:
             config = json.load(f)
-        assert config["format_version"] == "0.2"
+        assert config["format_version"] == "0.3"
 
     def test_expression_data_consistency(self, small_sample_adata, tmp_path):
         """Test that expression data is consistent in COO format"""
@@ -252,7 +252,7 @@ class TestSLAFConverter:
             config = json.load(f)
 
         # Check format version
-        assert config["format_version"] == "0.2"
+        assert config["format_version"] == "0.3"
 
         # Check that metadata section exists
         assert "metadata" in config
@@ -953,13 +953,16 @@ class TestSLAFConverter:
             obs_df = reader.get_obs_metadata()
             var_df = reader.get_var_metadata()
 
-            # The reader includes cell_id as a column, so we expect 3 columns
-            assert obs_df.shape == (5, 3)  # cell_id, cell_type and batch columns
-            # The reader includes gene_id as a column, so we expect 3 columns
+            # The reader returns obs/var with cell_id/gene_id as index, so we expect 2 columns
+            assert obs_df.shape == (
+                5,
+                2,
+            )  # cell_type and batch columns (cell_id is index)
+            # The reader returns obs/var with cell_id/gene_id as index, so we expect 2 columns
             assert var_df.shape == (
                 3,
-                3,
-            )  # gene_id, gene_symbol and highly_variable columns
+                2,
+            )  # gene_symbol and highly_variable columns (gene_id is index)
 
             # Test chunking
             chunks = list(reader.iter_chunks(chunk_size=2))
@@ -990,7 +993,7 @@ class TestSLAFConverter:
         converter = SLAFConverter()
         assert converter.use_integer_keys is True
         assert converter.chunked is True  # Updated default for better performance
-        assert converter.chunk_size == 25000  # Updated default for memory efficiency
+        assert converter.chunk_size == 50000  # Updated default for memory efficiency
         assert converter.sort_metadata is False
         assert converter.create_indices is False
 
@@ -1479,10 +1482,8 @@ class TestSLAFConverter:
         from slaf.data.chunked_reader import create_chunked_reader
 
         with create_chunked_reader(str(h5ad_path)) as reader:
-            # Use the actual gene names from the fixture, but convert to bytes to match reader
-            gene_names = [
-                name.encode("utf-8") for name in small_sample_adata.var.index[:3]
-            ]
+            # Use the actual gene names from the fixture
+            gene_names = list(small_sample_adata.var.index[:3])
             print(f"Gene names being searched: {gene_names}")
             print(f"Available gene names: {list(small_sample_adata.var.index)}")
             expression_chunks = list(
@@ -1506,10 +1507,8 @@ class TestSLAFConverter:
         from slaf.data.chunked_reader import create_chunked_reader
 
         with create_chunked_reader(str(h5ad_path)) as reader:
-            # Use actual gene names with one missing, convert to bytes
-            gene_names = [
-                name.encode("utf-8") for name in small_sample_adata.var.index[:2]
-            ] + [b"nonexistent_gene"]
+            # Use actual gene names with one missing
+            gene_names = list(small_sample_adata.var.index[:2]) + ["nonexistent_gene"]
             expression_chunks = list(
                 reader.get_gene_expression(gene_names, chunk_size=2)
             )
