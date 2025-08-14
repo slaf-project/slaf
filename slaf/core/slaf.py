@@ -3,7 +3,6 @@ import threading
 from pathlib import Path
 from typing import Any
 
-import duckdb
 import lance
 import numpy as np
 import polars as pl
@@ -31,7 +30,7 @@ class SLAFArray:
     with the single-cell analysis ecosystem.
 
     Key Features:
-        - SQL-native querying with DuckDB integration
+        - SQL-native querying with Polars integration
         - Lazy evaluation for memory efficiency
         - Direct access to cell and gene metadata
         - High-performance storage with Lance format
@@ -431,7 +430,7 @@ class SLAFArray:
         """
         Execute SQL query on the SLAF dataset.
 
-        Executes SQL queries directly on the underlying Lance tables using DuckDB.
+        Executes SQL queries directly on the underlying Lance tables using Polars.
         The query can reference three tables: 'cells', 'genes', and 'expression'.
         This enables complex aggregations, joins, and filtering operations.
 
@@ -487,24 +486,18 @@ class SLAFArray:
             >>> print(f"Found {len(result)} expression patterns")
             Found 5 expression patterns
         """
-        # Create a new DuckDB connection for this query to avoid connection issues
+        # Create Polars context with all three Lance datasets
+        ctx = pl.SQLContext()
 
-        # Create a new connection
-        con = duckdb.connect()
+        # Register Lance datasets with Polars context
+        ctx.register("expression", pl.scan_pyarrow_dataset(self.expression))
+        ctx.register("cells", pl.scan_pyarrow_dataset(self.cells))
+        ctx.register("genes", pl.scan_pyarrow_dataset(self.genes))
 
-        # Reference Lance datasets in local scope so DuckDB can find them
-        expression = self.expression  # noqa: F841
-        cells = self.cells  # noqa: F841
-        genes = self.genes  # noqa: F841
+        # Execute the query using Polars SQL
+        result = ctx.execute(sql).collect()
 
-        # Execute the query
-        result = con.execute(sql).fetchdf()
-
-        # Close the connection
-        con.close()
-
-        # Convert pandas DataFrame to polars DataFrame
-        return pl.from_pandas(result)
+        return result
 
     def filter_cells(self, **filters: Any) -> pl.DataFrame:
         """

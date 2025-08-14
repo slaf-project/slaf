@@ -1461,7 +1461,7 @@ class SLAFConverter:
         self, expression_dataset
     ) -> tuple[dict[str, float], int]:
         """Compute basic statistics from expression dataset using SQL"""
-        # Use DuckDB to compute statistics directly from Lance dataset
+        # Use Polars to compute statistics directly from Lance dataset
 
         logger.info(
             "Computing expression statistics using fragment-by-fragment processing..."
