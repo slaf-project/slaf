@@ -1355,7 +1355,8 @@ class SLAFConverter:
                 chunk_size=self.chunk_size
             ):
                 # Count genes per cell in this chunk using Polars groupby
-                chunk_df: pl.DataFrame = pl.from_arrow(chunk_table)
+                chunk_df = pl.from_arrow(chunk_table)
+                assert isinstance(chunk_df, pl.DataFrame)
                 if len(chunk_df) > 0:
                     chunk_gene_counts = chunk_df.group_by("cell_integer_id").agg(
                         pl.len().alias("count")
