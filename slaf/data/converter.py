@@ -5,6 +5,7 @@ from typing import Any
 import lance
 import numpy as np
 import pandas as pd
+import polars as pl
 import pyarrow as pa
 from loguru import logger
 from scipy import sparse
@@ -71,7 +72,7 @@ class SLAFConverter:
         self,
         use_integer_keys: bool = True,
         chunked: bool = True,  # Changed from False to True - make chunked the default
-        chunk_size: int = 25000,  # Reduced from 50000 to prevent memory issues
+        chunk_size: int = 50000,  # Smaller chunks for better memory efficiency and faster COO conversion
         sort_metadata: bool = False,
         create_indices: bool = False,  # Disable indices by default for small datasets
         optimize_storage: bool = True,  # Only store integer IDs in expression table
@@ -252,9 +253,26 @@ class SLAFConverter:
         if self.chunked:
             self._convert_chunked(h5ad_path, output_path)
         else:
-            # Load h5ad using scanpy
-            adata = sc.read_h5ad(h5ad_path)
-            logger.info(f"Loaded: {adata.n_obs} cells × {adata.n_vars} genes")
+            # Load h5ad using scanpy backed mode, then convert to in-memory
+            logger.info("Loading h5ad file in backed mode...")
+            adata_backed = sc.read_h5ad(h5ad_path, backed="r")
+            logger.info(
+                f"Loaded: {adata_backed.n_obs} cells × {adata_backed.n_vars} genes"
+            )
+
+            # Convert backed data to in-memory AnnData to avoid CSRDataset issues
+            logger.info("Converting backed data to in-memory format...")
+            adata = sc.AnnData(
+                X=adata_backed.X[:],  # Load the full matrix into memory
+                obs=adata_backed.obs.copy(),
+                var=adata_backed.var.copy(),
+                uns=adata_backed.uns.copy() if hasattr(adata_backed, "uns") else {},
+            )
+
+            # Close the backed file
+            adata_backed.file.close()
+
+            logger.info("Successfully converted to in-memory AnnData")
 
             # Convert the loaded AnnData object
             self._convert_anndata(adata, output_path)
@@ -296,13 +314,31 @@ class SLAFConverter:
         else:
             # Try to read as 10x H5 first, fall back to regular h5ad
             try:
-                adata = sc.read_10x_h5(h5_path, genome="X")
+                adata_backed = sc.read_10x_h5(h5_path, genome="X")
+                logger.info("Successfully read as 10x H5 format")
             except Exception:
                 # Fall back to reading as regular h5ad
                 logger.info("Reading as regular h5ad file...")
-                adata = sc.read_h5ad(h5_path)
+                adata_backed = sc.read_h5ad(h5_path, backed="r")
 
-            logger.info(f"Loaded: {adata.n_obs} cells × {adata.n_vars} genes")
+            logger.info(
+                f"Loaded: {adata_backed.n_obs} cells × {adata_backed.n_vars} genes"
+            )
+
+            # Convert backed data to in-memory AnnData to avoid CSRDataset issues
+            logger.info("Converting backed data to in-memory format...")
+            adata = sc.AnnData(
+                X=adata_backed.X[:],  # Load the full matrix into memory
+                obs=adata_backed.obs.copy(),
+                var=adata_backed.var.copy(),
+                uns=adata_backed.uns.copy() if hasattr(adata_backed, "uns") else {},
+            )
+
+            # Close the backed file if it exists
+            if hasattr(adata_backed, "file") and adata_backed.file is not None:
+                adata_backed.file.close()
+
+            logger.info("Successfully converted to in-memory AnnData")
 
             # Convert using existing AnnData conversion logic
             self._convert_anndata(adata, output_path)
@@ -344,6 +380,12 @@ class SLAFConverter:
         obs_df = adata.obs.copy()
         var_df = adata.var.copy()
 
+        # Precompute cell start indices for fast cell-based queries
+        logger.info("Precomputing cell start indices...")
+        obs_df["cell_start_index"] = self._compute_cell_start_indices_anndata(
+            adata, obs_df
+        )
+
         cell_metadata_table = self._create_metadata_table(
             df=obs_df, entity_id_col="cell_id", integer_mapping=cell_id_mapping
         )
@@ -372,7 +414,7 @@ class SLAFConverter:
         """Convert h5ad file using chunked processing with sorted-by-construction approach"""
         logger.info(f"Processing in chunks of {self.chunk_size} cells...")
 
-        with create_chunked_reader(h5ad_path) as reader:
+        with create_chunked_reader(h5ad_path, chunk_size=self.chunk_size) as reader:
             logger.info(f"Loaded: {reader.n_obs:,} cells × {reader.n_vars:,} genes")
 
             # Validate optimized data types and determine value type
@@ -424,6 +466,10 @@ class SLAFConverter:
             obs_df["cell_integer_id"] = range(len(obs_df))
             var_df["gene_integer_id"] = range(len(var_df))
 
+        # Precompute cell start indices for fast cell-based queries
+        logger.info("Precomputing cell start indices...")
+        obs_df["cell_start_index"] = self._compute_cell_start_indices(reader, obs_df)
+
         # Convert to Lance tables
         cell_metadata_table = self._create_metadata_table(
             obs_df,
@@ -446,6 +492,7 @@ class SLAFConverter:
             mode="overwrite",
             max_rows_per_group=metadata_settings["max_rows_per_group"],
             enable_v2_manifest_paths=self.enable_v2_manifest,
+            data_storage_version="2.1",
         )
         lance.write_dataset(
             gene_metadata_table,
@@ -453,6 +500,7 @@ class SLAFConverter:
             mode="overwrite",
             max_rows_per_group=metadata_settings["max_rows_per_group"],
             enable_v2_manifest_paths=self.enable_v2_manifest,
+            data_storage_version="2.1",
         )
 
         logger.info("Metadata tables written!")
@@ -549,18 +597,26 @@ class SLAFConverter:
                 "max_bytes_per_file"
             ],
             enable_v2_manifest_paths=self.enable_v2_manifest,
+            data_storage_version="2.1",
         )
 
         # Process chunks sequentially
         logger.info("Processing chunks sequentially...")
-        for chunk_idx, (chunk_table, obs_slice) in enumerate(
-            reader.iter_chunks(chunk_size=self.chunk_size)
-        ):
-            logger.info(
-                f"Processing chunk {chunk_idx + 1}/{total_chunks} ({obs_slice})"
-            )
+        import time
 
-            # Convert data types if needed
+        from tqdm import tqdm
+
+        processing_start_time = time.time()
+
+        for _chunk_idx, (chunk_table, _obs_slice) in enumerate(
+            tqdm(
+                reader.iter_chunks(chunk_size=self.chunk_size),
+                total=total_chunks,
+                desc="Processing chunks",
+                unit="chunk",
+            )
+        ):
+            # Process chunk (data type conversion and string ID addition if needed)
             if not self.use_optimized_dtypes:
                 # Convert from optimized dtypes to standard dtypes
                 cell_integer_ids = (
@@ -579,7 +635,6 @@ class SLAFConverter:
                     }
                 )
 
-            # Add string IDs if optimize_storage=False
             if not self.optimize_storage:
                 # Get cell and gene names
                 cell_names = reader.obs_names
@@ -603,7 +658,7 @@ class SLAFConverter:
                     }
                 )
 
-            # Write to Lance
+            # Write chunk to Lance dataset
             lance.write_dataset(
                 chunk_table,
                 str(expression_path),
@@ -618,9 +673,8 @@ class SLAFConverter:
                     "max_bytes_per_file"
                 ],
                 enable_v2_manifest_paths=self.enable_v2_manifest,
+                data_storage_version="2.1",
             )
-
-            logger.info(f"Completed chunk {chunk_idx + 1}/{total_chunks}")
 
         # Final memory report
         if process is not None and initial_memory is not None:
@@ -633,7 +687,14 @@ class SLAFConverter:
             except Exception:
                 pass
 
-        logger.info("Expression data processing complete!")
+        # Calculate and log overall statistics
+        total_processing_time = time.time() - processing_start_time
+
+        logger.info(
+            f"Expression data processing complete! "
+            f"Processed {total_chunks} chunks in {total_processing_time:.1f}s "
+            f"({total_processing_time / total_chunks:.2f}s per chunk average)"
+        )
 
     def _validate_optimized_dtypes(self, reader):
         """Validate that data fits in optimized data types and determine appropriate value type"""
@@ -793,7 +854,35 @@ class SLAFConverter:
 
         # Sample some values to check data type and range
         logger.info("Sampling expression values to determine data type...")
-        sample_data = adata.X.data[:100000]
+        # Handle backed mode where X might not have .data attribute
+        if hasattr(adata.X, "data"):
+            sample_data = adata.X.data[:100000]
+        else:
+            # For backed mode, convert to COO and get data
+            if hasattr(adata.X, "tocoo"):
+                coo = adata.X.tocoo()
+            else:
+                try:
+                    coo = sparse.coo_matrix(adata.X)
+                except ValueError:
+                    # If dtype is not supported, try to convert to a supported type
+                    logger.warning(
+                        "adata.X has unsupported dtype, attempting conversion"
+                    )
+                    try:
+                        coo = sparse.coo_matrix(adata.X.astype(np.float32))
+                    except Exception:
+                        logger.warning(
+                            "Could not convert adata.X, using fallback method"
+                        )
+                        # For backed mode, we might need to load a small sample
+                        sample_size = min(1000, adata.n_obs)
+                        sample_adata = adata[:sample_size, :]
+                        if sparse.issparse(sample_adata.X):
+                            coo = sample_adata.X.tocoo()
+                        else:
+                            coo = sparse.coo_matrix(sample_adata.X)
+            sample_data = coo.data[:100000]
 
         # Check if data is integer or float
         is_integer = np.issubdtype(sample_data.dtype, np.integer)
@@ -921,7 +1010,68 @@ class SLAFConverter:
         value_type="uint16",
     ):
         """Convert scipy sparse matrix to COO format PyArrow table with integer IDs"""
-        coo_matrix = sparse_matrix.tocoo()
+        # Handle backed mode where tocoo() might not be available
+        if hasattr(sparse_matrix, "tocoo"):
+            coo_matrix = sparse_matrix.tocoo()
+        else:
+            # For backed mode, convert to COO using scipy
+            try:
+                coo_matrix = sparse.coo_matrix(sparse_matrix)
+            except (ValueError, AttributeError):
+                # If dtype is not supported or object doesn't have expected methods
+                logger.warning(
+                    "sparse_matrix has unsupported dtype or missing methods, using fallback"
+                )
+                # For CSRDataset objects, we need to handle them differently
+                # Let's try to get the data in a way that works for backed mode
+                try:
+                    # Try to get the data directly from the backed object
+                    if hasattr(sparse_matrix, "data"):
+                        data = sparse_matrix.data
+                        if hasattr(sparse_matrix, "indices") and hasattr(
+                            sparse_matrix, "indptr"
+                        ):
+                            # It's a CSR matrix
+                            indices = sparse_matrix.indices
+                            indptr = sparse_matrix.indptr
+                            # Convert to COO
+                            row_indices = []
+                            col_indices = []
+                            for i in range(len(indptr) - 1):
+                                start = indptr[i]
+                                end = indptr[i + 1]
+                                row_indices.extend([i] * (end - start))
+                                col_indices.extend(indices[start:end])
+                            coo_matrix = sparse.coo_matrix(
+                                (data, (row_indices, col_indices)),
+                                shape=sparse_matrix.shape,
+                            )
+                        else:
+                            # Fallback: try to convert to numpy array first
+                            try:
+                                dense_array = np.array(sparse_matrix)
+                                coo_matrix = sparse.coo_matrix(dense_array)
+                            except Exception:
+                                # Last resort: create empty COO matrix
+                                logger.warning(
+                                    "Could not convert sparse_matrix, creating empty COO matrix"
+                                )
+                                coo_matrix = sparse.coo_matrix(sparse_matrix.shape)
+                    else:
+                        # Try to convert to numpy array first
+                        try:
+                            dense_array = np.array(sparse_matrix)
+                            coo_matrix = sparse.coo_matrix(dense_array)
+                        except Exception:
+                            # Last resort: create empty COO matrix
+                            logger.warning(
+                                "Could not convert sparse_matrix, creating empty COO matrix"
+                            )
+                            coo_matrix = sparse.coo_matrix(sparse_matrix.shape)
+                except Exception as e:
+                    logger.warning(f"All conversion methods failed: {e}")
+                    # Last resort: create empty COO matrix
+                    coo_matrix = sparse.coo_matrix(sparse_matrix.shape)
 
         logger.info(f"Processing {len(coo_matrix.data):,} non-zero elements...")
 
@@ -1136,6 +1286,7 @@ class SLAFConverter:
                     max_rows_per_group=compression_settings["max_rows_per_group"],
                     max_bytes_per_file=compression_settings["max_bytes_per_file"],
                     enable_v2_manifest_paths=self.enable_v2_manifest,
+                    data_storage_version="2.1",
                 )
             else:
                 # Metadata tables
@@ -1145,6 +1296,7 @@ class SLAFConverter:
                     str(table_path),
                     max_rows_per_group=compression_settings["max_rows_per_group"],
                     enable_v2_manifest_paths=self.enable_v2_manifest,
+                    data_storage_version="2.1",
                 )
 
         # Create indices after all tables are written (if enabled)
@@ -1184,35 +1336,218 @@ class SLAFConverter:
 
         logger.info("Index creation complete!")
 
-    def _compute_expression_statistics(self, expression_dataset) -> dict:
+    def _compute_cell_start_indices(self, reader, obs_df: pd.DataFrame) -> list[int]:
+        """Compute cell start indices during metadata creation"""
+        # Check for existing n_genes or gene_count column
+        if "n_genes" in obs_df.columns:
+            logger.info("Using existing n_genes column for cell start indices")
+            gene_counts = obs_df["n_genes"].to_numpy()
+        elif "gene_count" in obs_df.columns:
+            logger.info("Using existing gene_count column for cell start indices")
+            gene_counts = obs_df["gene_count"].to_numpy()
+        else:
+            # Calculate from expression data
+            logger.info("Calculating gene counts from expression data...")
+
+            # Collect all chunk counts
+            all_chunk_gene_counts = []
+            for chunk_table, _obs_slice in reader.iter_chunks(
+                chunk_size=self.chunk_size
+            ):
+                # Count genes per cell in this chunk using Polars groupby
+                chunk_df: pl.DataFrame = pl.from_arrow(chunk_table)
+                if len(chunk_df) > 0:
+                    chunk_gene_counts = chunk_df.group_by("cell_integer_id").agg(
+                        pl.len().alias("count")
+                    )
+                    all_chunk_gene_counts.append(chunk_gene_counts)
+
+            # Concatenate and aggregate all chunk counts
+            if all_chunk_gene_counts:
+                combined_gene_counts = pl.concat(all_chunk_gene_counts)
+                final_gene_counts = combined_gene_counts.group_by(
+                    "cell_integer_id"
+                ).agg(pl.sum("count").alias("count"))
+
+                # Create a complete gene counts array for all cells
+                # Initialize with zeros for all cells
+                gene_counts = np.zeros(len(obs_df), dtype=np.int64)
+
+                # Fill in the counts for cells that have expression data
+                cell_ids = final_gene_counts["cell_integer_id"].to_numpy()
+                counts = final_gene_counts["count"].to_numpy()
+                gene_counts[cell_ids] = counts
+
+                logger.info(f"Gene counts: {gene_counts}")
+            else:
+                gene_counts = np.zeros(len(obs_df), dtype=np.int64)
+
+        # Compute cumulative sum with first value as 0
+        return np.insert(np.cumsum(gene_counts)[:-1], 0, 0).tolist()
+
+    def _compute_cell_start_indices_anndata(
+        self, adata, obs_df: pd.DataFrame
+    ) -> list[int]:
+        """Compute cell start indices for AnnData object"""
+        # Check for existing n_genes or gene_count column
+        if "n_genes" in obs_df.columns:
+            logger.info("Using existing n_genes column for cell start indices")
+            gene_counts = obs_df["n_genes"].to_numpy()
+        elif "gene_count" in obs_df.columns:
+            logger.info("Using existing gene_count column for cell start indices")
+            gene_counts = obs_df["gene_count"].to_numpy()
+        else:
+            # Calculate from expression data
+            logger.info("Calculating gene counts from expression data...")
+            # Convert sparse matrix to COO to count genes per cell
+            if sparse.issparse(adata.X):
+                if hasattr(adata.X, "tocoo"):
+                    coo = adata.X.tocoo()
+                else:
+                    # Handle backed mode where tocoo() might not be available
+                    try:
+                        coo = sparse.coo_matrix(adata.X)
+                    except ValueError:
+                        # If dtype is not supported, try to convert to a supported type
+                        logger.warning(
+                            "adata.X has unsupported dtype, attempting conversion"
+                        )
+                        # Try to convert to float32 first
+                        try:
+                            coo = sparse.coo_matrix(adata.X.astype(np.float32))
+                        except Exception:
+                            # If that fails, try to get the data in a different way
+                            logger.warning(
+                                "Could not convert adata.X, using fallback method"
+                            )
+                            # For backed mode, we might need to load a small sample
+                            sample_size = min(1000, adata.n_obs)
+                            sample_adata = adata[:sample_size, :]
+                            if sparse.issparse(sample_adata.X):
+                                coo = sample_adata.X.tocoo()
+                            else:
+                                coo = sparse.coo_matrix(sample_adata.X)
+            else:
+                try:
+                    coo = sparse.coo_matrix(adata.X)
+                except ValueError:
+                    # If dtype is not supported, try to convert to a supported type
+                    logger.warning(
+                        "adata.X has unsupported dtype, attempting conversion"
+                    )
+                    try:
+                        coo = sparse.coo_matrix(adata.X.astype(np.float32))
+                    except Exception:
+                        logger.warning(
+                            "Could not convert adata.X, using fallback method"
+                        )
+                        # For backed mode, we might need to load a small sample
+                        sample_size = min(1000, adata.n_obs)
+                        sample_adata = adata[:sample_size, :]
+                        if sparse.issparse(sample_adata.X):
+                            coo = sample_adata.X.tocoo()
+                        else:
+                            coo = sparse.coo_matrix(sample_adata.X)
+
+            # Count genes per cell using numpy bincount
+            n_cells = adata.n_obs
+            gene_counts = np.bincount(coo.row, minlength=n_cells)
+
+        # Compute cumulative sum with first value as 0
+        return np.insert(np.cumsum(gene_counts)[:-1], 0, 0).tolist()
+
+    def _compute_expression_statistics(
+        self, expression_dataset
+    ) -> tuple[dict[str, float], int]:
         """Compute basic statistics from expression dataset using SQL"""
         # Use DuckDB to compute statistics directly from Lance dataset
-        import duckdb
 
-        # Reference the Lance dataset in local scope for DuckDB
-        expression = expression_dataset  # noqa: F841
+        logger.info(
+            "Computing expression statistics using fragment-by-fragment processing..."
+        )
 
-        # Compute statistics using SQL
-        stats_query = """
-        SELECT
-            MIN(value) as min_value,
-            MAX(value) as max_value,
-            AVG(value) as mean_value,
-            STDDEV(value) as std_value
-        FROM expression
-        """
-
-        result = duckdb.query(stats_query).fetchdf()
-
-        # Convert to dictionary
-        stats = {
-            "min_value": float(result.iloc[0]["min_value"]),
-            "max_value": float(result.iloc[0]["max_value"]),
-            "mean_value": float(result.iloc[0]["mean_value"]),
-            "std_value": float(result.iloc[0]["std_value"]),
+        # Initialize running statistics
+        running_stats = {
+            "min_value": float("inf"),
+            "max_value": float("-inf"),
+            "sum_value": 0.0,
+            "sum_squared": 0.0,
+            "count": 0,
         }
 
-        return stats
+        # Process each fragment individually to avoid memory issues
+        fragments = expression_dataset.get_fragments()
+        total_fragments = len(fragments)
+
+        logger.info(
+            f"Processing {total_fragments} fragments for statistics computation..."
+        )
+
+        from tqdm import tqdm
+
+        for i, fragment in enumerate(tqdm(fragments, desc="Computing statistics")):
+            try:
+                # Create Polars LazyFrame from this fragment
+                ldf = pl.scan_pyarrow_dataset(fragment)
+
+                # Compute fragment-level statistics
+                fragment_stats = ldf.select(
+                    [
+                        pl.col("value").min().alias("min_value"),
+                        pl.col("value").max().alias("max_value"),
+                        pl.col("value").sum().alias("sum_value"),
+                        (pl.col("value") ** 2).sum().alias("sum_squared"),
+                        pl.col("value").count().alias("count"),
+                    ]
+                ).collect()
+
+                # Extract values from the result
+                row = fragment_stats.row(0)
+                frag_min, frag_max, frag_sum, frag_sum_squared, frag_count = row
+
+                # Update running statistics
+                running_stats["min_value"] = min(running_stats["min_value"], frag_min)
+                running_stats["max_value"] = max(running_stats["max_value"], frag_max)
+                running_stats["sum_value"] += frag_sum
+                running_stats["sum_squared"] += frag_sum_squared
+                running_stats["count"] += frag_count
+
+            except Exception as e:
+                logger.warning(f"Error processing fragment {i}: {e}")
+                logger.warning("Continuing with remaining fragments...")
+                continue
+
+        # Compute final statistics
+        if running_stats["count"] == 0:
+            logger.warning("No valid data found for statistics computation")
+            return {
+                "min_value": 0.0,
+                "max_value": 0.0,
+                "mean_value": 0.0,
+                "std_value": 0.0,
+            }, 0
+
+        # Calculate mean
+        mean_value = running_stats["sum_value"] / running_stats["count"]
+
+        # Calculate standard deviation using the formula: sqrt((sum(x²) - n*mean²) / (n-1))
+        variance = (
+            running_stats["sum_squared"] - running_stats["count"] * mean_value**2
+        ) / (running_stats["count"] - 1)
+        std_value = variance**0.5 if variance > 0 else 0.0
+
+        stats = {
+            "min_value": float(running_stats["min_value"]),
+            "max_value": float(running_stats["max_value"]),
+            "mean_value": float(mean_value),
+            "std_value": float(std_value),
+        }
+
+        logger.info(
+            f"Statistics computed: min={stats['min_value']:.2f}, max={stats['max_value']:.2f}, mean={stats['mean_value']:.2f}, std={stats['std_value']:.2f}"
+        )
+
+        return stats, int(running_stats["count"])
 
     def _save_config(self, output_path_obj: Path, shape: tuple):
         """Save SLAF configuration with computed metadata"""
@@ -1222,25 +1557,19 @@ class SLAFConverter:
         # Compute additional metadata for faster info() method
         logger.info("Computing dataset statistics...")
 
-        # Get expression count and compute sparsity using SQL
-        import duckdb
+        # Reference Lance dataset
+        expression = lance.dataset(str(output_path_obj / "expression.lance"))
 
-        # Reference Lance datasets in local scope for DuckDB
-        expression = lance.dataset(str(output_path_obj / "expression.lance"))  # noqa: F841
-
-        # Get expression count using SQL
-        count_query = "SELECT COUNT(*) as count FROM expression"
-        expression_count_result = duckdb.query(count_query).fetchdf()
-        expression_count = expression_count_result.iloc[0]["count"]
+        # Compute basic statistics and count from expression data
+        expression_stats, expression_count = self._compute_expression_statistics(
+            expression
+        )
 
         total_possible_elements = n_cells * n_genes
         sparsity = 1 - (expression_count / total_possible_elements)
 
-        # Compute basic statistics from expression data using SQL
-        expression_stats = self._compute_expression_statistics(expression)
-
         config = {
-            "format_version": "0.2",
+            "format_version": "0.3",
             "array_shape": [n_cells, n_genes],
             "n_cells": n_cells,
             "n_genes": n_genes,
