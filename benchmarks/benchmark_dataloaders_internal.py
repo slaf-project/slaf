@@ -844,7 +844,7 @@ def main():
     """Run the internal dataloader benchmarks."""
 
     # Use a smaller dataset for development
-    slaf_path = "../slaf-datasets/plate1_Tahoe100M.slaf"
+    slaf_path = "../slaf-datasets/plate1_Tahoe100M_v21.slaf"
 
     benchmark = InternalDataloaderBenchmark(slaf_path)
 

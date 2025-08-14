@@ -57,14 +57,14 @@ Raw mode bypasses tokenization and returns Polars DataFrames that have the exact
 
 | Batch Size | Throughput (cells/sec) | Total Cells | Measurement Time (s) |
 | ---------- | ---------------------- | ----------- | -------------------- |
-| 32         | 24,140                 | 241,412     | 10.0                 |
-| 64         | 28,084                 | 280,851     | 10.0                 |
-| 128        | 29,545                 | 295,637     | 10.0                 |
-| 256        | 30,575                 | 305,770     | 10.0                 |
+| 32         | 23,988                 | 240,374     | 10.0                 |
+| 64         | 23,650                 | 236,505     | 10.0                 |
+| 128        | 27,691                 | 277,052     | 10.0                 |
+| 256        | 28,125                 | 281,315     | 10.0                 |
 
 !!! success "Optimization Validation"
 
-    Raw mode throughput shows **1.3x improvement** from batch size 32 to 256, demonstrating that SLAF's data loading pipeline scales efficiently with larger batch sizes while maintaining high performance.
+    Raw mode throughput shows **1.2x improvement** from batch size 32 to 256, demonstrating that SLAF's data loading pipeline scales efficiently with larger batch sizes while maintaining high performance.
 
 ### **Fragment vs Batch Loading Comparison**
 
@@ -72,12 +72,12 @@ SLAF supports two loading strategies: fragment-based and batch-based loading. Fr
 
 | Strategy               | Throughput (cells/sec) | Total Cells | Total Batches |
 | ---------------------- | ---------------------- | ----------- | ------------- |
-| Fragment-Based Loading | 21,735                 | 229,669     | 7,180         |
-| Batch-Based Loading    | 19,512                 | 195,356     | 6,441         |
+| Fragment-Based Loading | 22,472                 | 229,669     | 7,180         |
+| Batch-Based Loading    | 24,354                 | 243,554     | 8,038         |
 
 !!! note "Fragment Strategy Performance"
 
-    Fragment-based loading shows modestly higher throughput than batch-based loading in this benchmark, but test-retest repeatability shows high variance. The performance difference should not be overinterpreted as it may vary significantly across different runs and hardware configurations.
+    Batch-based loading shows modestly higher throughput than fragment-based loading in this benchmark, but test-retest repeatability shows high variance. The performance difference should not be overinterpreted as it may vary significantly across different runs and hardware configurations.
 
 !!! info "Strategy Selection"
 
@@ -89,10 +89,10 @@ Tokenized mode provides pre-tokenized sequences ready for GPU training, demonstr
 
 | Batch Size | Throughput (cells/sec) | Throughput (tokens/sec) | Total Cells | Measurement Time (s) |
 | ---------- | ---------------------- | ----------------------- | ----------- | -------------------- |
-| 32         | 9,334                  | 19,115,469              | 93,604      | 10.0                 |
-| 64         | 9,296                  | 19,037,797              | 93,025      | 10.0                 |
-| 128        | 9,254                  | 18,951,337              | 92,766      | 10.0                 |
-| 256        | 9,387                  | 19,225,378              | 94,119      | 10.0                 |
+| 32         | 9,424                  | 19,299,581              | 95,157      | 10.1                 |
+| 64         | 9,526                  | 19,508,342              | 95,436      | 10.0                 |
+| 128        | 9,598                  | 19,657,469              | 96,038      | 10.0                 |
+| 256        | 9,655                  | 19,773,029              | 96,769      | 10.0                 |
 
 !!! success "Tokenization Efficiency"
 
@@ -122,18 +122,18 @@ Raw data loading performance measures the base throughput of each system without
 
 | System        | Throughput (cells/sec) |
 | ------------- | ---------------------- |
-| **SLAF**      | **22,451**             |
-| scDataset     | 10,785                 |
-| AnnDataLoader | 392                    |
-| AnnLoader     | 240                    |
+| **SLAF**      | **26,816**             |
+| scDataset     | 10,849                 |
+| AnnDataLoader | 408                    |
+| AnnLoader     | 224                    |
 
 !!! success "SOTA Performance"
 
-    SLAF achieves **2.1x higher throughput** than scDataset and **57x higher throughput** than AnnDataLoader in raw data loading.
+    SLAF achieves **2.5x higher throughput** than scDataset and **66x higher throughput** than AnnDataLoader in raw data loading.
 
 !!! info "scDataset Performance Analysis"
 
-    Our comprehensive benchmarks reveal that scDataset can achieve excellent performance with proper parameter tuning. We observed **10,785 cells/sec** with optimized parameters, which is **5.4x higher** than the paper's reported ~2,000 cells/sec, even without using multiprocessing. Note that these are completely different systems though (M1 Max vs NVIDIA DGX CPU).
+    Our comprehensive benchmarks reveal that scDataset can achieve excellent performance with proper parameter tuning. We observed **10,849 cells/sec** with optimized parameters, which is **5.4x higher** than the paper's reported ~2,000 cells/sec, even without using multiprocessing. Note that these are completely different systems though (M1 Max vs NVIDIA DGX CPU).
 
     However, we found significant limitations with multiprocessing due to pickling issues with h5py-backed AnnData objects. See our [detailed scDataset benchmarks](scdataset_benchmarks.md) for complete analysis including parameter scaling and multiprocessing limitations.
 
@@ -155,7 +155,7 @@ Even though SLAF's tokenizing dataloaders do more work, we find that their throu
 
 | System   | Throughput (cells/sec) | Throughput (tokens/sec) |
 | -------- | ---------------------- | ----------------------- |
-| **SLAF** | **8,415**              | **17,234,044**          |
+| **SLAF** | **9,607**              | **19,675,243**          |
 
 !!! success "GPU-Ready Cell Sentences"
 
