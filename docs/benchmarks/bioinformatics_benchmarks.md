@@ -6,8 +6,8 @@ SLAF delivers **capability expansion** for single-cell analysis - enabling workf
 
 ### Dataset
 
-- **Dataset**: A synthetic dataset (2,695 cells × 1,863 genes)
-- **Size**: ~23 MB (h5ad format)
+- **Dataset**: A synthetic dataset (49,955 cells × 25,000 genes)
+- **Size**: ~722 MB (h5ad format)
 
 ```shell
 SLAF Dataset
