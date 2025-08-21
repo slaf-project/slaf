@@ -13,7 +13,7 @@ To keep pace with this deluge, I developed [Sparse Lazy Array Format (SLAF)](htt
 
 Learn about SLAF [here](https://slaf-project.github.io/slaf/blog/introducing-slaf/) and [start using it](https://github.com/slaf-project/slaf/) for your single-cell workflows today.
 
-In this blog post, we'll go behind the scenes of SLAF's data loader, and the various optimizations that improve throughput ~6.4x with respect to a naive PyTorch implementation on SLAF, and ~100x with respect to status quo approaches for single-cell data loading.
+In this blog post, we'll go behind the scenes of SLAF's data loader, and the various optimizations that improve throughput ~6.4x with respect to a naive PyTorch implementation on SLAF, and ~100x with respect to status quo approaches for single-cell data loading. Look for comprehensive dataloader benchmarks [here](https://slaf-project.github.io/slaf/benchmarks/ml_benchmarks/).
 
 ## Streaming Transcriptomics Data to Modern GPUs
 
