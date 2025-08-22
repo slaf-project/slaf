@@ -455,9 +455,9 @@ As Python moves toward removing the GIL and hardware continues to evolve, thread
 
 **What's next?**
 
-- We're actively collaborating with the scverse teams (scanpy and SCVI) to expand the scope of dataloader benchmarks.
+- We're actively collaborating with teams developing dataloaders for this corner of biology: the scanpy team on [AnnLoader](https://anndata.readthedocs.io/en/latest/generated/anndata.experimental.AnnLoader.html), the SCVI team on [AnnDataLoader](https://docs.scvi-tools.org/en/stable/api/reference/scvi.dataloaders.AnnDataLoader.html), the [Lamin](https://lamin.ai/) team on [arrayloaders](https://blog.lamin.ai/arrayloader-benchmarks), and the [scDataset](https://arxiv.org/abs/2506.01883) team, to expand the scope of fair dataloader benchmarks. Please reach out if you're developing one and would like to participate!
 
-- We're working on integration with Ray Train in order to make multi-node, multi-GPU training seamless and performant.
+- We're working on integration with [Ray Train](https://docs.ray.io/en/latest/train/train.html) in order to make multi-node, multi-GPU training seamless and performant. If you're a developer or experienced user of Ray, or if you're a GPU cloud provider that wants to sponsor foundation model training run benchmarks, we want to hear from you!
 
 The complete implementation of `SLAFDataLoader` is available on [Github](https://github.com/slaf-project/slaf), along with [example notebooks](https://slaf-project.github.io/slaf/examples/ml-training/) and comprehensive [API documentation](https://slaf-project.github.io/slaf/api/ml/). Go forth and train!
 
