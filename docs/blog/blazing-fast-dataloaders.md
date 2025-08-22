@@ -243,11 +243,11 @@ Before going further, I needed to understand why larger batches were performing 
 
 Armed with this insight, I looked around for libraries that provide the flexibility to decouple async prefetching batch size from training batch size in the dataloader ecosystem without having the write my own async prefetcher and queue management systems. I looked into Mosaic ML's streaming library and Ray Data.
 
-- Mosaic ML was dead on arrival because it expected me to convert into Mosaic's format. I couldn't expect my users to sign up for converting to SLAF, then Mosaic, and besides.
+- `mosaic-ml-streaming` was dead on arrival because it expects users to convert to Mosaic's custom format or other standards like jsonl. This violates our self-imposed constraint of "store once, query in place" and wouldn't be a drop-in replacement for PyTorch over SLAF.
 
-- Ray Data came close, with excellent separation of concerns between loading, transforming, and iterating over streams of data. However, Ray is tied to numpy or pandas, and I needed more control over the transforms (bespoke polars dataframe operations). I also needed to have different batch sizes for prefetching and transformations vs for training steps.
+- Ray Data actually supports most of our requirements - it has direct Lance integration with `read_lance()`, supports Arrow tables and custom transformations, and can handle different batch sizes for prefetching vs training. However, Ray's `transform_data` method is opinionated about input types, accepting pandas dataframes and Arrow Tables but not polars dataframes. Ultimately, we chose to build a custom solution to avoid the conversion overhead between `pyarrow.RecordBatch` → `pyarrow.Table` → Polars → `ray.data.Dataset`, and to have tighter control over the specific optimizations like block shuffling and window functions in polars. Once Ray's `transform_data` supported polars dataframes directly, we could switch.
 
-I decided to bite the bullet and write my own thread-based async prefetcher. The hardest part was unlearning PyTorch's received wisdom about the roles of the Dataset and DataLoader classes.
+Given this state, I decided to bite the bullet and write my own thread-based async prefetcher. The hardest part was unlearning PyTorch's received wisdom about the roles of the Dataset and DataLoader classes.
 
 | Component      | Traditional PyTorch                                  | Our Deconstructed Approach                                                                   |
 | -------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------- |
