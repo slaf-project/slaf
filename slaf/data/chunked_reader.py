@@ -234,7 +234,9 @@ class ChunkedH5ADReader(BaseChunkedReader):
         Cell metadata columns: ['cell_type', 'total_counts', 'batch']
     """
 
-    def __init__(self, filename: str, chunk_size: int = 25000):
+    def __init__(
+        self, filename: str, chunk_size: int = 25000, value_type: str = "uint16"
+    ):
         """
         Initialize the chunked h5ad reader.
 
@@ -268,6 +270,7 @@ class ChunkedH5ADReader(BaseChunkedReader):
         super().__init__(filename)
         self.adata = None
         self.chunk_size = chunk_size
+        self.value_type = value_type
 
     def _open_file(self) -> None:
         """Open the h5ad file using scanpy backed mode"""
@@ -397,7 +400,13 @@ class ChunkedH5ADReader(BaseChunkedReader):
                 # Create Arrow arrays directly
                 cell_integer_ids = coo.row.astype(np.uint32) + start_row
                 gene_integer_ids = coo.col.astype(np.uint16)
-                values = coo.data.astype(np.uint16)
+                # Use the specified value type
+                if self.value_type == "uint16":
+                    values = coo.data.astype(np.uint16)
+                elif self.value_type == "float32":
+                    values = coo.data.astype(np.float32)
+                else:
+                    raise ValueError(f"Unsupported value type: {self.value_type}")
 
                 result = pa.table(
                     {
@@ -408,11 +417,14 @@ class ChunkedH5ADReader(BaseChunkedReader):
                 )
             else:
                 # Empty chunk
+                value_pa_type = (
+                    pa.uint16() if self.value_type == "uint16" else pa.float32()
+                )
                 result = pa.table(
                     {
                         "cell_integer_id": pa.array([], type=pa.uint32()),
                         "gene_integer_id": pa.array([], type=pa.uint16()),
-                        "value": pa.array([], type=pa.uint16()),
+                        "value": pa.array([], type=value_pa_type),
                     }
                 )
         else:
@@ -422,7 +434,13 @@ class ChunkedH5ADReader(BaseChunkedReader):
             if coo.nnz > 0:
                 cell_integer_ids = coo.row.astype(np.uint32) + start_row
                 gene_integer_ids = coo.col.astype(np.uint16)
-                values = coo.data.astype(np.uint16)
+                # Use the specified value type
+                if self.value_type == "uint16":
+                    values = coo.data.astype(np.uint16)
+                elif self.value_type == "float32":
+                    values = coo.data.astype(np.float32)
+                else:
+                    raise ValueError(f"Unsupported value type: {self.value_type}")
 
                 result = pa.table(
                     {
@@ -432,11 +450,14 @@ class ChunkedH5ADReader(BaseChunkedReader):
                     }
                 )
             else:
+                value_pa_type = (
+                    pa.uint16() if self.value_type == "uint16" else pa.float32()
+                )
                 result = pa.table(
                     {
                         "cell_integer_id": pa.array([], type=pa.uint32()),
                         "gene_integer_id": pa.array([], type=pa.uint16()),
-                        "value": pa.array([], type=pa.uint16()),
+                        "value": pa.array([], type=value_pa_type),
                     }
                 )
 
@@ -540,9 +561,10 @@ class Chunked10xMTXReader(BaseChunkedReader):
     Reads chunks directly from matrix.mtx without loading the entire matrix into memory.
     """
 
-    def __init__(self, mtx_dir: str):
+    def __init__(self, mtx_dir: str, value_type: str = "uint16"):
         super().__init__(mtx_dir)
         self.mtx_dir = Path(mtx_dir)
+        self.value_type = value_type
         self._barcodes = None
         self._genes = None
         self._matrix_file = None
@@ -692,22 +714,44 @@ class Chunked10xMTXReader(BaseChunkedReader):
                 # Create Arrow arrays directly
                 cell_integer_ids = np.array(rows, dtype=np.uint32) + start
                 gene_integer_ids = np.array(cols, dtype=np.uint16)
-                values = np.array(vals, dtype=np.uint16)
+                # Use the specified value type
+                if self.value_type == "uint16":
+                    values = np.array(vals, dtype=np.uint16)
+                elif self.value_type == "float32":
+                    values = np.array(vals, dtype=np.float32)
+                else:
+                    raise ValueError(f"Unsupported value type: {self.value_type}")
+
+                # Use the specified value type for Arrow array
+                if self.value_type == "uint16":
+                    value_pa_type = pa.uint16()
+                elif self.value_type == "float32":
+                    value_pa_type = pa.float32()
+                else:
+                    raise ValueError(f"Unsupported value type: {self.value_type}")
 
                 chunk_table = pa.table(
                     {
                         "cell_integer_id": pa.array(cell_integer_ids),
                         "gene_integer_id": pa.array(gene_integer_ids),
-                        "value": pa.array(values),
+                        "value": pa.array(values, type=value_pa_type),
                     }
                 )
             else:
                 # Empty chunk
+                # Use the specified value type for Arrow array
+                if self.value_type == "uint16":
+                    value_pa_type = pa.uint16()
+                elif self.value_type == "float32":
+                    value_pa_type = pa.float32()
+                else:
+                    raise ValueError(f"Unsupported value type: {self.value_type}")
+
                 chunk_table = pa.table(
                     {
                         "cell_integer_id": pa.array([], type=pa.uint32()),
                         "gene_integer_id": pa.array([], type=pa.uint16()),
-                        "value": pa.array([], type=pa.uint16()),
+                        "value": pa.array([], type=value_pa_type),
                     }
                 )
 
@@ -746,22 +790,44 @@ class Chunked10xMTXReader(BaseChunkedReader):
             # Create Arrow arrays directly
             cell_integer_ids = np.array(rows, dtype=np.uint32) + start_row
             gene_integer_ids = np.array(cols, dtype=np.uint16)
-            values = np.array(vals, dtype=np.uint16)
+            # Use the specified value type
+            if self.value_type == "uint16":
+                values = np.array(vals, dtype=np.uint16)
+            elif self.value_type == "float32":
+                values = np.array(vals, dtype=np.float32)
+            else:
+                raise ValueError(f"Unsupported value type: {self.value_type}")
+
+            # Use the specified value type for Arrow array
+            if self.value_type == "uint16":
+                value_pa_type = pa.uint16()
+            elif self.value_type == "float32":
+                value_pa_type = pa.float32()
+            else:
+                raise ValueError(f"Unsupported value type: {self.value_type}")
 
             chunk_table = pa.table(
                 {
                     "cell_integer_id": pa.array(cell_integer_ids),
                     "gene_integer_id": pa.array(gene_integer_ids),
-                    "value": pa.array(values),
+                    "value": pa.array(values, type=value_pa_type),
                 }
             )
         else:
             # Empty chunk
+            # Use the specified value type for Arrow array
+            if self.value_type == "uint16":
+                value_pa_type = pa.uint16()
+            elif self.value_type == "float32":
+                value_pa_type = pa.float32()
+            else:
+                raise ValueError(f"Unsupported value type: {self.value_type}")
+
             chunk_table = pa.table(
                 {
                     "cell_integer_id": pa.array([], type=pa.uint32()),
                     "gene_integer_id": pa.array([], type=pa.uint16()),
-                    "value": pa.array([], type=pa.uint16()),
+                    "value": pa.array([], type=value_pa_type),
                 }
             )
 
@@ -795,9 +861,10 @@ class Chunked10xH5Reader(BaseChunkedReader):
     Uses h5py to read chunks directly from the H5 file without loading everything into memory.
     """
 
-    def __init__(self, h5_path: str):
+    def __init__(self, h5_path: str, value_type: str = "uint16"):
         super().__init__(h5_path)
         self.h5_path = h5_path
+        self.value_type = value_type
         self._file = None
         self._matrix_dataset = None
         self._obs_names = None
@@ -1006,22 +1073,44 @@ class Chunked10xH5Reader(BaseChunkedReader):
                     # Create Arrow arrays directly
                     cell_integer_ids = coo.row.astype(np.uint32) + start
                     gene_integer_ids = coo.col.astype(np.uint16)
-                    values = coo.data.astype(np.uint16)
+                    # Use the specified value type
+                    if self.value_type == "uint16":
+                        values = coo.data.astype(np.uint16)
+                    elif self.value_type == "float32":
+                        values = coo.data.astype(np.float32)
+                    else:
+                        raise ValueError(f"Unsupported value type: {self.value_type}")
+
+                    # Use the specified value type for Arrow array
+                    if self.value_type == "uint16":
+                        value_pa_type = pa.uint16()
+                    elif self.value_type == "float32":
+                        value_pa_type = pa.float32()
+                    else:
+                        raise ValueError(f"Unsupported value type: {self.value_type}")
 
                     chunk_table = pa.table(
                         {
                             "cell_integer_id": pa.array(cell_integer_ids),
                             "gene_integer_id": pa.array(gene_integer_ids),
-                            "value": pa.array(values),
+                            "value": pa.array(values, type=value_pa_type),
                         }
                     )
                 else:
                     # Empty chunk
+                    # Use the specified value type for Arrow array
+                    if self.value_type == "uint16":
+                        value_pa_type = pa.uint16()
+                    elif self.value_type == "float32":
+                        value_pa_type = pa.float32()
+                    else:
+                        raise ValueError(f"Unsupported value type: {self.value_type}")
+
                     chunk_table = pa.table(
                         {
                             "cell_integer_id": pa.array([], type=pa.uint32()),
                             "gene_integer_id": pa.array([], type=pa.uint16()),
-                            "value": pa.array([], type=pa.uint16()),
+                            "value": pa.array([], type=value_pa_type),
                         }
                     )
             elif isinstance(self._matrix_dataset, h5py.Group):
@@ -1043,22 +1132,44 @@ class Chunked10xH5Reader(BaseChunkedReader):
                     # Create Arrow arrays directly
                     cell_integer_ids = np.array(row_indices, dtype=np.uint32) + start
                     gene_integer_ids = indices.astype(np.uint16)
-                    values = data.astype(np.uint16)
+                    # Use the specified value type
+                    if self.value_type == "uint16":
+                        values = data.astype(np.uint16)
+                    elif self.value_type == "float32":
+                        values = data.astype(np.float32)
+                    else:
+                        raise ValueError(f"Unsupported value type: {self.value_type}")
+
+                    # Use the specified value type for Arrow array
+                    if self.value_type == "uint16":
+                        value_pa_type = pa.uint16()
+                    elif self.value_type == "float32":
+                        value_pa_type = pa.float32()
+                    else:
+                        raise ValueError(f"Unsupported value type: {self.value_type}")
 
                     chunk_table = pa.table(
                         {
                             "cell_integer_id": pa.array(cell_integer_ids),
                             "gene_integer_id": pa.array(gene_integer_ids),
-                            "value": pa.array(values),
+                            "value": pa.array(values, type=value_pa_type),
                         }
                     )
                 else:
                     # Empty chunk
+                    # Use the specified value type for Arrow array
+                    if self.value_type == "uint16":
+                        value_pa_type = pa.uint16()
+                    elif self.value_type == "float32":
+                        value_pa_type = pa.float32()
+                    else:
+                        raise ValueError(f"Unsupported value type: {self.value_type}")
+
                     chunk_table = pa.table(
                         {
                             "cell_integer_id": pa.array([], type=pa.uint32()),
                             "gene_integer_id": pa.array([], type=pa.uint16()),
-                            "value": pa.array([], type=pa.uint16()),
+                            "value": pa.array([], type=value_pa_type),
                         }
                     )
             else:
@@ -1085,22 +1196,44 @@ class Chunked10xH5Reader(BaseChunkedReader):
                 # Create Arrow arrays directly
                 cell_integer_ids = coo.row.astype(np.uint32) + start_row
                 gene_integer_ids = coo.col.astype(np.uint16) + start_col
-                values = coo.data.astype(np.uint16)
+                # Use the specified value type
+                if self.value_type == "uint16":
+                    values = coo.data.astype(np.uint16)
+                elif self.value_type == "float32":
+                    values = coo.data.astype(np.float32)
+                else:
+                    raise ValueError(f"Unsupported value type: {self.value_type}")
+
+                # Use the specified value type for Arrow array
+                if self.value_type == "uint16":
+                    value_pa_type = pa.uint16()
+                elif self.value_type == "float32":
+                    value_pa_type = pa.float32()
+                else:
+                    raise ValueError(f"Unsupported value type: {self.value_type}")
 
                 chunk_table = pa.table(
                     {
                         "cell_integer_id": pa.array(cell_integer_ids),
                         "gene_integer_id": pa.array(gene_integer_ids),
-                        "value": pa.array(values),
+                        "value": pa.array(values, type=value_pa_type),
                     }
                 )
             else:
                 # Empty chunk
+                # Use the specified value type for Arrow array
+                if self.value_type == "uint16":
+                    value_pa_type = pa.uint16()
+                elif self.value_type == "float32":
+                    value_pa_type = pa.float32()
+                else:
+                    raise ValueError(f"Unsupported value type: {self.value_type}")
+
                 chunk_table = pa.table(
                     {
                         "cell_integer_id": pa.array([], type=pa.uint32()),
                         "gene_integer_id": pa.array([], type=pa.uint16()),
-                        "value": pa.array([], type=pa.uint16()),
+                        "value": pa.array([], type=value_pa_type),
                     }
                 )
         elif isinstance(self._matrix_dataset, h5py.Group):
@@ -1122,13 +1255,27 @@ class Chunked10xH5Reader(BaseChunkedReader):
                 # Create Arrow arrays directly
                 cell_integer_ids = np.array(row_indices, dtype=np.uint32) + start_row
                 gene_integer_ids = indices.astype(np.uint16)
-                values = data.astype(np.uint16)
+                # Use the specified value type
+                if self.value_type == "uint16":
+                    values = data.astype(np.uint16)
+                elif self.value_type == "float32":
+                    values = data.astype(np.float32)
+                else:
+                    raise ValueError(f"Unsupported value type: {self.value_type}")
+
+                # Use the specified value type for Arrow array
+                if self.value_type == "uint16":
+                    value_pa_type = pa.uint16()
+                elif self.value_type == "float32":
+                    value_pa_type = pa.float32()
+                else:
+                    raise ValueError(f"Unsupported value type: {self.value_type}")
 
                 chunk_table = pa.table(
                     {
                         "cell_integer_id": pa.array(cell_integer_ids),
                         "gene_integer_id": pa.array(gene_integer_ids),
-                        "value": pa.array(values),
+                        "value": pa.array(values, type=value_pa_type),
                     }
                 )
 
@@ -1151,11 +1298,19 @@ class Chunked10xH5Reader(BaseChunkedReader):
                         )
             else:
                 # Empty chunk
+                # Use the specified value type for Arrow array
+                if self.value_type == "uint16":
+                    value_pa_type = pa.uint16()
+                elif self.value_type == "float32":
+                    value_pa_type = pa.float32()
+                else:
+                    raise ValueError(f"Unsupported value type: {self.value_type}")
+
                 chunk_table = pa.table(
                     {
                         "cell_integer_id": pa.array([], type=pa.uint32()),
                         "gene_integer_id": pa.array([], type=pa.uint16()),
-                        "value": pa.array([], type=pa.uint16()),
+                        "value": pa.array([], type=value_pa_type),
                     }
                 )
         else:
@@ -1164,7 +1319,9 @@ class Chunked10xH5Reader(BaseChunkedReader):
         return chunk_table
 
 
-def create_chunked_reader(file_path: str, chunk_size: int = 25000) -> BaseChunkedReader:
+def create_chunked_reader(
+    file_path: str, chunk_size: int = 25000, value_type: str = "uint16"
+) -> BaseChunkedReader:
     """
     Factory function to create the appropriate chunked reader based on file format.
 
@@ -1194,10 +1351,12 @@ def create_chunked_reader(file_path: str, chunk_size: int = 25000) -> BaseChunke
         raise ValueError(f"Cannot create chunked reader: {e}") from e
 
     if format_type == "h5ad":
-        return ChunkedH5ADReader(file_path, chunk_size=chunk_size)
+        return ChunkedH5ADReader(
+            file_path, chunk_size=chunk_size, value_type=value_type
+        )
     elif format_type == "10x_mtx":
-        return Chunked10xMTXReader(file_path)
+        return Chunked10xMTXReader(file_path, value_type=value_type)
     elif format_type == "10x_h5":
-        return Chunked10xH5Reader(file_path)
+        return Chunked10xH5Reader(file_path, value_type=value_type)
     else:
         raise ValueError(f"Unsupported format for chunked reading: {format_type}")

@@ -72,13 +72,13 @@ class SLAFConverter:
         self,
         use_integer_keys: bool = True,
         chunked: bool = True,  # Changed from False to True - make chunked the default
-        chunk_size: int = 50000,  # Smaller chunks for better memory efficiency and faster COO conversion
+        chunk_size: int = 5000,  # Smaller chunks to avoid memory alignment issues in Lance v2.1
         sort_metadata: bool = False,
         create_indices: bool = False,  # Disable indices by default for small datasets
         optimize_storage: bool = True,  # Only store integer IDs in expression table
         use_optimized_dtypes: bool = True,  # Use uint16/uint32 for better compression
         enable_v2_manifest: bool = True,  # Enable v2 manifest paths for better performance
-        compact_after_write: bool = True,  # Compact dataset after writing for optimal storage
+        compact_after_write: bool = False,  # Compact dataset after writing for optimal storage (disabled by default to avoid manifest corruption)
     ):
         """
         Initialize converter with optimization options.
@@ -90,7 +90,7 @@ class SLAFConverter:
             chunked: Use chunked processing for memory efficiency (default: True).
                     Chunked processing is now the default for optimal memory efficiency.
                     Set to False only for small datasets or debugging purposes.
-            chunk_size: Size of each chunk when chunked=True (default: 25000).
+            chunk_size: Size of each chunk when chunked=True (default: 5000).
             create_indices: Whether to create indices for query performance.
                           Default: False for small datasets to reduce storage overhead.
                           Set to True for large datasets where query performance is important.
@@ -115,9 +115,9 @@ class SLAFConverter:
             Using chunked processing: False
 
             >>> # Custom chunk size for large datasets
-            >>> converter = SLAFConverter(chunk_size=100000)
+            >>> converter = SLAFConverter(chunk_size=10000)
             >>> print(f"Chunk size: {converter.chunk_size}")
-            Chunk size: 100000
+            Chunk size: 5000
         """
         self.use_integer_keys = use_integer_keys
         self.chunked = chunked
@@ -193,11 +193,11 @@ class SLAFConverter:
             Conversion complete! Saved to output.slaf
 
             >>> # Convert with chunked processing for large datasets
-            >>> converter = SLAFConverter(chunked=True, chunk_size=1000)
+            >>> converter = SLAFConverter(chunked=True, chunk_size=5000)
             >>> converter.convert("large_data.h5ad", "output.slaf")
             Converting large_data.h5ad to SLAF format...
             Optimizations: int_keys=True, chunked=True
-            Processing in chunks of 1000 cells...
+            Processing in chunks of 5000 cells...
             Conversion complete! Saved to output.slaf
 
             >>> # Error handling for unsupported format
@@ -403,8 +403,9 @@ class SLAFConverter:
 
         self._write_lance_tables(output_path_obj, table_configs)
 
-        # Compact dataset for optimal storage
-        self._compact_dataset(output_path_obj)
+        # Compact dataset for optimal storage (only if enabled)
+        if self.compact_after_write:
+            self._compact_dataset(output_path_obj)
 
         # Save config
         self._save_config(output_path_obj, adata.shape)
@@ -414,13 +415,20 @@ class SLAFConverter:
         """Convert h5ad file using chunked processing with sorted-by-construction approach"""
         logger.info(f"Processing in chunks of {self.chunk_size} cells...")
 
-        with create_chunked_reader(h5ad_path, chunk_size=self.chunk_size) as reader:
-            logger.info(f"Loaded: {reader.n_obs:,} cells × {reader.n_vars:,} genes")
-
+        # First, create a temporary reader to determine the value type
+        with create_chunked_reader(
+            h5ad_path, chunk_size=self.chunk_size
+        ) as temp_reader:
             # Validate optimized data types and determine value type
-            validation_result, value_type = self._validate_optimized_dtypes(reader)
+            validation_result, value_type = self._validate_optimized_dtypes(temp_reader)
             if not validation_result:
                 self.use_optimized_dtypes = False
+
+        # Now create the reader with the correct value type
+        with create_chunked_reader(
+            h5ad_path, chunk_size=self.chunk_size, value_type=value_type
+        ) as reader:
+            logger.info(f"Loaded: {reader.n_obs:,} cells × {reader.n_vars:,} genes")
 
             # Create output directory
             output_path_obj = Path(output_path)
@@ -436,8 +444,9 @@ class SLAFConverter:
             if self.create_indices:
                 self._create_indices(output_path_obj)
 
-            # Compact dataset for optimal storage
-            self._compact_dataset(output_path_obj)
+            # Compact dataset for optimal storage (only if enabled)
+            if self.compact_after_write:
+                self._compact_dataset(output_path_obj)
 
             # Save config
             self._save_config(output_path_obj, (reader.n_obs, reader.n_vars))
@@ -482,15 +491,11 @@ class SLAFConverter:
             integer_mapping=None,  # Already added above
         )
 
-        # Get compression settings for metadata tables
-        metadata_settings = self._get_compression_settings("metadata")
-
         # Write metadata tables
         lance.write_dataset(
             cell_metadata_table,
             str(output_path_obj / "cells.lance"),
             mode="overwrite",
-            max_rows_per_group=metadata_settings["max_rows_per_group"],
             enable_v2_manifest_paths=self.enable_v2_manifest,
             data_storage_version="2.1",
         )
@@ -498,7 +503,6 @@ class SLAFConverter:
             gene_metadata_table,
             str(output_path_obj / "genes.lance"),
             mode="overwrite",
-            max_rows_per_group=metadata_settings["max_rows_per_group"],
             enable_v2_manifest_paths=self.enable_v2_manifest,
             data_storage_version="2.1",
         )
@@ -556,7 +560,7 @@ class SLAFConverter:
                 empty_table = pa.table(
                     {
                         "cell_integer_id": pa.array([], type=pa.int32()),
-                        "gene_integer_id": pa.array([], type=pa.int32()),
+                        "gene_integer_id": pa.array([], type=pa.int16()),
                         "value": pa.array([], type=value_pa_type),
                     }
                 )
@@ -582,20 +586,13 @@ class SLAFConverter:
                     }
                 )
 
+        # Create initial Lance dataset (using max_rows_per_file for large fragments)
         lance.write_dataset(
             empty_table,
             str(expression_path),
             mode="overwrite",
             schema=schema,
-            max_rows_per_file=self._get_compression_settings("expression")[
-                "max_rows_per_file"
-            ],
-            max_rows_per_group=self._get_compression_settings("expression")[
-                "max_rows_per_group"
-            ],
-            max_bytes_per_file=self._get_compression_settings("expression")[
-                "max_bytes_per_file"
-            ],
+            max_rows_per_file=10000000,  # 10M rows per file to avoid memory issues
             enable_v2_manifest_paths=self.enable_v2_manifest,
             data_storage_version="2.1",
         )
@@ -658,20 +655,12 @@ class SLAFConverter:
                     }
                 )
 
-            # Write chunk to Lance dataset
+            # Write chunk to Lance dataset (using max_rows_per_file for large fragments)
             lance.write_dataset(
                 chunk_table,
                 str(expression_path),
                 mode="append",
-                max_rows_per_file=self._get_compression_settings("expression")[
-                    "max_rows_per_file"
-                ],
-                max_rows_per_group=self._get_compression_settings("expression")[
-                    "max_rows_per_group"
-                ],
-                max_bytes_per_file=self._get_compression_settings("expression")[
-                    "max_bytes_per_file"
-                ],
+                max_rows_per_file=10000000,  # 10M rows per file to avoid memory issues
                 enable_v2_manifest_paths=self.enable_v2_manifest,
                 data_storage_version="2.1",
             )
@@ -703,11 +692,9 @@ class SLAFConverter:
 
         logger.info("Validating data fits in optimized data types...")
 
-        # Check if gene count fits in uint16 (0-65535)
+        # Check if gene count fits in uint16
         if reader.n_vars > 65535:
-            logger.info(
-                f"Warning: {reader.n_vars:,} genes exceeds uint16 limit (65535)"
-            )
+            logger.info(f"Warning: {reader.n_vars:,} genes exceeds uint16 limit")
             logger.info("Falling back to standard data types")
             return False, "float32"
 
@@ -840,7 +827,7 @@ class SLAFConverter:
 
         # Check if gene count fits in uint16 (0-65535)
         if adata.n_vars > 65535:
-            logger.info(f"Warning: {adata.n_vars:,} genes exceeds uint16 limit (65535)")
+            logger.info(f"Warning: {adata.n_vars:,} genes exceeds uint16 limit")
             logger.info("Falling back to standard data types")
             return False, "float32"
 
@@ -901,7 +888,7 @@ class SLAFConverter:
             return True, "float32"
         else:
             logger.info(
-                f"Warning: Integer values range [{min_value}, {max_value}] exceeds uint16 range [0, 65535]"
+                f"Warning: Integer values range [{min_value}, {max_value}] exceeds uint16 range"
             )
             logger.info("Falling back to float32")
             return False, "float32"
@@ -913,33 +900,43 @@ class SLAFConverter:
 
     def _compact_dataset(self, output_path_obj: Path):
         """Compact the dataset to optimize storage after writing"""
-        if not self.compact_after_write:
-            return
-
         logger.info("Compacting dataset for optimal storage...")
 
-        # Compact expression table
-        expression_path = output_path_obj / "expression.lance"
-        if expression_path.exists():
-            logger.info("  Compacting expression table...")
-            dataset = lance.dataset(str(expression_path))
-            dataset.optimize.compact_files(
-                target_rows_per_fragment=1024 * 1024
-            )  # 1M rows per fragment
-            logger.info("  Expression table compacted!")
-
-        # Compact metadata tables
-        for table_name in ["cells", "genes"]:
-            table_path = output_path_obj / f"{table_name}.lance"
-            if table_path.exists():
-                logger.info(f"  Compacting {table_name} table...")
-                dataset = lance.dataset(str(table_path))
+        try:
+            # Compact expression table
+            expression_path = output_path_obj / "expression.lance"
+            if expression_path.exists():
+                logger.info("  Compacting expression table...")
+                dataset = lance.dataset(str(expression_path))
                 dataset.optimize.compact_files(
-                    target_rows_per_fragment=100000
-                )  # 100K rows per fragment for metadata
-                logger.info(f"  {table_name} table compacted!")
+                    target_rows_per_fragment=1024 * 1024
+                )  # 1M rows per fragment
+                logger.info("  Expression table compacted!")
+            else:
+                logger.warning("  Expression table not found, skipping compaction")
 
-        logger.info("Dataset compaction complete!")
+            # Compact metadata tables
+            for table_name in ["cells", "genes"]:
+                table_path = output_path_obj / f"{table_name}.lance"
+                if table_path.exists():
+                    logger.info(f"  Compacting {table_name} table...")
+                    dataset = lance.dataset(str(table_path))
+                    dataset.optimize.compact_files(
+                        target_rows_per_fragment=100000
+                    )  # 100K rows per fragment for metadata
+                    logger.info(f"  {table_name} table compacted!")
+                else:
+                    logger.warning(
+                        f"  {table_name} table not found, skipping compaction"
+                    )
+
+            logger.info("Dataset compaction complete!")
+        except Exception as e:
+            logger.error(f"Error during dataset compaction: {e}")
+            logger.error(
+                "Dataset may be in an inconsistent state. Consider recreating without compaction."
+            )
+            raise
 
     def _get_expression_schema(self, value_type="uint16"):
         """Get the schema for expression table"""
@@ -1083,9 +1080,11 @@ class SLAFConverter:
             if value_type == "uint16":
                 value_array = coo_matrix.data.astype(np.uint16)
                 value_dtype = np.uint16
+                value_pa_type = pa.uint16()
             elif value_type == "float32":
                 value_array = coo_matrix.data.astype(np.float32)
                 value_dtype = np.float32
+                value_pa_type = pa.float32()
             else:
                 raise ValueError(f"Unsupported value type: {value_type}")
         else:
@@ -1095,9 +1094,11 @@ class SLAFConverter:
             if value_type == "uint16":
                 value_array = coo_matrix.data.astype(np.uint16)
                 value_dtype = np.uint16
+                value_pa_type = pa.uint16()
             elif value_type == "float32":
                 value_array = coo_matrix.data.astype(np.float32)
                 value_dtype = np.float32
+                value_pa_type = pa.float32()
             else:
                 raise ValueError(f"Unsupported value type: {value_type}")
 
@@ -1124,7 +1125,7 @@ class SLAFConverter:
                             gene_integer_id_array, type=pa.uint16()
                         ),
                         "value": pa.array(
-                            value_array.astype(value_dtype), type=value_type
+                            value_array.astype(value_dtype), type=value_pa_type
                         ),
                     }
                 )
@@ -1138,7 +1139,7 @@ class SLAFConverter:
                             gene_integer_id_array, type=pa.int32()
                         ),
                         "value": pa.array(
-                            value_array.astype(value_dtype), type=value_type
+                            value_array.astype(value_dtype), type=value_pa_type
                         ),
                     }
                 )
@@ -1156,7 +1157,7 @@ class SLAFConverter:
                             gene_integer_id_array, type=pa.uint16()
                         ),
                         "value": pa.array(
-                            value_array.astype(value_dtype), type=value_type
+                            value_array.astype(value_dtype), type=value_pa_type
                         ),
                     }
                 )
@@ -1172,7 +1173,7 @@ class SLAFConverter:
                             gene_integer_id_array, type=pa.int32()
                         ),
                         "value": pa.array(
-                            value_array.astype(value_dtype), type=value_type
+                            value_array.astype(value_dtype), type=value_pa_type
                         ),
                     }
                 )
@@ -1183,13 +1184,13 @@ class SLAFConverter:
                 expected_types = {
                     "cell_integer_id": pa.uint32(),
                     "gene_integer_id": pa.uint16(),
-                    "value": value_type,
+                    "value": value_pa_type,
                 }
             else:
                 expected_types = {
                     "cell_integer_id": pa.int32(),
                     "gene_integer_id": pa.int32(),
-                    "value": value_type,
+                    "value": value_pa_type,
                 }
         else:
             if self.use_optimized_dtypes:
@@ -1198,7 +1199,7 @@ class SLAFConverter:
                     "gene_id": pa.string(),
                     "cell_integer_id": pa.uint32(),
                     "gene_integer_id": pa.uint16(),
-                    "value": value_type,
+                    "value": value_pa_type,
                 }
             else:
                 expected_types = {
@@ -1206,7 +1207,7 @@ class SLAFConverter:
                     "gene_id": pa.string(),
                     "cell_integer_id": pa.int32(),
                     "gene_integer_id": pa.int32(),
-                    "value": value_type,
+                    "value": value_pa_type,
                 }
 
         # Validate schema
@@ -1217,25 +1218,6 @@ class SLAFConverter:
             assert table.column(col).null_count == 0, f"Nulls found in {col} column!"
 
         return table
-
-    def _get_compression_settings(self, table_type: str = "expression"):
-        """Get optimal compression settings for high compression (write once, query infinitely)"""
-        if table_type == "expression":
-            # Expression tables benefit from very large groups due to sparsity
-            # Use maximum compression settings for massive datasets
-            return {
-                "max_rows_per_file": 50000000,  # 50M rows per file (increased from 10M)
-                "max_rows_per_group": 10000000,  # 10M rows per group (increased from 2M)
-                "max_bytes_per_file": 100
-                * 1024
-                * 1024
-                * 1024,  # 100GB limit (increased from 50GB)
-            }
-        else:
-            # Metadata tables
-            return {
-                "max_rows_per_group": 500000,  # 500K rows per group (increased from 200K)
-            }
 
     def _create_metadata_table(
         self,
@@ -1276,25 +1258,19 @@ class SLAFConverter:
         for table_name, table in table_configs:
             table_path = output_path / f"{table_name}.lance"
 
-            # Use optimized compression settings based on table type
+            # Write table with basic settings (using max_rows_per_file for large fragments)
             if table_name == "expression":
-                compression_settings = self._get_compression_settings("expression")
                 lance.write_dataset(
                     table,
                     str(table_path),
-                    max_rows_per_file=compression_settings["max_rows_per_file"],
-                    max_rows_per_group=compression_settings["max_rows_per_group"],
-                    max_bytes_per_file=compression_settings["max_bytes_per_file"],
+                    max_rows_per_file=10000000,  # 10M rows per file to avoid memory issues
                     enable_v2_manifest_paths=self.enable_v2_manifest,
                     data_storage_version="2.1",
                 )
             else:
-                # Metadata tables
-                compression_settings = self._get_compression_settings("metadata")
                 lance.write_dataset(
                     table,
                     str(table_path),
-                    max_rows_per_group=compression_settings["max_rows_per_group"],
                     enable_v2_manifest_paths=self.enable_v2_manifest,
                     data_storage_version="2.1",
                 )

@@ -207,7 +207,7 @@ def convert(
         help="Use chunked processing for memory efficiency (default: True, supports all formats)",
     ),
     chunk_size: int = typer.Option(
-        25000, "--chunk-size", help="Number of cells per chunk (default: 25000)"
+        5000, "--chunk-size", help="Number of cells per chunk (default: 5000)"
     ),
     create_indices: bool = typer.Option(
         False,
@@ -230,9 +230,9 @@ def convert(
         help="Enable v2 manifest paths for better query performance (default: True)",
     ),
     compact_after_write: bool = typer.Option(
-        True,
+        False,
         "--compact/--no-compact",
-        help="Compact dataset after writing for optimal storage (default: True)",
+        help="Compact dataset after writing for optimal storage (default: False)",
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ):
