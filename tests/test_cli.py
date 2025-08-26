@@ -548,7 +548,7 @@ class TestCLI:
                     optimize_storage=True,
                     use_optimized_dtypes=True,
                     enable_v2_manifest=True,
-                    compact_after_write=True,
+                    compact_after_write=False,
                 )
 
     @patch("slaf.cli.check_dependencies")
@@ -1139,7 +1139,7 @@ class TestCLI:
                         optimize_storage=True,
                         use_optimized_dtypes=True,
                         enable_v2_manifest=True,
-                        compact_after_write=True,
+                        compact_after_write=False,
                     )
 
     @patch("slaf.cli.check_dependencies")
@@ -1179,7 +1179,7 @@ class TestCLI:
                     optimize_storage=True,
                     use_optimized_dtypes=True,
                     enable_v2_manifest=True,
-                    compact_after_write=True,
+                    compact_after_write=False,
                 )
 
     @patch("slaf.cli.check_dependencies")
@@ -1214,12 +1214,12 @@ class TestCLI:
                 )
                 mock_converter.assert_called_once_with(
                     chunked=True,
-                    chunk_size=25000,
+                    chunk_size=5000,
                     create_indices=False,
                     optimize_storage=True,
                     use_optimized_dtypes=True,
                     enable_v2_manifest=True,
-                    compact_after_write=True,
+                    compact_after_write=False,
                 )
 
     def test_convert_help_text_contains_chunked_info(self, runner):

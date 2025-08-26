@@ -560,7 +560,7 @@ class SLAFConverter:
                 empty_table = pa.table(
                     {
                         "cell_integer_id": pa.array([], type=pa.int32()),
-                        "gene_integer_id": pa.array([], type=pa.int16()),
+                        "gene_integer_id": pa.array([], type=pa.int32()),
                         "value": pa.array([], type=value_pa_type),
                     }
                 )

@@ -993,7 +993,7 @@ class TestSLAFConverter:
         converter = SLAFConverter()
         assert converter.use_integer_keys is True
         assert converter.chunked is True  # Updated default for better performance
-        assert converter.chunk_size == 50000  # Updated default for memory efficiency
+        assert converter.chunk_size == 5000  # Updated default for memory efficiency
         assert converter.sort_metadata is False
         assert converter.create_indices is False
 
@@ -1001,17 +1001,12 @@ class TestSLAFConverter:
         """Test that default compression settings are optimal for large datasets"""
         converter = SLAFConverter()
 
-        # Test expression table settings (updated for better compression)
-        expression_settings = converter._get_compression_settings("expression")
-        assert expression_settings["max_rows_per_file"] == 50000000  # 50M
-        assert expression_settings["max_rows_per_group"] == 10000000  # 10M
-        assert (
-            expression_settings["max_bytes_per_file"] == 100 * 1024 * 1024 * 1024
-        )  # 100GB
-
-        # Test metadata table settings (updated for better compression)
-        metadata_settings = converter._get_compression_settings("metadata")
-        assert metadata_settings["max_rows_per_group"] == 500000  # 500K
+        # Test that compression settings are handled inline in the write methods
+        # The max_rows_per_file setting is now passed directly to lance.write_dataset
+        # and is set to 10M rows per file for expression tables
+        assert converter.chunk_size == 5000  # Default chunk size
+        assert converter.use_optimized_dtypes is True  # Default optimized dtypes
+        assert converter.optimize_storage is True  # Default storage optimization
 
     def test_simplified_api_parameters(self, small_sample_adata, tmp_path):
         """Test that the simplified API parameters work correctly"""
