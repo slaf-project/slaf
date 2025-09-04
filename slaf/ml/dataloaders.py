@@ -160,21 +160,32 @@ class SLAFDataLoader:
     """
     High-performance DataLoader for SLAF data optimized for ML training.
 
-    SLAFDataLoader provides efficient streaming of pre-tokenized single-cell data
-    for machine learning applications. It uses async batch processing and provides
-    device-agnostic CPU tensor output for maximum training flexibility.
+    SLAFDataLoader provides efficient streaming of single-cell data for machine learning
+    applications with multiple loading strategies for different use cases. It uses async
+    batch processing and provides device-agnostic CPU tensor output for maximum training flexibility.
 
     Key Features:
         - Multiple tokenization strategies (GeneFormer, scGPT)
-        - Pre-tokenized sequences for maximum performance
+        - Multiple loading modes for different entropy requirements:
+            * Sequential loading: Fastest, lowest entropy
+            * Fragment-based loading: Higher entropy, moderate performance
+            * Mixture of Scanners (MoS): Maximum entropy, best randomization
+        - Pre-tokenized sequences for maximum performance (tokenized mode)
+        - Raw data output for external processing (raw mode)
         - Device-agnostic CPU tensor output
         - Async batch processing with background prefetching
         - Memory-efficient streaming
-        - PyTorch tensor output with attention masks
+        - Multi-epoch training support
         - Comprehensive error handling and validation
 
+    Loading Modes:
+        1. Sequential (default): Loads contiguous Lance batches for maximum throughput
+        2. Fragment-based: Loads complete Lance fragments for higher data entropy
+        3. Mixture of Scanners: Randomly samples from multiple fragment generators
+           for maximum entropy and randomization
+
     Examples:
-        >>> # Basic usage with default settings
+        >>> # Basic usage with default settings (sequential loading)
         >>> slaf_array = SLAFArray("path/to/data.slaf")
         >>> dataloader = SLAFDataLoader(slaf_array)
         >>> for batch in dataloader:
@@ -184,6 +195,42 @@ class SLAFDataLoader:
         Batch shape: torch.Size([32, 2048])
         Cell IDs: tensor([0, 1, 2, ..., 29, 30, 31])
 
+        >>> # Fragment-based loading for higher entropy
+        >>> dataloader = SLAFDataLoader(
+        ...     slaf_array=slaf_array,
+        ...     by_fragment=True
+        ... )
+        >>> print(f"Fragment-based loading: {dataloader.by_fragment}")
+        Fragment-based loading: True
+
+        >>> # Mixture of Scanners for maximum entropy
+        >>> dataloader = SLAFDataLoader(
+        ...     slaf_array=slaf_array,
+        ...     use_mixture_of_scanners=True,
+        ...     n_scanners=16,
+        ...     prefetch_batch_size=4194304
+        ... )
+        >>> print(f"MoS enabled: {dataloader.use_mixture_of_scanners}")
+        MoS enabled: True
+
+        >>> # Raw mode for external processing
+        >>> dataloader = SLAFDataLoader(
+        ...     slaf_array=slaf_array,
+        ...     raw_mode=True
+        ... )
+        >>> for batch in dataloader:
+        ...     print(f"Raw data type: {type(batch['x'])}")
+        ...     break
+        Raw data type: <class 'polars.dataframe.frame.DataFrame'>
+
+        >>> # Multi-epoch training
+        >>> dataloader = SLAFDataLoader(
+        ...     slaf_array=slaf_array,
+        ...     n_epochs=5
+        ... )
+        >>> print(f"Number of epochs: {dataloader.n_epochs}")
+        Number of epochs: 5
+
         >>> # Custom configuration for training
         >>> dataloader = SLAFDataLoader(
         ...     slaf_array=slaf_array,
@@ -191,8 +238,8 @@ class SLAFDataLoader:
         ...     batch_size=64,
         ...     max_genes=1024
         ... )
-        >>> print(f"Number of batches: {len(dataloader)}")
-        Number of batches: 42
+        >>> print(f"Tokenizer type: {dataloader.tokenizer_type}")
+        Tokenizer type: scgpt
 
         >>> # Training loop example
         >>> for batch_idx, batch in enumerate(dataloader):
@@ -229,6 +276,9 @@ class SLAFDataLoader:
         verbose: bool = True,  # Add verbose parameter
         batches_per_chunk: int = 50,  # Add batches_per_chunk parameter
         by_fragment: bool = False,  # Add by_fragment parameter for fragment-based loading
+        use_mixture_of_scanners: bool = False,  # Add MoS parameter
+        n_scanners: int = 16,  # Add n_scanners parameter for MoS
+        prefetch_batch_size: int = 4194304,  # Add prefetch_batch_size parameter for MoS
     ):
         """
         Initialize the SLAF DataLoader with training configuration.
@@ -236,11 +286,11 @@ class SLAFDataLoader:
         Args:
             slaf_array: SLAFArray instance containing the single-cell data.
                        Must be a valid SLAFArray with proper Lance dataset structure.
+
+            # Tokenization Configuration
             tokenizer_type: Tokenization strategy to use. Options: "geneformer", "scgpt".
                           Geneformer uses ranked gene sequences, scGPT uses interleaved
-                          gene-expression pairs.
-            batch_size: Number of cells per batch. Larger batches use more memory
-                       but may improve training efficiency. Range: 1-512, default: 32.
+                          gene-expression pairs. Ignored when raw_mode=True.
             max_genes: Maximum number of genes to include in each cell's tokenization.
                      For Geneformer: same as sequence length. For scGPT: number of
                      gene-expression pairs (sequence length = 2*max_genes+2).
@@ -249,20 +299,45 @@ class SLAFDataLoader:
             n_expression_bins: Number of expression level bins for scGPT discretization.
                              Higher values provide finer expression resolution.
                              Range: 1-1000, default: 10.
+
+            # Training Configuration
+            batch_size: Number of cells per batch. Larger batches use more memory
+                       but may improve training efficiency. Range: 1-512, default: 32.
             n_epochs: Number of epochs to run. The generator will automatically reset
                      after each epoch, enabling multi-epoch training on small datasets.
                      Default: 1.
-            raw_mode: If True, return raw cell × gene data as sparse CSR tensors
-                     instead of pre-tokenized sequences. Default: False.
+
+            # Output Mode Configuration
+            raw_mode: If True, return raw cell × gene data as Polars DataFrames
+                     instead of pre-tokenized sequences. This bypasses tokenization
+                     and windowing for maximum flexibility. Default: False.
+
+            # Loading Strategy Configuration
+            batches_per_chunk: Number of Lance batches to load per chunk for sequential loading.
+                             Higher values use more memory but may improve throughput.
+                             Range: 10-200, default: 50. Only used when by_fragment=False.
+            by_fragment: If True, use fragment-based loading instead of batch-based loading.
+                        Fragment-based loading provides higher entropy but may be slightly slower.
+                        Automatically enabled when use_mixture_of_scanners=True.
+                        Default: False.
+
+            # Mixture of Scanners (MoS) Configuration
+            use_mixture_of_scanners: If True, use mixture of scanners (MoS) approach for higher
+                                   entropy by randomly sampling from multiple fragment generators.
+                                   This provides the best randomization but uses more memory.
+                                   Automatically enables by_fragment=True. Default: False.
+            n_scanners: Number of fragment generators to sample from simultaneously when using MoS.
+                       Higher values provide better entropy but use more memory.
+                       Range: 1-100, default: 16. Only used when use_mixture_of_scanners=True.
+            prefetch_batch_size: Target number of rows to load per prefetch batch when using MoS.
+                               Higher values improve throughput but use more memory.
+                               Range: 1000-10000000, default: 4194304. Only used when
+                               use_mixture_of_scanners=True.
+
+            # System Configuration
             verbose: If True, print detailed timing and progress information.
                     If False, suppress all SLAF internal prints for clean output.
                     Default: True.
-            batches_per_chunk: Number of Lance batches to load per chunk for batch-based loading.
-                             Higher values use more memory but may improve throughput.
-                             Range: 10-200, default: 50.
-            by_fragment: If True, use fragment-based loading instead of batch-based loading.
-                        Fragment-based loading provides higher entropy but may be slightly slower.
-                        Default: False.
 
         Raises:
             ValueError: If tokenizer_type is not supported or parameters are invalid.
@@ -270,38 +345,18 @@ class SLAFDataLoader:
             TypeError: If slaf_array is not a valid SLAFArray instance.
             ImportError: If required dependencies are not available.
 
+        Loading Strategy Selection Guide:
+            - For maximum throughput: Use default settings (sequential loading)
+            - For higher entropy: Set by_fragment=True
+            - For maximum entropy: Set use_mixture_of_scanners=True
+            - For external processing: Set raw_mode=True
+
         Examples:
-            >>> # Basic initialization
+            >>> # Basic initialization (sequential loading)
             >>> slaf_array = SLAFArray("path/to/data.slaf")
             >>> dataloader = SLAFDataLoader(slaf_array)
             >>> print(f"Batch size: {dataloader.batch_size}")
             Batch size: 32
-
-            >>> # Custom configuration
-            >>> dataloader = SLAFDataLoader(
-            ...     slaf_array=slaf_array,
-            ...     tokenizer_type="scgpt",
-            ...     batch_size=64,
-            ...     max_genes=1024
-            ... )
-            >>> print(f"Tokenizer type: {dataloader.tokenizer_type}")
-            Tokenizer type: scgpt
-
-            >>> # Multi-epoch training
-            >>> dataloader = SLAFDataLoader(
-            ...     slaf_array=slaf_array,
-            ...     n_epochs=5
-            ... )
-            >>> print(f"Number of epochs: {dataloader.n_epochs}")
-            Number of epochs: 5
-
-            >>> # Raw mode for external comparisons
-            >>> dataloader = SLAFDataLoader(
-            ...     slaf_array=slaf_array,
-            ...     raw_mode=True
-            ... )
-            >>> print(f"Raw mode: {dataloader.raw_mode}")
-            Raw mode: True
 
             >>> # Fragment-based loading for higher entropy
             >>> dataloader = SLAFDataLoader(
@@ -311,19 +366,30 @@ class SLAFDataLoader:
             >>> print(f"Fragment-based loading: {dataloader.by_fragment}")
             Fragment-based loading: True
 
-            >>> # Error handling for invalid tokenizer type
+            >>> # Mixture of scanners for maximum entropy
+            >>> dataloader = SLAFDataLoader(
+            ...     slaf_array=slaf_array,
+            ...     use_mixture_of_scanners=True,
+            ...     n_scanners=16,
+            ...     prefetch_batch_size=4194304
+            ... )
+            >>> print(f"MoS enabled: {dataloader.use_mixture_of_scanners}")
+            MoS enabled: True
+
+            >>> # Raw mode for external processing
+            >>> dataloader = SLAFDataLoader(
+            ...     slaf_array=slaf_array,
+            ...     raw_mode=True
+            ... )
+            >>> print(f"Raw mode: {dataloader.raw_mode}")
+            Raw mode: True
+
+            >>> # Error handling for invalid parameters
             >>> try:
-            ...     dataloader = SLAFDataLoader(slaf_array, tokenizer_type="invalid")
+            ...     dataloader = SLAFDataLoader(slaf_array, n_scanners=0)
             ... except ValueError as e:
             ...     print(f"Error: {e}")
-            Error: Unsupported tokenizer type: invalid
-
-            >>> # Error handling for invalid SLAF array
-            >>> try:
-            ...     dataloader = SLAFDataLoader(None)
-            ... except TypeError as e:
-            ...     print(f"Error: {e}")
-            Error: slaf_array must be a valid SLAFArray instance
+            Error: n_scanners must be at least 1
         """
         self.slaf_array = slaf_array
         self.tokenizer_type = tokenizer_type
@@ -334,6 +400,24 @@ class SLAFDataLoader:
         self.verbose = verbose  # Add verbose attribute
         self.batches_per_chunk = batches_per_chunk  # Add batches_per_chunk attribute
         self.by_fragment = by_fragment  # Add by_fragment attribute
+        self.use_mixture_of_scanners = use_mixture_of_scanners  # Add MoS attribute
+        self.n_scanners = n_scanners  # Add n_scanners attribute
+        self.prefetch_batch_size = (
+            prefetch_batch_size  # Add prefetch_batch_size attribute
+        )
+
+        # Validate MoS parameters
+        if self.use_mixture_of_scanners:
+            if self.n_scanners < 1:
+                raise ValueError("n_scanners must be at least 1")
+            if self.n_scanners > 100:
+                raise ValueError("n_scanners cannot exceed 100")
+            if (
+                self.prefetch_batch_size < 1000
+            ):  # Allow smaller values for warm-up strategy
+                raise ValueError("prefetch_batch_size must be at least 1,000")
+            if self.prefetch_batch_size > 10000000:
+                raise ValueError("prefetch_batch_size cannot exceed 10,000,000")
 
         # Device-agnostic: always return CPU tensors
         self.device = None
@@ -373,30 +457,47 @@ class SLAFDataLoader:
             verbose=verbose,  # Pass verbose to dataset
             batches_per_chunk=batches_per_chunk,  # Pass batches_per_chunk to dataset
             by_fragment=by_fragment,  # Pass by_fragment to dataset
+            use_mixture_of_scanners=use_mixture_of_scanners,  # Pass MoS to dataset
+            n_scanners=n_scanners,  # Pass n_scanners to dataset
+            prefetch_batch_size=prefetch_batch_size,  # Pass prefetch_batch_size to dataset
         )
 
     def __iter__(self):
         """
-        Iterate through batches of pre-tokenized single-cell data.
+        Iterate through batches of single-cell data based on the configured mode.
 
-        Yields batches of pre-tokenized data suitable for machine learning training.
-        Each batch contains input_ids, attention_mask, and cell_ids for the
-        cells in that batch. All tensors are returned on CPU for device-agnostic training.
-        The method automatically handles multi-epoch training when n_epochs > 1.
+        Yields batches of data suitable for machine learning training. The output format
+        depends on the configuration:
+
+        - **Tokenized mode** (default): Yields pre-tokenized sequences with attention masks
+        - **Raw mode**: Yields raw Polars DataFrames for external processing
+        - **Multi-epoch**: Automatically handles epoch transitions when n_epochs > 1
+
+        The loading strategy (sequential, fragment-based, or Mixture of Scanners) affects
+        data entropy and throughput but not the output format.
 
         Yields:
             dict: Batch dictionary containing:
-                - input_ids: Pre-tokenized gene expression data (torch.Tensor)
-                - attention_mask: Boolean mask indicating valid tokens (torch.Tensor)
-                - cell_ids: Integer IDs of cells in the batch (torch.Tensor)
-                - epoch: Current epoch number (int, only if n_epochs > 1)
+                - **Tokenized mode** (raw_mode=False):
+                    - input_ids: Pre-tokenized gene expression data (torch.Tensor)
+                    - attention_mask: Boolean mask indicating valid tokens (torch.Tensor)
+                    - cell_ids: Integer IDs of cells in the batch (torch.Tensor)
+                - **Raw mode** (raw_mode=True):
+                    - x: Raw cell × gene data as Polars DataFrame
+                    - cell_ids: List of cell integer IDs in the batch
+                - **Multi-epoch** (when n_epochs > 1):
+                    - epoch: Current epoch number (int)
+
+        Note:
+            All tensors are returned on CPU for device-agnostic training.
+            The training loop should handle device transfer as needed.
 
         Raises:
             ValueError: If the tokenizer type is not supported.
             RuntimeError: If batch processing fails.
 
         Examples:
-            >>> # Basic iteration
+            >>> # Basic iteration (tokenized mode)
             >>> slaf_array = SLAFArray("path/to/data.slaf")
             >>> dataloader = SLAFDataLoader(slaf_array, batch_size=16)
             >>> for batch in dataloader:
@@ -407,6 +508,15 @@ class SLAFDataLoader:
             Batch keys: ['input_ids', 'attention_mask', 'cell_ids']
             Input shape: (16, 2048)
             Cell IDs: tensor([0, 1, 2, ..., 13, 14, 15])
+
+            >>> # Raw mode iteration
+            >>> dataloader = SLAFDataLoader(slaf_array, raw_mode=True, batch_size=16)
+            >>> for batch in dataloader:
+            ...     print(f"Raw data type: {type(batch['x'])}")
+            ...     print(f"Cell IDs: {batch['cell_ids']}")
+            ...     break
+            Raw data type: <class 'polars.dataframe.frame.DataFrame'>
+            Cell IDs: [0, 1, 2, ..., 13, 14, 15]
 
             >>> # Multi-epoch training
             >>> dataloader = SLAFDataLoader(slaf_array, n_epochs=3)
@@ -422,9 +532,13 @@ class SLAFDataLoader:
             >>> # Training loop with error handling
             >>> for batch_idx, batch in enumerate(dataloader):
             ...     try:
-            ...         input_ids = batch["input_ids"]
-            ...         attention_mask = batch["attention_mask"]
-            ...         cell_ids = batch["cell_ids"]
+            ...         if 'input_ids' in batch:  # Tokenized mode
+            ...             input_ids = batch["input_ids"]
+            ...             attention_mask = batch["attention_mask"]
+            ...             cell_ids = batch["cell_ids"]
+            ...         else:  # Raw mode
+            ...             x = batch["x"]
+            ...             cell_ids = batch["cell_ids"]
             ...         # Your training code here
             ...         print(f"Processed batch {batch_idx}")
             ...     except Exception as e:

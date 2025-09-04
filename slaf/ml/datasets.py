@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from queue import Queue
 from typing import Any, Union
 
+import numpy as np
 import polars as pl
 import torch
 from loguru import logger
@@ -319,6 +320,9 @@ class PrefetchBatchProcessor:
         log_metrics: bool = False,  # Add log_metrics parameter
         batch_size: int = 32,  # Add batch_size parameter
         by_fragment: bool = False,  # Add by_fragment parameter for fragment-based loading
+        use_mixture_of_scanners: bool = False,  # Add MoS parameter
+        n_scanners: int = 16,  # Add n_scanners parameter for MoS
+        prefetch_batch_size: int = 4194304,  # Add prefetch_batch_size parameter for MoS
     ):
         """Initialize the PrefetchBatchProcessor."""
         self.slaf_array = slaf_array
@@ -336,6 +340,22 @@ class PrefetchBatchProcessor:
         self.log_metrics = log_metrics
         self.batch_size = batch_size
         self.by_fragment = by_fragment
+        self.use_mixture_of_scanners = use_mixture_of_scanners
+        self.n_scanners = n_scanners
+        self.prefetch_batch_size = prefetch_batch_size
+
+        # Validate MoS parameters
+        if self.use_mixture_of_scanners:
+            if self.n_scanners < 1:
+                raise ValueError("n_scanners must be at least 1")
+            if self.n_scanners > 100:
+                raise ValueError("n_scanners cannot exceed 100")
+            if (
+                self.prefetch_batch_size < 1000
+            ):  # Allow smaller values for warm-up strategy
+                raise ValueError("prefetch_batch_size must be at least 1,000")
+            if self.prefetch_batch_size > 10000000:
+                raise ValueError("prefetch_batch_size cannot exceed 10,000,000")
 
         # Initialize state
         self.batch_id = 0
@@ -353,7 +373,35 @@ class PrefetchBatchProcessor:
             f"{self.slaf_array.slaf_path}/expression.lance"
         )
 
-        if self.by_fragment:
+        if self.use_mixture_of_scanners:
+            # MoS approach: initialize one generator per fragment
+            self.fragment_generators: list[Any] = []
+            self.generator_last_cells: list[
+                int | None
+            ] = []  # Track last cell per generator
+            self.generator_active: list[
+                bool
+            ] = []  # Track which generators are still active
+
+            # Initialize fragment generators
+            for fragment in self.expression_dataset.get_fragments():
+                # Pass the prefetch_batch_size to control batch sizes and prevent premature exhaustion
+                generator = fragment.to_batches(batch_size=self.prefetch_batch_size)
+                self.fragment_generators.append(generator)
+                self.generator_last_cells.append(None)
+                self.generator_active.append(True)
+
+            # Set by_fragment to True for MoS mode
+            self.by_fragment = True
+
+            if self.verbose:
+                print_prefetch(
+                    f"Mixture of Scanners enabled: {len(self.fragment_generators)} fragment generators, "
+                    f"{self.n_scanners} scanners, prefetch_batch_size={self.prefetch_batch_size:,}",
+                    self.verbose,
+                )
+
+        elif self.by_fragment:
             # Fragment-based approach: iterate through fragments
             self.fragment_iterator = iter(self.expression_dataset.get_fragments())
         else:
@@ -434,8 +482,26 @@ class PrefetchBatchProcessor:
         self.batch_id = 0
         self.partial_cell_data = {}  # Reset partial cell data
 
-        # Reinitialize the data iterator
-        if self.by_fragment:
+        # Reinitialize the data iterator based on the approach
+        if self.use_mixture_of_scanners:
+            # MoS approach: reinitialize all fragment generators
+            self.fragment_generators = []
+            self.generator_last_cells = []
+            self.generator_active = []
+
+            for fragment in self.expression_dataset.get_fragments():
+                generator = fragment.to_batches(batch_size=self.prefetch_batch_size)
+                self.fragment_generators.append(generator)
+                self.generator_last_cells.append(None)
+                self.generator_active.append(True)
+
+            if self.verbose:
+                print_epoch_transition(
+                    f"Reset MoS: {len(self.fragment_generators)} fragment generators for epoch {epoch}",
+                    self.verbose,
+                )
+
+        elif self.by_fragment:
             self.fragment_iterator = iter(self.expression_dataset.get_fragments())
         else:
             self.batch_generator = self.expression_dataset.to_batches()
@@ -529,7 +595,140 @@ class PrefetchBatchProcessor:
             # Load data based on strategy
             load_start = time.time()
 
-            if self.by_fragment:
+            if self.use_mixture_of_scanners:
+                # MoS approach: randomly sample from active fragment generators
+
+                # Get indices of currently active generators
+                active_indices = [
+                    i for i, active in enumerate(self.generator_active) if active
+                ]
+
+                if not active_indices:
+                    # Check if we should start a new epoch
+                    if self.current_epoch + 1 < self.n_epochs:
+                        print_epoch_transition(
+                            f"Epoch {self.current_epoch} complete, starting epoch {self.current_epoch + 1}",
+                            self.verbose,
+                        )
+                        self.reset_for_epoch(self.current_epoch + 1)
+                        # Continue the loop to load the first batch of the new epoch
+                        continue
+                    else:
+                        raise StopIteration("No more epochs available") from None
+
+                # Randomly sample from active generators
+                n_to_sample = min(self.n_scanners, len(active_indices))
+                selected_indices = np.random.choice(
+                    active_indices, size=n_to_sample, replace=False
+                )
+
+                if self.verbose and self.batch_id % 100 == 0:
+                    print_prefetch(
+                        f"MoS sampling: {len(active_indices)} active generators, "
+                        f"sampling from {n_to_sample} generators, "
+                        f"reading {self.batches_per_chunk} batches per generator, "
+                        f"{len(self.partial_cell_data)} incomplete cells pending",
+                        self.verbose,
+                    )
+
+                # Collect batches from selected generators
+                batch_dfs = []
+                for generator_idx in selected_indices:
+                    try:
+                        # Read batches_per_chunk times from this generator to warm it up
+                        generator_batches = []
+                        for _ in range(self.batches_per_chunk):
+                            try:
+                                batch = next(self.fragment_generators[generator_idx])
+                                batch_df = pl.from_arrow(batch)
+                                generator_batches.append(batch_df)
+                            except StopIteration:
+                                # This generator is exhausted
+                                self.generator_active[generator_idx] = False
+                                break
+
+                        if not generator_batches:
+                            # Generator was exhausted, continue to next
+                            continue
+
+                        # Combine all batches from this generator
+                        if len(generator_batches) > 1:
+                            generator_combined = pl.concat(generator_batches)  # type: ignore
+                        else:
+                            generator_combined = generator_batches[0]
+
+                        # Handle incomplete cells from previous read
+                        if self.generator_last_cells[generator_idx] is not None:
+                            first_cell = generator_combined["cell_integer_id"].item(0)  # type: ignore
+                            expected_cell = self.generator_last_cells[generator_idx] + 1
+
+                            if first_cell == expected_cell:
+                                # Continuity detected - check if we can complete the last cell
+                                last_cell_id = self.generator_last_cells[generator_idx]
+                                if last_cell_id in self.partial_cell_data:
+                                    # STEP 1: Get the incomplete records for this cell
+                                    incomplete_records = self.partial_cell_data[
+                                        last_cell_id
+                                    ]
+
+                                    # STEP 2: Prepend incomplete records to the current batch
+                                    generator_combined = pl.concat(
+                                        [incomplete_records, generator_combined],
+                                        how="vertical",
+                                    )  # type: ignore
+
+                                    # STEP 3: Pop the completed cell from incomplete_cells
+                                    self.partial_cell_data.pop(last_cell_id)
+
+                                    if self.verbose and self.batch_id % 100 == 0:
+                                        print_prefetch(
+                                            f"Completed cell {last_cell_id} by prepending {len(incomplete_records)} records",
+                                            self.verbose,
+                                        )
+                            else:
+                                # Gap detected - check for zombie incomplete cells
+                                # Remove any incomplete cells for this generator that can't be completed
+                                keys_to_remove = []
+                                for cell_id in list(self.partial_cell_data.keys()):
+                                    if (
+                                        cell_id
+                                        <= self.generator_last_cells[generator_idx]
+                                    ):
+                                        keys_to_remove.append(cell_id)
+                                for key in keys_to_remove:
+                                    self.partial_cell_data.pop(key, None)
+
+                                if (
+                                    keys_to_remove
+                                    and self.verbose
+                                    and self.batch_id % 100 == 0
+                                ):
+                                    print_prefetch(
+                                        f"Cleaned up {len(keys_to_remove)} zombie incomplete cells due to gap",
+                                        self.verbose,
+                                    )
+
+                        # Update last cell for this generator
+                        self.generator_last_cells[generator_idx] = generator_combined[
+                            "cell_integer_id"
+                        ].item(-1)  # type: ignore
+
+                        # Add to batch collection
+                        batch_dfs.append(generator_combined)
+
+                    except StopIteration:
+                        # Mark this generator as exhausted
+                        self.generator_active[generator_idx] = False
+                        continue
+
+                if not batch_dfs:
+                    # All selected generators are exhausted, continue to next iteration
+                    continue
+
+                # Combine all batches
+                combined_df = pl.concat(batch_dfs, how="vertical")  # type: ignore
+
+            elif self.by_fragment:
                 # Fragment-based approach: load one fragment at a time
                 try:
                     fragment = next(self.fragment_iterator)
@@ -571,7 +770,7 @@ class PrefetchBatchProcessor:
                         raise StopIteration("No more epochs available") from None
 
                 # Combine all batches
-                combined_df = pl.concat(batch_dfs)  # type: ignore
+                combined_df = pl.concat(batch_dfs, how="vertical")  # type: ignore
             load_time = time.time() - load_start
 
             # Record lance loading timing
@@ -598,26 +797,46 @@ class PrefetchBatchProcessor:
                 # Combine partial data with new data
                 partial_dfs = list(self.partial_cell_data.values())
                 if partial_dfs:
-                    partial_combined = pl.concat(partial_dfs)  # type: ignore
-                    combined_df = pl.concat([partial_combined, combined_df])  # type: ignore
+                    partial_combined = pl.concat(partial_dfs, how="vertical")  # type: ignore
+                    combined_df = pl.concat(
+                        [partial_combined, combined_df], how="vertical"
+                    )  # type: ignore
 
             # Handle cell boundary crossing
-            # Find the last complete cell_integer_id
-            cell_counts = combined_df.group_by("cell_integer_id").len()  # type: ignore
-            last_complete_cell = cell_counts["cell_integer_id"].max()
+            if self.use_mixture_of_scanners:
+                # MoS mode: add last cell from each batch to partial_cell_data
+                # Since fragments contain complete cells, we don't need complex boundary logic
+                # Just add the last cell from the combined data as potentially incomplete
+                if len(combined_df) > 0:
+                    last_cell_id = combined_df["cell_integer_id"].max()  # type: ignore
+                    last_cell_data = combined_df.filter(
+                        pl.col("cell_integer_id") == last_cell_id  # type: ignore
+                    )
+                    self.partial_cell_data[last_cell_id] = last_cell_data  # type: ignore
 
-            # Split into complete cells and partial cells
-            complete_df = combined_df.filter(
-                pl.col("cell_integer_id") < last_complete_cell  # type: ignore[arg-type]
-            )
-            partial_df = combined_df.filter(
-                pl.col("cell_integer_id") == last_complete_cell  # type: ignore[arg-type]
-            )
+                # All cells except the last are complete
+                complete_df = combined_df.filter(
+                    pl.col("cell_integer_id") < last_cell_id  # type: ignore
+                )
 
-            # Store partial cell data for next chunk
-            self.partial_cell_data = {}
-            if len(partial_df) > 0:
-                self.partial_cell_data[last_complete_cell] = partial_df  # type: ignore
+            else:
+                # Non-MoS mode: use existing boundary logic
+                # Find the last complete cell_integer_id
+                cell_counts = combined_df.group_by("cell_integer_id").len()  # type: ignore
+                last_complete_cell = cell_counts["cell_integer_id"].max()
+
+                # Split into complete cells and partial cells
+                complete_df = combined_df.filter(
+                    pl.col("cell_integer_id") < last_complete_cell  # type: ignore[arg-type]
+                )
+                partial_df = combined_df.filter(
+                    pl.col("cell_integer_id") == last_complete_cell  # type: ignore[arg-type]
+                )
+
+                # Store partial cell data for next chunk
+                self.partial_cell_data = {}
+                if len(partial_df) > 0:
+                    self.partial_cell_data[last_complete_cell] = partial_df  # type: ignore
 
             # Process complete cells
             if len(complete_df) > 0:
@@ -1184,6 +1403,9 @@ class SLAFIterableDataset(IterableDataset):
         verbose: bool = True,  # Add verbose parameter
         batches_per_chunk: int = 50,  # Add batches_per_chunk parameter
         by_fragment: bool = False,  # Add by_fragment parameter for fragment-based loading
+        use_mixture_of_scanners: bool = False,  # Add MoS parameter
+        n_scanners: int = 16,  # Add n_scanners parameter for MoS
+        prefetch_batch_size: int = 4194304,  # Add prefetch_batch_size parameter for MoS
     ):
         super().__init__()
         self.slaf_array = slaf_array
@@ -1248,6 +1470,9 @@ class SLAFIterableDataset(IterableDataset):
             log_metrics=False,  # Pass log_metrics to batch processor
             batch_size=batch_size,  # Pass batch_size to batch processor
             by_fragment=by_fragment,  # Pass by_fragment to batch processor
+            use_mixture_of_scanners=use_mixture_of_scanners,  # Pass MoS parameters
+            n_scanners=n_scanners,  # Pass MoS parameters
+            prefetch_batch_size=prefetch_batch_size,  # Pass MoS parameters
         )
         self.prefetcher = AsyncPrefetcher(
             batch_processor=self.batch_processor,
