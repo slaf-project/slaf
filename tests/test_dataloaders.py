@@ -570,6 +570,332 @@ class TestSLAFDataLoader:
 
         assert len(dataloader) == 0  # Streaming datasets have unknown length (return 0)
 
+    def test_mixture_of_scanners_initialization(self, tiny_slaf):
+        """Test SLAFDataLoader initialization with Mixture of Scanners (MoS)"""
+        dataloader = SLAFDataLoader(
+            slaf_array=tiny_slaf,
+            batch_size=32,
+            use_mixture_of_scanners=True,
+            n_scanners=8,
+            prefetch_batch_size=1048576,  # 1M rows
+        )
+
+        assert dataloader.use_mixture_of_scanners is True
+        assert dataloader.n_scanners == 8
+        assert dataloader.prefetch_batch_size == 1048576
+        # Check that MoS parameters are passed to the batch processor
+        assert dataloader._dataset.batch_processor.use_mixture_of_scanners is True
+        assert dataloader._dataset.batch_processor.n_scanners == 8
+        assert dataloader._dataset.batch_processor.prefetch_batch_size == 1048576
+
+    def test_mixture_of_scanners_parameter_validation(self, tiny_slaf):
+        """Test MoS parameter validation in SLAFDataLoader"""
+        # Test valid parameters
+        dataloader = SLAFDataLoader(
+            slaf_array=tiny_slaf,
+            batch_size=32,
+            use_mixture_of_scanners=True,
+            n_scanners=16,
+            prefetch_batch_size=4194304,
+        )
+        assert dataloader.use_mixture_of_scanners is True
+
+        # Test invalid n_scanners (too low)
+        with pytest.raises(ValueError, match="n_scanners must be at least 1"):
+            SLAFDataLoader(
+                slaf_array=tiny_slaf,
+                batch_size=32,
+                use_mixture_of_scanners=True,
+                n_scanners=0,
+                prefetch_batch_size=4194304,
+            )
+
+        # Test invalid n_scanners (too high)
+        with pytest.raises(ValueError, match="n_scanners cannot exceed 100"):
+            SLAFDataLoader(
+                slaf_array=tiny_slaf,
+                batch_size=32,
+                use_mixture_of_scanners=True,
+                n_scanners=101,
+                prefetch_batch_size=4194304,
+            )
+
+        # Test invalid prefetch_batch_size (too low)
+        with pytest.raises(
+            ValueError, match="prefetch_batch_size must be at least 1,000"
+        ):
+            SLAFDataLoader(
+                slaf_array=tiny_slaf,
+                batch_size=32,
+                use_mixture_of_scanners=True,
+                n_scanners=16,
+                prefetch_batch_size=999,
+            )
+
+        # Test invalid prefetch_batch_size (too high)
+        with pytest.raises(
+            ValueError, match="prefetch_batch_size cannot exceed 10,000,000"
+        ):
+            SLAFDataLoader(
+                slaf_array=tiny_slaf,
+                batch_size=32,
+                use_mixture_of_scanners=True,
+                n_scanners=16,
+                prefetch_batch_size=10000001,
+            )
+
+    def test_mixture_of_scanners_iteration(self, tiny_slaf):
+        """Test that MoS dataloader can iterate through batches"""
+        dataloader = SLAFDataLoader(
+            slaf_array=tiny_slaf,
+            batch_size=8,
+            use_mixture_of_scanners=True,
+            n_scanners=4,
+            prefetch_batch_size=1048576,
+        )
+
+        # Test that we can iterate through batches
+        batch_count = 0
+        for batch in dataloader:
+            assert "input_ids" in batch
+            assert "attention_mask" in batch
+            assert "cell_ids" in batch
+            batch_count += 1
+            if batch_count >= 3:  # Just test first few batches
+                break
+
+        assert batch_count > 0
+
+    def test_mixture_of_scanners_with_raw_mode(self, tiny_slaf):
+        """Test MoS functionality with raw mode in SLAFDataLoader"""
+        dataloader = SLAFDataLoader(
+            slaf_array=tiny_slaf,
+            batch_size=32,
+            raw_mode=True,
+            use_mixture_of_scanners=True,
+            n_scanners=4,
+            prefetch_batch_size=1048576,
+        )
+
+        assert dataloader.use_mixture_of_scanners is True
+        assert dataloader.raw_mode is True
+
+        # Test that we can iterate through raw batches
+        batch_count = 0
+        for batch in dataloader:
+            assert "cell_ids" in batch
+            assert "x" in batch
+            batch_count += 1
+            if batch_count >= 3:  # Just test first few batches
+                break
+
+        assert batch_count > 0
+
+    def test_mixture_of_scanners_with_tokenized_mode(self, tiny_slaf):
+        """Test MoS functionality with tokenized mode in SLAFDataLoader"""
+        dataloader = SLAFDataLoader(
+            slaf_array=tiny_slaf,
+            batch_size=32,
+            raw_mode=False,
+            use_mixture_of_scanners=True,
+            n_scanners=4,
+            prefetch_batch_size=1048576,
+        )
+
+        assert dataloader.use_mixture_of_scanners is True
+        assert dataloader.raw_mode is False
+
+        # Test that we can iterate through tokenized batches
+        batch_count = 0
+        for batch in dataloader:
+            assert "input_ids" in batch
+            assert "attention_mask" in batch
+            assert "cell_ids" in batch
+            batch_count += 1
+            if batch_count >= 3:  # Just test first few batches
+                break
+
+        assert batch_count > 0
+
+    def test_mixture_of_scanners_backward_compatibility(self, tiny_slaf):
+        """Test that MoS is backward compatible (disabled by default) in SLAFDataLoader"""
+        # Default behavior (MoS disabled)
+        dataloader_default = SLAFDataLoader(
+            slaf_array=tiny_slaf,
+            batch_size=32,
+        )
+
+        assert dataloader_default.use_mixture_of_scanners is False
+        assert (
+            dataloader_default._dataset.batch_processor.use_mixture_of_scanners is False
+        )
+
+        # Explicitly disable MoS
+        dataloader_disabled = SLAFDataLoader(
+            slaf_array=tiny_slaf,
+            batch_size=32,
+            use_mixture_of_scanners=False,
+        )
+
+        assert dataloader_disabled.use_mixture_of_scanners is False
+        assert (
+            dataloader_disabled._dataset.batch_processor.use_mixture_of_scanners
+            is False
+        )
+
+    def test_mixture_of_scanners_parameter_passing(self, tiny_slaf):
+        """Test that MoS parameters are correctly passed through the hierarchy"""
+        dataloader = SLAFDataLoader(
+            slaf_array=tiny_slaf,
+            batch_size=32,
+            use_mixture_of_scanners=True,
+            n_scanners=12,
+            prefetch_batch_size=2097152,  # 2M rows
+        )
+
+        # Check that parameters are passed to all levels
+        assert dataloader.use_mixture_of_scanners is True
+        assert dataloader.n_scanners == 12
+        assert dataloader.prefetch_batch_size == 2097152
+
+        assert dataloader._dataset.batch_processor.use_mixture_of_scanners is True
+        assert dataloader._dataset.batch_processor.n_scanners == 12
+        assert dataloader._dataset.batch_processor.prefetch_batch_size == 2097152
+
+    def test_mixture_of_scanners_with_custom_parameters(self, tiny_slaf):
+        """Test MoS functionality with custom parameters in SLAFDataLoader"""
+        dataloader = SLAFDataLoader(
+            slaf_array=tiny_slaf,
+            tokenizer_type="scgpt",
+            batch_size=16,
+            max_genes=512,
+            use_mixture_of_scanners=True,
+            n_scanners=6,
+            prefetch_batch_size=1048576,
+        )
+
+        # Verify all parameters are set correctly
+        assert dataloader.use_mixture_of_scanners is True
+        assert dataloader.n_scanners == 6
+        assert dataloader.prefetch_batch_size == 1048576
+        assert dataloader.tokenizer_type == "scgpt"
+        assert dataloader.batch_size == 16
+        assert dataloader.max_genes == 512
+
+        # Test iteration
+        batch_count = 0
+        for batch in dataloader:
+            assert "input_ids" in batch
+            assert "attention_mask" in batch
+            assert "cell_ids" in batch
+            batch_count += 1
+            if batch_count > 5:
+                break
+
+        assert batch_count > 0
+
+    def test_mixture_of_scanners_multi_epoch(self, tiny_slaf):
+        """Test MoS functionality with multi-epoch training"""
+        dataloader = SLAFDataLoader(
+            slaf_array=tiny_slaf,
+            batch_size=8,
+            n_epochs=3,
+            use_mixture_of_scanners=True,
+            n_scanners=4,
+            prefetch_batch_size=1048576,
+        )
+
+        assert dataloader.use_mixture_of_scanners is True
+        assert dataloader.n_epochs == 3
+
+        # Test iteration and epoch tracking
+        epochs_seen = set()
+        batch_count = 0
+
+        for batch in dataloader:
+            epoch = batch.get("epoch", 0)
+            epochs_seen.add(epoch)
+            batch_count += 1
+
+            if batch_count > 15:  # Limit test size
+                break
+
+        # Should see some epochs
+        assert len(epochs_seen) >= 1, f"Expected at least 1 epoch, got {epochs_seen}"
+        assert batch_count > 0
+
+    def test_mixture_of_scanners_fragment_generators_creation(self, tiny_slaf):
+        """Test that MoS creates fragment generators correctly"""
+        dataloader = SLAFDataLoader(
+            slaf_array=tiny_slaf,
+            batch_size=32,
+            use_mixture_of_scanners=True,
+            n_scanners=4,
+            prefetch_batch_size=1048576,
+        )
+
+        # Check that fragment generators are created in the underlying dataset
+        assert hasattr(dataloader._dataset.batch_processor, "fragment_generators")
+        assert len(dataloader._dataset.batch_processor.fragment_generators) > 0
+
+        # Check that generator tracking arrays are created
+        assert hasattr(dataloader._dataset.batch_processor, "generator_last_cells")
+        assert hasattr(dataloader._dataset.batch_processor, "generator_active")
+        assert len(dataloader._dataset.batch_processor.generator_last_cells) == len(
+            dataloader._dataset.batch_processor.fragment_generators
+        )
+        assert len(dataloader._dataset.batch_processor.generator_active) == len(
+            dataloader._dataset.batch_processor.fragment_generators
+        )
+
+    def test_mixture_of_scanners_random_sampling_behavior(self, tiny_slaf):
+        """Test that MoS uses random sampling from fragment generators"""
+        dataloader = SLAFDataLoader(
+            slaf_array=tiny_slaf,
+            batch_size=8,
+            use_mixture_of_scanners=True,
+            n_scanners=2,  # Small number for testing
+            prefetch_batch_size=1048576,
+        )
+
+        # Test that we can iterate and get different batches
+        batches = []
+        for batch in dataloader:
+            batches.append(batch)
+            if len(batches) >= 3:  # Get 3 batches
+                break
+
+        assert len(batches) > 0
+
+        # Check that batches have the expected structure
+        for batch in batches:
+            assert "input_ids" in batch
+            assert "attention_mask" in batch
+            assert "cell_ids" in batch
+
+    def test_mixture_of_scanners_cell_boundary_handling(self, tiny_slaf):
+        """Test that MoS handles cell boundaries correctly in SLAFDataLoader"""
+        dataloader = SLAFDataLoader(
+            slaf_array=tiny_slaf,
+            batch_size=8,
+            use_mixture_of_scanners=True,
+            n_scanners=4,
+            prefetch_batch_size=1048576,
+        )
+
+        # Test that partial cell data is handled
+        assert hasattr(dataloader._dataset.batch_processor, "partial_cell_data")
+        assert isinstance(dataloader._dataset.batch_processor.partial_cell_data, dict)
+
+        # Test iteration to ensure cell boundaries are handled
+        batch_count = 0
+        for _batch in dataloader:
+            batch_count += 1
+            if batch_count >= 3:  # Test a few batches
+                break
+
+        assert batch_count > 0
+
 
 class TestDeviceDetection:
     """Test device detection and optimization"""

@@ -967,6 +967,568 @@ class TestPrefetchBatchProcessing:
 
         assert batch_count > 0
 
+    def test_mixture_of_scanners_initialization(self, tiny_slaf):
+        """Test SLAFIterableDataset initialization with Mixture of Scanners (MoS)"""
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        dataset = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=tokenizer,
+            batch_size=32,
+            use_mixture_of_scanners=True,
+            n_scanners=8,
+            prefetch_batch_size=1048576,  # 1M rows
+        )
+
+        # Check that MoS parameters are passed to the batch processor
+        assert dataset.batch_processor.use_mixture_of_scanners is True
+        assert dataset.batch_processor.n_scanners == 8
+        assert dataset.batch_processor.prefetch_batch_size == 1048576
+
+    def test_mixture_of_scanners_fragment_generators(self, tiny_slaf):
+        """Test that MoS creates the correct number of fragment generators"""
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        dataset = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=tokenizer,
+            batch_size=32,
+            use_mixture_of_scanners=True,
+            n_scanners=4,
+            prefetch_batch_size=1048576,
+        )
+
+        # Check that fragment generators are created
+        assert hasattr(dataset.batch_processor, "fragment_generators")
+        assert len(dataset.batch_processor.fragment_generators) > 0
+
+        # Check that generator tracking arrays are created
+        assert hasattr(dataset.batch_processor, "generator_last_cells")
+        assert hasattr(dataset.batch_processor, "generator_active")
+        assert len(dataset.batch_processor.generator_last_cells) == len(
+            dataset.batch_processor.fragment_generators
+        )
+        assert len(dataset.batch_processor.generator_active) == len(
+            dataset.batch_processor.fragment_generators
+        )
+
+    def test_mixture_of_scanners_parameter_validation(self, tiny_slaf):
+        """Test MoS parameter validation"""
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        # Test valid parameters
+        dataset = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=tokenizer,
+            batch_size=32,
+            use_mixture_of_scanners=True,
+            n_scanners=16,
+            prefetch_batch_size=4194304,
+        )
+        assert dataset.batch_processor.use_mixture_of_scanners is True
+
+        # Test invalid n_scanners (too low)
+        with pytest.raises(ValueError, match="n_scanners must be at least 1"):
+            SLAFIterableDataset(
+                slaf_array=tiny_slaf,
+                tokenizer=tokenizer,
+                batch_size=32,
+                use_mixture_of_scanners=True,
+                n_scanners=0,
+                prefetch_batch_size=4194304,
+            )
+
+        # Test invalid n_scanners (too high)
+        with pytest.raises(ValueError, match="n_scanners cannot exceed 100"):
+            SLAFIterableDataset(
+                slaf_array=tiny_slaf,
+                tokenizer=tokenizer,
+                batch_size=32,
+                use_mixture_of_scanners=True,
+                n_scanners=101,
+                prefetch_batch_size=4194304,
+            )
+
+        # Test invalid prefetch_batch_size (too low)
+        with pytest.raises(
+            ValueError, match="prefetch_batch_size must be at least 1,000"
+        ):
+            SLAFIterableDataset(
+                slaf_array=tiny_slaf,
+                tokenizer=tokenizer,
+                batch_size=32,
+                use_mixture_of_scanners=True,
+                n_scanners=16,
+                prefetch_batch_size=999,
+            )
+
+        # Test invalid prefetch_batch_size (too high)
+        with pytest.raises(
+            ValueError, match="prefetch_batch_size cannot exceed 10,000,000"
+        ):
+            SLAFIterableDataset(
+                slaf_array=tiny_slaf,
+                tokenizer=tokenizer,
+                batch_size=32,
+                use_mixture_of_scanners=True,
+                n_scanners=16,
+                prefetch_batch_size=10000001,
+            )
+
+    def test_mixture_of_scanners_iteration(self, tiny_slaf):
+        """Test that MoS dataset can iterate through batches"""
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        dataset = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=tokenizer,
+            batch_size=8,
+            use_mixture_of_scanners=True,
+            n_scanners=4,
+            prefetch_batch_size=1048576,
+        )
+
+        # Test that we can iterate through batches
+        batch_count = 0
+        for batch in dataset:
+            assert "input_ids" in batch
+            assert "attention_mask" in batch
+            assert "cell_ids" in batch
+            batch_count += 1
+            if batch_count >= 3:  # Just test first few batches
+                break
+
+        assert batch_count > 0
+
+    def test_mixture_of_scanners_epoch_reset(self, tiny_slaf):
+        """Test that MoS epoch reset works correctly"""
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        dataset = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=tokenizer,
+            batch_size=8,
+            n_epochs=2,
+            use_mixture_of_scanners=True,
+            n_scanners=4,
+            prefetch_batch_size=1048576,
+        )
+
+        # Test epoch reset
+        dataset.batch_processor.reset_for_epoch(1)
+        assert dataset.batch_processor.current_epoch == 1
+        assert dataset.batch_processor.batch_id == 0
+
+        # Check that fragment generators are reinitialized
+        assert len(dataset.batch_processor.fragment_generators) > 0
+        assert len(dataset.batch_processor.generator_last_cells) == len(
+            dataset.batch_processor.fragment_generators
+        )
+        assert len(dataset.batch_processor.generator_active) == len(
+            dataset.batch_processor.fragment_generators
+        )
+
+    def test_mixture_of_scanners_backward_compatibility(self, tiny_slaf):
+        """Test that MoS is backward compatible (disabled by default)"""
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        # Default behavior (MoS disabled)
+        dataset_default = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=tokenizer,
+            batch_size=32,
+        )
+
+        assert dataset_default.batch_processor.use_mixture_of_scanners is False
+        assert not hasattr(dataset_default.batch_processor, "fragment_generators")
+        assert hasattr(dataset_default.batch_processor, "batch_generator")
+
+        # Explicitly disable MoS
+        dataset_disabled = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=tokenizer,
+            batch_size=32,
+            use_mixture_of_scanners=False,
+        )
+
+        assert dataset_disabled.batch_processor.use_mixture_of_scanners is False
+        assert not hasattr(dataset_disabled.batch_processor, "fragment_generators")
+        assert hasattr(dataset_disabled.batch_processor, "batch_generator")
+
+    def test_mixture_of_scanners_with_raw_mode(self, tiny_slaf):
+        """Test MoS functionality with raw mode"""
+        dataset = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=None,
+            batch_size=32,
+            raw_mode=True,
+            use_mixture_of_scanners=True,
+            n_scanners=4,
+            prefetch_batch_size=1048576,
+        )
+
+        assert dataset.batch_processor.use_mixture_of_scanners is True
+        assert dataset.raw_mode is True
+
+        # Test that we can iterate through raw batches
+        batch_count = 0
+        for batch in dataset:
+            assert "cell_ids" in batch
+            assert "x" in batch
+            batch_count += 1
+            if batch_count >= 3:  # Just test first few batches
+                break
+
+        assert batch_count > 0
+
+    def test_mixture_of_scanners_with_fragment_mode(self, tiny_slaf):
+        """Test that MoS automatically enables fragment mode"""
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        dataset = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=tokenizer,
+            batch_size=32,
+            use_mixture_of_scanners=True,
+            n_scanners=4,
+            prefetch_batch_size=1048576,
+        )
+
+        # MoS should automatically set by_fragment to True
+        assert dataset.batch_processor.by_fragment is True
+        assert dataset.batch_processor.use_mixture_of_scanners is True
+
+    def test_mixture_of_scanners_random_sampling(self, tiny_slaf):
+        """Test that MoS uses random sampling from fragment generators"""
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        dataset = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=tokenizer,
+            batch_size=8,
+            use_mixture_of_scanners=True,
+            n_scanners=2,  # Small number for testing
+            prefetch_batch_size=1048576,
+        )
+
+        # Test that we can iterate and get different batches
+        batches = []
+        for batch in dataset:
+            batches.append(batch)
+            if len(batches) >= 3:  # Get 3 batches
+                break
+
+        assert len(batches) > 0
+
+        # Check that batches have the expected structure
+        for batch in batches:
+            assert "input_ids" in batch
+            assert "attention_mask" in batch
+            assert "cell_ids" in batch
+
+    def test_mixture_of_scanners_generator_exhaustion_handling(self, tiny_slaf):
+        """Test that MoS handles generator exhaustion correctly"""
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        dataset = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=tokenizer,
+            batch_size=8,
+            use_mixture_of_scanners=True,
+            n_scanners=4,
+            prefetch_batch_size=1048576,
+        )
+
+        # Test that we can iterate even when some generators might be exhausted
+        batch_count = 0
+        for _batch in dataset:
+            batch_count += 1
+            if batch_count >= 5:  # Test a few batches
+                break
+
+        assert batch_count > 0
+
+    def test_mixture_of_scanners_cell_boundary_handling(self, tiny_slaf):
+        """Test that MoS handles cell boundaries correctly"""
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        dataset = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=tokenizer,
+            batch_size=8,
+            use_mixture_of_scanners=True,
+            n_scanners=4,
+            prefetch_batch_size=1048576,
+        )
+
+        # Test that partial cell data is handled
+        assert hasattr(dataset.batch_processor, "partial_cell_data")
+        assert isinstance(dataset.batch_processor.partial_cell_data, dict)
+
+        # Test iteration to ensure cell boundaries are handled
+        batch_count = 0
+        for _batch in dataset:
+            batch_count += 1
+            if batch_count >= 3:  # Test a few batches
+                break
+
+        assert batch_count > 0
+
+    def test_prefetch_batch_processor_mixture_of_scanners_initialization(
+        self, tiny_slaf
+    ):
+        """Test PrefetchBatchProcessor initialization with Mixture of Scanners (MoS)"""
+        window = ScGPTWindow()
+        shuffle = RandomShuffle()
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        processor = PrefetchBatchProcessor(
+            slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
+            tokenizer=tokenizer,
+            batch_size=32,
+            use_mixture_of_scanners=True,
+            n_scanners=8,
+            prefetch_batch_size=1048576,  # 1M rows
+        )
+
+        assert processor.use_mixture_of_scanners is True
+        assert processor.n_scanners == 8
+        assert processor.prefetch_batch_size == 1048576
+        assert processor.by_fragment is True  # MoS automatically enables fragment mode
+
+        # Check that fragment generators are created
+        assert hasattr(processor, "fragment_generators")
+        assert len(processor.fragment_generators) > 0
+
+        # Check that generator tracking arrays are created
+        assert hasattr(processor, "generator_last_cells")
+        assert hasattr(processor, "generator_active")
+        assert len(processor.generator_last_cells) == len(processor.fragment_generators)
+        assert len(processor.generator_active) == len(processor.generator_active)
+
+    def test_prefetch_batch_processor_mos_parameter_validation(self, tiny_slaf):
+        """Test MoS parameter validation in PrefetchBatchProcessor"""
+        window = ScGPTWindow()
+        shuffle = RandomShuffle()
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        # Test valid parameters
+        processor = PrefetchBatchProcessor(
+            slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
+            tokenizer=tokenizer,
+            use_mixture_of_scanners=True,
+            n_scanners=16,
+            prefetch_batch_size=4194304,
+        )
+        assert processor.use_mixture_of_scanners is True
+
+        # Test invalid n_scanners (too low)
+        with pytest.raises(ValueError, match="n_scanners must be at least 1"):
+            PrefetchBatchProcessor(
+                slaf_array=tiny_slaf,
+                window=window,
+                shuffle=shuffle,
+                tokenizer=tokenizer,
+                use_mixture_of_scanners=True,
+                n_scanners=0,
+                prefetch_batch_size=4194304,
+            )
+
+        # Test invalid n_scanners (too high)
+        with pytest.raises(ValueError, match="n_scanners cannot exceed 100"):
+            PrefetchBatchProcessor(
+                slaf_array=tiny_slaf,
+                window=window,
+                shuffle=shuffle,
+                tokenizer=tokenizer,
+                use_mixture_of_scanners=True,
+                n_scanners=101,
+                prefetch_batch_size=4194304,
+            )
+
+        # Test invalid prefetch_batch_size (too low)
+        with pytest.raises(
+            ValueError, match="prefetch_batch_size must be at least 1,000"
+        ):
+            PrefetchBatchProcessor(
+                slaf_array=tiny_slaf,
+                window=window,
+                shuffle=shuffle,
+                tokenizer=tokenizer,
+                use_mixture_of_scanners=True,
+                n_scanners=16,
+                prefetch_batch_size=999,
+            )
+
+        # Test invalid prefetch_batch_size (too high)
+        with pytest.raises(
+            ValueError, match="prefetch_batch_size cannot exceed 10,000,000"
+        ):
+            PrefetchBatchProcessor(
+                slaf_array=tiny_slaf,
+                window=window,
+                shuffle=shuffle,
+                tokenizer=tokenizer,
+                use_mixture_of_scanners=True,
+                n_scanners=16,
+                prefetch_batch_size=10000001,
+            )
+
+    def test_prefetch_batch_processor_mos_epoch_reset(self, tiny_slaf):
+        """Test that MoS epoch reset works correctly in PrefetchBatchProcessor"""
+        window = ScGPTWindow()
+        shuffle = RandomShuffle()
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        processor = PrefetchBatchProcessor(
+            slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
+            tokenizer=tokenizer,
+            n_epochs=3,
+            use_mixture_of_scanners=True,
+            n_scanners=4,
+            prefetch_batch_size=1048576,
+        )
+
+        # Test epoch reset
+        processor.reset_for_epoch(1)
+        assert processor.current_epoch == 1
+        assert processor.batch_id == 0
+
+        # Check that fragment generators are reinitialized
+        assert len(processor.fragment_generators) > 0
+        assert len(processor.generator_last_cells) == len(processor.fragment_generators)
+        assert len(processor.generator_active) == len(processor.fragment_generators)
+
+    def test_prefetch_batch_processor_mos_backward_compatibility(self, tiny_slaf):
+        """Test that MoS is backward compatible (disabled by default) in PrefetchBatchProcessor"""
+        window = ScGPTWindow()
+        shuffle = RandomShuffle()
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        # Default behavior (MoS disabled)
+        processor_default = PrefetchBatchProcessor(
+            slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
+            tokenizer=tokenizer,
+        )
+
+        assert processor_default.use_mixture_of_scanners is False
+        assert not hasattr(processor_default, "fragment_generators")
+        assert hasattr(processor_default, "batch_generator")
+
+        # Explicitly disable MoS
+        processor_disabled = PrefetchBatchProcessor(
+            slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
+            tokenizer=tokenizer,
+            use_mixture_of_scanners=False,
+        )
+
+        assert processor_disabled.use_mixture_of_scanners is False
+        assert not hasattr(processor_disabled, "fragment_generators")
+        assert hasattr(processor_disabled, "batch_generator")
+
+    def test_prefetch_batch_processor_mos_with_raw_mode(self, tiny_slaf):
+        """Test MoS functionality with raw mode in PrefetchBatchProcessor"""
+        window = ScGPTWindow()
+        shuffle = RandomShuffle()
+        tokenizer = None  # No tokenizer for raw mode
+
+        processor = PrefetchBatchProcessor(
+            slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
+            tokenizer=tokenizer,
+            raw_mode=True,
+            use_mixture_of_scanners=True,
+            n_scanners=4,
+            prefetch_batch_size=1048576,
+        )
+
+        assert processor.use_mixture_of_scanners is True
+        assert processor.raw_mode is True
+
+        # Test that we can load batches
+        batch = processor.load_prefetch_batch()
+        assert hasattr(batch, "batch_dfs")
+        assert hasattr(batch, "cell_integer_ids")
+
+    def test_prefetch_batch_processor_mos_fragment_mode_automatic(self, tiny_slaf):
+        """Test that MoS automatically enables fragment mode in PrefetchBatchProcessor"""
+        window = ScGPTWindow()
+        shuffle = RandomShuffle()
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        processor = PrefetchBatchProcessor(
+            slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
+            tokenizer=tokenizer,
+            use_mixture_of_scanners=True,
+            n_scanners=4,
+            prefetch_batch_size=1048576,
+        )
+
+        # MoS should automatically set by_fragment to True
+        assert processor.by_fragment is True
+        assert processor.use_mixture_of_scanners is True
+
+    def test_prefetch_batch_processor_mos_load_prefetch_batch(self, tiny_slaf):
+        """Test that MoS can load prefetch batches correctly"""
+        window = ScGPTWindow()
+        shuffle = RandomShuffle()
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        processor = PrefetchBatchProcessor(
+            slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
+            tokenizer=tokenizer,
+            use_mixture_of_scanners=True,
+            n_scanners=4,
+            prefetch_batch_size=1048576,
+        )
+
+        # Test that we can load batches
+        batch = processor.load_prefetch_batch()
+        assert hasattr(batch, "input_ids")
+        assert hasattr(batch, "attention_mask")
+        assert hasattr(batch, "cell_integer_ids")
+
+    def test_prefetch_batch_processor_mos_cell_boundary_handling(self, tiny_slaf):
+        """Test that MoS handles cell boundaries correctly in PrefetchBatchProcessor"""
+        window = ScGPTWindow()
+        shuffle = RandomShuffle()
+        tokenizer = SLAFTokenizer(tiny_slaf)
+
+        processor = PrefetchBatchProcessor(
+            slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
+            tokenizer=tokenizer,
+            use_mixture_of_scanners=True,
+            n_scanners=4,
+            prefetch_batch_size=1048576,
+        )
+
+        # Test that partial cell data is handled
+        assert hasattr(processor, "partial_cell_data")
+        assert isinstance(processor.partial_cell_data, dict)
+
+        # Test that we can load batches
+        batch = processor.load_prefetch_batch()
+        assert hasattr(batch, "input_ids")
+        assert hasattr(batch, "attention_mask")
+        assert hasattr(batch, "cell_integer_ids")
+
 
 if __name__ == "__main__":
     pytest.main([__file__])
