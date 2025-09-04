@@ -67,14 +67,15 @@ class ScalingResult:
 
 
 @dataclass
-class FragmentVsBatchResult:
-    """Results from fragment vs batch loading comparison."""
+class EntropyStrategyResult:
+    """Results for different entropy strategies."""
 
-    strategy: str  # "fragment" or "batch"
+    strategy: str  # "sequential", "fragment", or "mos"
     throughput_cells_per_sec: float
     total_cells: int
     total_batches: int
     measurement_time: float
+    description: str  # Human-readable description of the strategy
 
 
 class InternalDataloaderBenchmark:
@@ -117,8 +118,8 @@ class InternalDataloaderBenchmark:
             TokenizationConfig(
                 name="Raw mode (no tokenization)",
                 tokenizer_type="raw",
-                max_genes=2000,
-                vocab_size=8192,
+                max_genes=2048,  # Use SLAFDataLoader default for consistency
+                vocab_size=50000,  # Use SLAFDataLoader default for consistency
             ),
         ]
 
@@ -249,7 +250,7 @@ class InternalDataloaderBenchmark:
         # Benchmark with progress bar
         self.console.print("Running benchmark...")
         start_time = time.time()
-        measurement_duration = 10  # 10 seconds like test_performance_breakdown_fixed.py
+        measurement_duration = 10
 
         total_cells = 0
         total_tokens = 0
@@ -673,30 +674,55 @@ class InternalDataloaderBenchmark:
             return max_throughput / min_throughput
         return 1.0
 
-    def benchmark_fragment_vs_batch(self) -> list[FragmentVsBatchResult]:
-        """Benchmark fragment-based vs batch-based loading strategies."""
+    def benchmark_entropy_strategies(self) -> list[EntropyStrategyResult]:
+        """Benchmark different entropy strategies: sequential, fragment-based, and Mixture of Scanners."""
 
         self.console.print(
             Panel.fit(
-                "[bold green]SLAF Fragment vs Batch Loading Benchmark[/bold green]\n"
-                "Testing fragment-based vs batch-based loading strategies",
+                "[bold green]SLAF Entropy Strategy Benchmark[/bold green]\n"
+                "Testing different loading strategies for data entropy optimization",
                 border_style="green",
             )
         )
 
         strategies = [
-            ("fragment", True),
-            ("batch", False),
+            (
+                "sequential",
+                False,
+                False,
+                "Sequential loading (lowest entropy)",
+                50,
+            ),
+            (
+                "fragment",
+                True,
+                False,
+                "Fragment-based loading (higher entropy)",
+                50,
+            ),
+            (
+                "mos",
+                True,
+                True,
+                "Mixture of Scanners (maximum entropy)",
+                1,
+            ),
         ]
 
         results = []
 
-        for strategy_name, by_fragment in strategies:
+        for (
+            strategy_name,
+            by_fragment,
+            use_mos,
+            description,
+            batches_per_chunk,
+        ) in strategies:
             self.console.print(
-                f"\n[bold blue]Testing {strategy_name}-based loading...[/bold blue]"
+                f"\n[bold blue]Testing {strategy_name} strategy...[/bold blue]"
             )
 
-            # Create dataloader with fragment or batch strategy
+            # Create dataloader with appropriate entropy strategy
             dataloader = SLAFDataLoader(
                 slaf_array=self.slaf_array,
                 batch_size=32,
@@ -704,6 +730,10 @@ class InternalDataloaderBenchmark:
                 raw_mode=True,
                 verbose=False,
                 by_fragment=by_fragment,
+                use_mixture_of_scanners=use_mos,
+                n_scanners=16,
+                prefetch_batch_size=4194304 if use_mos else 8192,  # 4M rows for MoS
+                batches_per_chunk=batches_per_chunk,
             )
 
             # Warm up
@@ -714,15 +744,14 @@ class InternalDataloaderBenchmark:
                     break
 
             # Measurement phase
-            self.console.print("  Measuring...")
             start_time = time.time()
-            measurement_duration = 10.0
+            measurement_duration = 30.0
 
             total_cells = 0
             batch_count = 0
 
             with self.create_progress_bar(
-                f"Training: {strategy_name}-based loading", "training"
+                f"Training: {strategy_name} strategy", "training"
             ) as pbar:
                 for batch in dataloader:
                     batch_count += 1
@@ -765,12 +794,13 @@ class InternalDataloaderBenchmark:
                 total_cells / elapsed_time if elapsed_time > 0 else 0
             )
 
-            result = FragmentVsBatchResult(
+            result = EntropyStrategyResult(
                 strategy=strategy_name,
                 throughput_cells_per_sec=throughput_cells_per_sec,
                 total_cells=total_cells,
                 total_batches=batch_count,
                 measurement_time=elapsed_time,
+                description=description,
             )
 
             results.append(result)
@@ -781,22 +811,24 @@ class InternalDataloaderBenchmark:
 
         return results
 
-    def print_fragment_vs_batch_results(self, results: list[FragmentVsBatchResult]):
-        """Print fragment vs batch results in a formatted table."""
+    def print_entropy_results(self, results: list[EntropyStrategyResult]):
+        """Print entropy strategy results in a formatted table."""
 
         self.console.print(
-            "\n[bold blue]Fragment vs Batch Loading Performance[/bold blue]"
+            "\n[bold blue]Entropy Strategy Performance Comparison[/bold blue]"
         )
-        table = Table(title="Fragment vs Batch Loading Comparison")
+        table = Table(title="Entropy Strategy Comparison")
 
         table.add_column("Strategy", style="cyan", no_wrap=True)
+        table.add_column("Description", style="yellow", no_wrap=True)
         table.add_column("Throughput (cells/sec)", style="magenta", justify="right")
         table.add_column("Total Cells", style="blue", justify="right")
         table.add_column("Total Batches", style="blue", justify="right")
 
         for result in results:
             table.add_row(
-                f"{result.strategy.capitalize()}-Based Loading",
+                f"{result.strategy.capitalize()}",
+                result.description,
                 f"{result.throughput_cells_per_sec:.0f}",
                 f"{result.total_cells:,}",
                 f"{result.total_batches}",
@@ -805,39 +837,47 @@ class InternalDataloaderBenchmark:
         self.console.print(table)
 
         # Calculate performance comparison
-        if len(results) == 2:
+        if len(results) == 3:
+            sequential_result = next(r for r in results if r.strategy == "sequential")
             fragment_result = next(r for r in results if r.strategy == "fragment")
-            batch_result = next(r for r in results if r.strategy == "batch")
+            mos_result = next(r for r in results if r.strategy == "mos")
 
-            if batch_result.throughput_cells_per_sec > 0:
-                throughput_improvement = (
+            # Compare fragment vs sequential
+            if sequential_result.throughput_cells_per_sec > 0:
+                fragment_vs_sequential = (
                     fragment_result.throughput_cells_per_sec
-                    / batch_result.throughput_cells_per_sec
+                    / sequential_result.throughput_cells_per_sec
                     - 1
                 ) * 100
             else:
-                throughput_improvement = (
-                    float("inf") if fragment_result.throughput_cells_per_sec > 0 else 0
-                )
+                fragment_vs_sequential = 0
+
+            # Compare MoS vs sequential
+            if sequential_result.throughput_cells_per_sec > 0:
+                mos_vs_sequential = (
+                    mos_result.throughput_cells_per_sec
+                    / sequential_result.throughput_cells_per_sec
+                    - 1
+                ) * 100
+            else:
+                mos_vs_sequential = 0
+
+            # Compare MoS vs fragment
+            if fragment_result.throughput_cells_per_sec > 0:
+                mos_vs_fragment = (
+                    mos_result.throughput_cells_per_sec
+                    / fragment_result.throughput_cells_per_sec
+                    - 1
+                ) * 100
+            else:
+                mos_vs_fragment = 0
 
             self.console.print("\n[bold green]Performance Comparison[/bold green]")
             self.console.print(
-                f"Fragment vs Batch throughput: {throughput_improvement:+.1f}%"
+                f"Fragment vs Sequential: {fragment_vs_sequential:+.1f}%"
             )
-
-            # Add insights
-            if throughput_improvement > 0:
-                self.console.print(
-                    "\n[bold yellow]Key Insight:[/bold yellow] Fragment-based loading provides higher throughput."
-                )
-            elif throughput_improvement < 0:
-                self.console.print(
-                    "\n[bold yellow]Key Insight:[/bold yellow] Batch-based loading provides higher throughput."
-                )
-            else:
-                self.console.print(
-                    "\n[bold yellow]Key Insight:[/bold yellow] Both strategies provide similar throughput."
-                )
+            self.console.print(f"MoS vs Sequential: {mos_vs_sequential:+.1f}%")
+            self.console.print(f"MoS vs Fragment: {mos_vs_fragment:+.1f}%")
 
 
 def main():
@@ -856,9 +896,9 @@ def main():
     scaling_results = benchmark.run_scaling_benchmarks()
     benchmark.print_scaling_results(scaling_results)
 
-    # Run fragment vs batch benchmark
-    fragment_vs_batch_results = benchmark.benchmark_fragment_vs_batch()
-    benchmark.print_fragment_vs_batch_results(fragment_vs_batch_results)
+    # Run entropy strategy benchmarks
+    entropy_results = benchmark.benchmark_entropy_strategies()
+    benchmark.print_entropy_results(entropy_results)
 
 
 if __name__ == "__main__":
