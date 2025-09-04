@@ -40,6 +40,7 @@ DEFAULT_BENCHMARK_DIR = str((Path(__file__).parent.parent / "benchmarks").resolv
 def run_benchmark_suite(
     h5ad_path: str,
     slaf_path: str,
+    tiledb_path: str = None,
     benchmark_types: list[str] | None = None,
     verbose: bool = False,
     auto_convert: bool = False,
@@ -50,6 +51,7 @@ def run_benchmark_suite(
     Args:
         h5ad_path: Path to h5ad file
         slaf_path: Path to SLAF file
+        tiledb_path: Path to TileDB SOMA experiment (optional)
         benchmark_types: List of benchmark types to run (None = all)
         verbose: Enable verbose output
         auto_convert: Auto-convert h5ad to SLAF if needed
@@ -115,13 +117,31 @@ def run_benchmark_suite(
             # Run the specific benchmark
             benchmark_func = all_benchmark_types[benchmark_type]
 
-            # Run the benchmark function
-            results = benchmark_func(
-                h5ad_path=h5ad_path,
-                slaf_path=slaf_path,
-                include_memory=True,
-                verbose=verbose,
-            )
+            # Check if this benchmark function requires tiledb_path
+            import inspect
+
+            sig = inspect.signature(benchmark_func)
+            requires_tiledb = "tiledb_path" in sig.parameters
+
+            # Run the benchmark function with appropriate parameters
+            if requires_tiledb:
+                if tiledb_path is None:
+                    print(f"⚠️  {benchmark_type}: Skipping (requires TileDB path)")
+                    continue
+                results = benchmark_func(
+                    h5ad_path=h5ad_path,
+                    slaf_path=slaf_path,
+                    tiledb_path=tiledb_path,
+                    include_memory=True,
+                    verbose=verbose,
+                )
+            else:
+                results = benchmark_func(
+                    h5ad_path=h5ad_path,
+                    slaf_path=slaf_path,
+                    include_memory=True,
+                    verbose=verbose,
+                )
 
             if results:
                 all_results[benchmark_type] = results
@@ -130,9 +150,41 @@ def run_benchmark_suite(
                 print_benchmark_table(results, Path(h5ad_path).stem, benchmark_type)
 
                 # Calculate summary for this type
-                _ = np.mean(
-                    [r["total_speedup"] for r in results if r["total_speedup"] > 0]
-                )
+                if results and len(results) > 0:
+                    # Check if this is a three-way comparison (has TileDB results)
+                    first_result = results[0]
+                    if "slaf_vs_h5ad_speedup" in first_result:
+                        # Three-way comparison
+                        avg_slaf_vs_h5ad = np.mean(
+                            [
+                                r["slaf_vs_h5ad_speedup"]
+                                for r in results
+                                if r["slaf_vs_h5ad_speedup"] > 0
+                            ]
+                        )
+                        avg_slaf_vs_tiledb = np.mean(
+                            [
+                                r["slaf_vs_tiledb_speedup"]
+                                for r in results
+                                if r["slaf_vs_tiledb_speedup"] > 0
+                            ]
+                        )
+                        print(
+                            f"  Average SLAF vs h5ad speedup: {avg_slaf_vs_h5ad:.1f}x"
+                        )
+                        print(
+                            f"  Average SLAF vs TileDB speedup: {avg_slaf_vs_tiledb:.1f}x"
+                        )
+                    else:
+                        # Two-way comparison (legacy)
+                        avg_speedup = np.mean(
+                            [
+                                r["total_speedup"]
+                                for r in results
+                                if r.get("total_speedup", 0) > 0
+                            ]
+                        )
+                        print(f"  Average speedup: {avg_speedup:.1f}x")
             else:
                 print(f"⚠️  {benchmark_type}: No results generated")
 
@@ -148,8 +200,20 @@ def extract_cell_filtering_summary(results: list[dict]) -> dict[str, Any]:
     if not results:
         return {}
 
-    # Calculate averages
-    total_speedups = [r["total_speedup"] for r in results if r["total_speedup"] > 0]
+    # Check if this is a three-way comparison (has TileDB results)
+    first_result = results[0]
+    if "slaf_vs_h5ad_speedup" in first_result:
+        # Three-way comparison
+        slaf_vs_h5ad_speedups = [
+            r["slaf_vs_h5ad_speedup"] for r in results if r["slaf_vs_h5ad_speedup"] > 0
+        ]
+        total_speedups = slaf_vs_h5ad_speedups  # Use h5ad comparison as primary
+    else:
+        # Two-way comparison (legacy)
+        total_speedups = [
+            r["total_speedup"] for r in results if r.get("total_speedup", 0) > 0
+        ]
+
     memory_efficiencies = []
 
     for r in results:
@@ -170,12 +234,20 @@ def extract_cell_filtering_summary(results: list[dict]) -> dict[str, Any]:
     for result in results:
         h5ad_mem = result.get("h5ad_total_memory_mb", 0)
         slaf_mem = result.get("slaf_total_memory_mb", 0)
+
+        if "slaf_vs_h5ad_speedup" in result:
+            # Three-way comparison
+            speedup = result["slaf_vs_h5ad_speedup"]
+        else:
+            # Two-way comparison (legacy)
+            speedup = result.get("total_speedup", 0)
+
         representative_scenarios.append(
             {
                 "description": result["scenario_description"],
                 "h5ad_total_ms": round(result["h5ad_total_time"], 1),
                 "slaf_total_ms": round(result["slaf_total_time"], 1),
-                "total_speedup": round(result["total_speedup"], 1),
+                "total_speedup": round(speedup, 1),
                 "memory_efficiency": (
                     round(h5ad_mem / slaf_mem, 1) if slaf_mem > 0.1 else "N/A"
                 ),
@@ -196,45 +268,41 @@ def extract_expression_queries_summary(results: list[dict]) -> dict[str, Any]:
     if not results:
         return {}
 
-    # Calculate averages
-    total_speedups = [r["total_speedup"] for r in results if r["total_speedup"] > 0]
-    memory_efficiencies = []
-
-    for r in results:
-        h5ad_mem = r.get("h5ad_total_memory_mb", 0)
-        slaf_mem = r.get("slaf_total_memory_mb", 0)
-
-        if slaf_mem > 0.1 and h5ad_mem > 0.1:
-            mem_eff = h5ad_mem / slaf_mem
-            memory_efficiencies.append(mem_eff)
-        elif h5ad_mem > 0.1 and slaf_mem <= 0.1:
-            mem_eff = h5ad_mem / 0.01
-            memory_efficiencies.append(mem_eff)
-        elif h5ad_mem <= 0.1 and slaf_mem <= 0.1:
-            memory_efficiencies.append(1.0)
+    # Check if this is a three-way comparison (has TileDB results)
+    first_result = results[0]
+    if "slaf_vs_h5ad_speedup" in first_result:
+        # Three-way comparison
+        slaf_vs_h5ad_speedups = [
+            r["slaf_vs_h5ad_speedup"] for r in results if r["slaf_vs_h5ad_speedup"] > 0
+        ]
+        total_speedups = slaf_vs_h5ad_speedups  # Use h5ad comparison as primary
+    else:
+        # Two-way comparison (legacy)
+        total_speedups = [
+            r["total_speedup"] for r in results if r.get("total_speedup", 0) > 0
+        ]
 
     # Include all scenarios
     representative_scenarios = []
     for result in results:
-        h5ad_mem = result.get("h5ad_total_memory_mb", 0)
-        slaf_mem = result.get("slaf_total_memory_mb", 0)
+        if "slaf_vs_h5ad_speedup" in result:
+            # Three-way comparison
+            speedup = result["slaf_vs_h5ad_speedup"]
+        else:
+            # Two-way comparison (legacy)
+            speedup = result.get("total_speedup", 0)
+
         representative_scenarios.append(
             {
                 "description": result["scenario_description"],
                 "h5ad_total_ms": round(result["h5ad_total_time"], 1),
                 "slaf_total_ms": round(result["slaf_total_time"], 1),
-                "total_speedup": round(result["total_speedup"], 1),
-                "memory_efficiency": (
-                    round(h5ad_mem / slaf_mem, 1) if slaf_mem > 0.1 else "N/A"
-                ),
+                "total_speedup": round(speedup, 1),
             }
         )
 
     return {
         "average_speedup": round(np.mean(total_speedups), 1),
-        "average_memory_efficiency": (
-            round(np.mean(memory_efficiencies), 1) if memory_efficiencies else 0
-        ),
         "representative_scenarios": representative_scenarios,
     }
 
@@ -272,6 +340,74 @@ def extract_scanpy_preprocessing_summary(results: list[dict]) -> dict[str, Any]:
                 "h5ad_total_ms": round(result["h5ad_total_time"], 1),
                 "slaf_total_ms": round(result["slaf_total_time"], 1),
                 "total_speedup": round(result["total_speedup"], 1),
+                "memory_efficiency": (
+                    round(h5ad_mem / slaf_mem, 1) if slaf_mem > 0.1 else "N/A"
+                ),
+            }
+        )
+
+    return {
+        "average_speedup": round(np.mean(total_speedups), 1),
+        "average_memory_efficiency": (
+            round(np.mean(memory_efficiencies), 1) if memory_efficiencies else 0
+        ),
+        "representative_scenarios": representative_scenarios,
+    }
+
+
+def extract_gene_filtering_summary(results: list[dict]) -> dict[str, Any]:
+    """Extract key metrics for gene filtering benchmarks"""
+    if not results:
+        return {}
+
+    # Check if this is a three-way comparison (has TileDB results)
+    first_result = results[0]
+    if "slaf_vs_h5ad_speedup" in first_result:
+        # Three-way comparison
+        slaf_vs_h5ad_speedups = [
+            r["slaf_vs_h5ad_speedup"] for r in results if r["slaf_vs_h5ad_speedup"] > 0
+        ]
+        total_speedups = slaf_vs_h5ad_speedups  # Use h5ad comparison as primary
+    else:
+        # Two-way comparison (legacy)
+        total_speedups = [
+            r["total_speedup"] for r in results if r.get("total_speedup", 0) > 0
+        ]
+
+    memory_efficiencies = []
+
+    for r in results:
+        h5ad_mem = r.get("h5ad_total_memory_mb", 0)
+        slaf_mem = r.get("slaf_total_memory_mb", 0)
+
+        if slaf_mem > 0.1 and h5ad_mem > 0.1:
+            mem_eff = h5ad_mem / slaf_mem
+            memory_efficiencies.append(mem_eff)
+        elif h5ad_mem > 0.1 and slaf_mem <= 0.1:
+            mem_eff = h5ad_mem / 0.01  # Assume SLAF used ~0.01 MB
+            memory_efficiencies.append(mem_eff)
+        elif h5ad_mem <= 0.1 and slaf_mem <= 0.1:
+            memory_efficiencies.append(1.0)
+
+    # Include all scenarios
+    representative_scenarios = []
+    for result in results:
+        h5ad_mem = result.get("h5ad_total_memory_mb", 0)
+        slaf_mem = result.get("slaf_total_memory_mb", 0)
+
+        if "slaf_vs_h5ad_speedup" in result:
+            # Three-way comparison
+            speedup = result["slaf_vs_h5ad_speedup"]
+        else:
+            # Two-way comparison (legacy)
+            speedup = result.get("total_speedup", 0)
+
+        representative_scenarios.append(
+            {
+                "description": result["scenario_description"],
+                "h5ad_total_ms": round(result["h5ad_total_time"], 1),
+                "slaf_total_ms": round(result["slaf_total_time"], 1),
+                "total_speedup": round(speedup, 1),
                 "memory_efficiency": (
                     round(h5ad_mem / slaf_mem, 1) if slaf_mem > 0.1 else "N/A"
                 ),
@@ -329,25 +465,40 @@ def generate_benchmark_summary(input_file: str, output_file: str):
 
 
 def update_cell_filtering_section(content: str, summary: dict[str, Any]) -> str:
-    """Update the cell filtering performance results section"""
+    """Update the cell filtering performance results section with three-way comparison"""
 
     # Extract representative scenarios
     scenarios = summary.get("representative_scenarios", [])
     if not scenarios:
         return content
 
-    # Create the table header and separator
-    header = "| Scenario                | Traditional Total (ms) | SLAF Total (ms) | Total Speedup | Memory Efficiency | Description          |"
-    separator = "| ----------------------- | ---------------------- | --------------- | ------------- | ----------------- | -------------------- |"
+    # Check if this is a three-way comparison
+    first_scenario = scenarios[0]
+    has_tiledb = "tiledb_total_ms" in first_scenario
 
-    # Create the table rows
-    table_rows = []
-    for i, scenario in enumerate(scenarios):  # Use all scenarios
-        row = f"| S{i + 1}       |   {scenario['h5ad_total_ms']:.1f} |    {scenario['slaf_total_ms']:.1f} |     {scenario['total_speedup']:.1f}x |     {scenario['memory_efficiency']:.1f}x | {scenario['description']} |"
-        table_rows.append(row)
+    if has_tiledb:
+        # Three-way comparison table
+        header = "| Scenario | h5ad Total (ms) | SLAF Total (ms) | TileDB Total (ms) | SLAF vs h5ad | SLAF vs TileDB | Description |"
+        separator = "|----------|----------------|-----------------|-------------------|--------------|----------------|-------------|"
 
-    # Replace the table in the content - target the Metadata Filtering section specifically
-    table_pattern = r"(### Performance Results\n\n)(.*?)(\n\n\*\*Key Insight\*\*)"
+        # Create the table rows
+        table_rows = []
+        for i, scenario in enumerate(scenarios):
+            row = f"| S{i + 1} | {scenario['h5ad_total_ms']:.1f} | {scenario['slaf_total_ms']:.1f} | {scenario['tiledb_total_ms']:.1f} | **{scenario['slaf_vs_h5ad_speedup']:.1f}x** | **{scenario['slaf_vs_tiledb_speedup']:.1f}x** | {scenario['description']} |"
+            table_rows.append(row)
+    else:
+        # Two-way comparison table (legacy)
+        header = "| Scenario | h5ad Total (ms) | SLAF Total (ms) | Total Speedup | Memory Efficiency | Description |"
+        separator = "|----------|----------------|-----------------|---------------|-------------------|-------------|"
+
+        # Create the table rows
+        table_rows = []
+        for i, scenario in enumerate(scenarios):
+            row = f"| S{i + 1} | {scenario['h5ad_total_ms']:.1f} | {scenario['slaf_total_ms']:.1f} | **{scenario['total_speedup']:.1f}x** | {scenario['memory_efficiency']:.1f}x | {scenario['description']} |"
+            table_rows.append(row)
+
+    # Replace the table in the content - target the Cell Filtering section specifically
+    table_pattern = r"(### Performance Results\n\n)(.*?)(\n\n### Key Insights)"
 
     def replace_table(match):
         new_table = header + "\n" + separator + "\n" + "\n".join(table_rows)
@@ -355,30 +506,61 @@ def update_cell_filtering_section(content: str, summary: dict[str, Any]) -> str:
         return match.group(1) + new_table + "\n" + footer
 
     updated_content = re.sub(table_pattern, replace_table, content, flags=re.DOTALL)
+
+    # Update the summary text if it exists
+    if has_tiledb:
+        avg_slaf_vs_h5ad = summary.get("average_slaf_vs_h5ad_speedup", 0)
+        avg_slaf_vs_tiledb = summary.get("average_slaf_vs_tiledb_speedup", 0)
+
+        # Update summary text
+        summary_pattern = (
+            r"Average Performance:\n- \*\*SLAF vs h5ad\*\*: \*\*(\d+\.?\d*)x faster\*\*"
+        )
+        new_summary = f"Average Performance:\n- **SLAF vs h5ad**: **{avg_slaf_vs_h5ad:.1f}x faster**"
+        updated_content = re.sub(summary_pattern, new_summary, updated_content)
+
+        summary_pattern2 = r"- \*\*SLAF vs TileDB\*\*: \*\*(\d+\.?\d*)x faster\*\*"
+        new_summary2 = f"- **SLAF vs TileDB**: **{avg_slaf_vs_tiledb:.1f}x faster**"
+        updated_content = re.sub(summary_pattern2, new_summary2, updated_content)
 
     return updated_content
 
 
-def update_expression_queries_section(content: str, summary: dict[str, Any]) -> str:
-    """Update the expression queries performance results section"""
+def update_gene_filtering_section(content: str, summary: dict[str, Any]) -> str:
+    """Update the gene filtering performance results section with three-way comparison"""
 
     # Extract representative scenarios
     scenarios = summary.get("representative_scenarios", [])
     if not scenarios:
         return content
 
-    # Create the table header and separator
-    header = "| Scenario                 | Traditional Total (ms) | SLAF Total (ms) | Total Speedup | Memory Efficiency | Description          |"
-    separator = "| ------------------------ | ---------------------- | --------------- | ------------- | ----------------- | -------------------- |"
+    # Check if this is a three-way comparison
+    first_scenario = scenarios[0]
+    has_tiledb = "tiledb_total_ms" in first_scenario
 
-    # Create the table rows
-    table_rows = []
-    for i, scenario in enumerate(scenarios):  # Use all scenarios
-        row = f"| S{i + 1}       |   {scenario['h5ad_total_ms']:.1f} |    {scenario['slaf_total_ms']:.1f} |     {scenario['total_speedup']:.1f}x |     {scenario['memory_efficiency']:.1f}x | {scenario['description']} |"
-        table_rows.append(row)
+    if has_tiledb:
+        # Three-way comparison table
+        header = "| Scenario | h5ad Total (ms) | SLAF Total (ms) | TileDB Total (ms) | SLAF vs h5ad | SLAF vs TileDB | Description |"
+        separator = "|----------|----------------|-----------------|-------------------|--------------|----------------|-------------|"
 
-    # Replace the table in the content - target the Lazy Slicing section specifically
-    table_pattern = r"(## \*\*Lazy Slicing \(Expression Analysis\)\*\*.*?\n\n### Performance Results\n\n)(.*?)(\n\n\*\*Key Insight\*\*)"
+        # Create the table rows
+        table_rows = []
+        for i, scenario in enumerate(scenarios):
+            row = f"| S{i + 1} | {scenario['h5ad_total_ms']:.1f} | {scenario['slaf_total_ms']:.1f} | {scenario['tiledb_total_ms']:.1f} | **{scenario['slaf_vs_h5ad_speedup']:.1f}x** | **{scenario['slaf_vs_tiledb_speedup']:.1f}x** | {scenario['description']} |"
+            table_rows.append(row)
+    else:
+        # Two-way comparison table (legacy)
+        header = "| Scenario | h5ad Total (ms) | SLAF Total (ms) | Total Speedup | Memory Efficiency | Description |"
+        separator = "|----------|----------------|-----------------|---------------|-------------------|-------------|"
+
+        # Create the table rows
+        table_rows = []
+        for i, scenario in enumerate(scenarios):
+            row = f"| S{i + 1} | {scenario['h5ad_total_ms']:.1f} | {scenario['slaf_total_ms']:.1f} | **{scenario['total_speedup']:.1f}x** | {scenario['memory_efficiency']:.1f}x | {scenario['description']} |"
+            table_rows.append(row)
+
+    # Replace the table in the content - target the Gene Filtering section specifically
+    table_pattern = r"(## Gene Filtering Benchmarks.*?\n\n### Performance Results\n\n)(.*?)(\n\n### Key Insights)"
 
     def replace_table(match):
         new_table = header + "\n" + separator + "\n" + "\n".join(table_rows)
@@ -386,6 +568,80 @@ def update_expression_queries_section(content: str, summary: dict[str, Any]) -> 
         return match.group(1) + new_table + "\n" + footer
 
     updated_content = re.sub(table_pattern, replace_table, content, flags=re.DOTALL)
+
+    # Update the summary text if it exists
+    if has_tiledb:
+        avg_slaf_vs_h5ad = summary.get("average_slaf_vs_h5ad_speedup", 0)
+        avg_slaf_vs_tiledb = summary.get("average_slaf_vs_tiledb_speedup", 0)
+
+        # Update summary text
+        summary_pattern = (
+            r"Average Performance:\n- \*\*SLAF vs h5ad\*\*: \*\*(\d+\.?\d*)x faster\*\*"
+        )
+        new_summary = f"Average Performance:\n- **SLAF vs h5ad**: **{avg_slaf_vs_h5ad:.1f}x faster**"
+        updated_content = re.sub(summary_pattern, new_summary, updated_content)
+
+        summary_pattern2 = r"- \*\*SLAF vs TileDB\*\*: \*\*(\d+\.?\d*)x faster\*\*"
+        new_summary2 = f"- **SLAF vs TileDB**: **{avg_slaf_vs_tiledb:.1f}x faster**"
+        updated_content = re.sub(summary_pattern2, new_summary2, updated_content)
+
+    return updated_content
+
+
+def update_expression_queries_section(content: str, summary: dict) -> str:
+    """Update the expression queries section with new benchmark results and three-way comparison"""
+    scenarios = summary["representative_scenarios"]
+
+    # Check if this is a three-way comparison
+    first_scenario = scenarios[0]
+    has_tiledb = "tiledb_total_ms" in first_scenario
+
+    if has_tiledb:
+        # Three-way comparison table
+        header = "| Scenario | h5ad Total (ms) | SLAF Total (ms) | TileDB Total (ms) | SLAF vs h5ad | SLAF vs TileDB | Description |"
+        separator = "|----------|----------------|-----------------|-------------------|--------------|----------------|-------------|"
+
+        # Create the table rows
+        table_rows = []
+        for i, scenario in enumerate(scenarios):
+            row = f"| S{i + 1} | {scenario['h5ad_total_ms']:.1f} | {scenario['slaf_total_ms']:.1f} | {scenario['tiledb_total_ms']:.1f} | **{scenario['slaf_vs_h5ad_speedup']:.1f}x** | **{scenario['slaf_vs_tiledb_speedup']:.1f}x** | {scenario['description']} |"
+            table_rows.append(row)
+    else:
+        # Two-way comparison table (legacy)
+        header = "| Scenario | h5ad Total (ms) | SLAF Total (ms) | Total Speedup |"
+        separator = "|----------|----------------|-----------------|---------------|"
+
+        # Create the table rows
+        table_rows = []
+        for i, scenario in enumerate(scenarios):
+            row = f"| S{i + 1} | {scenario['h5ad_total_ms']:.1f} | {scenario['slaf_total_ms']:.1f} | **{scenario['total_speedup']:.1f}x** |"
+            table_rows.append(row)
+
+    # Replace the table in the content - target the Expression Queries section specifically
+    table_pattern = r"(## Expression Queries Benchmarks.*?\n\n### Performance Results\n\n)(.*?)(\n\n### Key Insights)"
+
+    def replace_table(match):
+        new_table = header + "\n" + separator + "\n" + "\n".join(table_rows)
+        footer = match.group(3)
+        return match.group(1) + new_table + "\n" + footer
+
+    updated_content = re.sub(table_pattern, replace_table, content, flags=re.DOTALL)
+
+    # Update the summary text if it exists
+    if has_tiledb:
+        avg_slaf_vs_h5ad = summary.get("average_slaf_vs_h5ad_speedup", 0)
+        avg_slaf_vs_tiledb = summary.get("average_slaf_vs_tiledb_speedup", 0)
+
+        # Update summary text
+        summary_pattern = (
+            r"Average Performance:\n- \*\*SLAF vs h5ad\*\*: \*\*(\d+\.?\d*)x faster\*\*"
+        )
+        new_summary = f"Average Performance:\n- **SLAF vs h5ad**: **{avg_slaf_vs_h5ad:.1f}x faster**"
+        updated_content = re.sub(summary_pattern, new_summary, updated_content)
+
+        summary_pattern2 = r"- \*\*SLAF vs TileDB\*\*: \*\*(\d+\.?\d*)x faster\*\*"
+        new_summary2 = f"- **SLAF vs TileDB**: **{avg_slaf_vs_tiledb:.1f}x faster**"
+        updated_content = re.sub(summary_pattern2, new_summary2, updated_content)
 
     return updated_content
 
@@ -422,7 +678,7 @@ def update_scanpy_preprocessing_section(content: str, summary: dict[str, Any]) -
 
 
 def update_performance_docs(summary_file: str, docs_file: str):
-    """Update performance.md with actual benchmark numbers"""
+    """Update bioinformatics_benchmarks.md with actual benchmark numbers and three-way comparison"""
 
     # Load benchmark summary
     with open(summary_file) as f:
@@ -436,10 +692,18 @@ def update_performance_docs(summary_file: str, docs_file: str):
     dataset_name = list(summary.keys())[0]
     dataset_summary = summary[dataset_name]
 
+    # Update key results summary first
+    content = update_key_results_summary(content, dataset_summary)
+
     # Update each section
     if "cell_filtering" in dataset_summary:
         content = update_cell_filtering_section(
             content, dataset_summary["cell_filtering"]
+        )
+
+    if "gene_filtering" in dataset_summary:
+        content = update_gene_filtering_section(
+            content, dataset_summary["gene_filtering"]
         )
 
     if "expression_queries" in dataset_summary:
@@ -447,16 +711,47 @@ def update_performance_docs(summary_file: str, docs_file: str):
             content, dataset_summary["expression_queries"]
         )
 
-    if "scanpy_preprocessing" in dataset_summary:
-        content = update_scanpy_preprocessing_section(
-            content, dataset_summary["scanpy_preprocessing"]
-        )
-
     # Write updated content
     with open(docs_file, "w") as f:
         f.write(content)
 
-    print(f"✅ Updated {docs_file} with actual benchmark numbers")
+    print(
+        f"✅ Updated {docs_file} with actual benchmark numbers and three-way comparison"
+    )
+
+
+def update_key_results_summary(content: str, summary: dict[str, Any]) -> str:
+    """Update the key results summary table with three-way comparison data"""
+
+    # Extract summary data from all benchmark types
+    cell_filtering = summary.get("cell_filtering", {})
+    gene_filtering = summary.get("gene_filtering", {})
+    expression_queries = summary.get("expression_queries", {})
+
+    # Get speedup values
+    cell_slaf_vs_h5ad = cell_filtering.get("average_slaf_vs_h5ad_speedup", 0)
+    cell_slaf_vs_tiledb = cell_filtering.get("average_slaf_vs_tiledb_speedup", 0)
+    gene_slaf_vs_h5ad = gene_filtering.get("average_slaf_vs_h5ad_speedup", 0)
+    gene_slaf_vs_tiledb = gene_filtering.get("average_slaf_vs_tiledb_speedup", 0)
+    expr_slaf_vs_h5ad = expression_queries.get("average_slaf_vs_h5ad_speedup", 0)
+    expr_slaf_vs_tiledb = expression_queries.get("average_slaf_vs_tiledb_speedup", 0)
+
+    # Create the updated summary table
+    new_table = f"""| Operation Type | SLAF vs h5ad | SLAF vs TileDB | Dataset |
+|---------------|--------------|----------------|---------|
+| **Cell Filtering** | **{cell_slaf_vs_h5ad:.1f}x faster** | **{cell_slaf_vs_tiledb:.1f}x faster** | synthetic_50k_processed |
+| **Gene Filtering** | **{gene_slaf_vs_h5ad:.1f}x faster** | **{gene_slaf_vs_tiledb:.1f}x faster** | synthetic_50k_processed |
+| **Expression Queries** | **{expr_slaf_vs_h5ad:.1f}x faster** | **{expr_slaf_vs_tiledb:.1f}x faster** | synthetic_50k_processed |"""
+
+    # Replace the existing summary table
+    table_pattern = r"(### \*\*Key Results Summary\*\*\n\n)(.*?)(\n\n!!! success)"
+
+    def replace_summary(match):
+        return match.group(1) + new_table + match.group(3)
+
+    updated_content = re.sub(table_pattern, replace_summary, content, flags=re.DOTALL)
+
+    return updated_content
 
 
 def main():
@@ -496,6 +791,10 @@ Examples:
         "--data-dir",
         default=DEFAULT_DATASET_DIR,
         help=f"Directory containing datasets (default: {DEFAULT_DATASET_DIR})",
+    )
+    run_parser.add_argument(
+        "--tiledb-path",
+        help="Path to TileDB SOMA experiment (for three-way comparisons)",
     )
     run_parser.add_argument(
         "--types",
@@ -640,6 +939,7 @@ Examples:
             dataset_results = run_benchmark_suite(
                 h5ad_path=str(h5ad_path),
                 slaf_path=str(slaf_path),
+                tiledb_path=args.tiledb_path,
                 benchmark_types=args.types,
                 verbose=args.verbose,
                 auto_convert=args.auto_convert,
@@ -746,6 +1046,7 @@ Examples:
             dataset_results = run_benchmark_suite(
                 h5ad_path=str(h5ad_path),
                 slaf_path=str(slaf_path),
+                tiledb_path=args.tiledb_path,
                 benchmark_types=args.types,
                 verbose=args.verbose,
                 auto_convert=args.auto_convert,

@@ -12,6 +12,14 @@ from benchmark_utils import (
 
 from slaf.core.slaf import SLAFArray
 
+# Try to import tiledbsoma
+try:
+    import tiledbsoma
+
+    TILEDB_AVAILABLE = True
+except ImportError:
+    TILEDB_AVAILABLE = False
+
 
 def demo_realistic_cell_queries():
     """Demo realistic cell filtering scenarios for PBMC data"""
@@ -22,18 +30,23 @@ def demo_realistic_cell_queries():
             "description": "Cells with >=500 genes",
             "h5ad_code": lambda adata: adata.obs[adata.obs.n_genes_by_counts >= 500],
             "slaf_code": lambda slaf: slaf.filter_cells(n_genes_by_counts=">=500"),
+            "tiledb_code": lambda obs_df: obs_df.filter(
+                pl.col("n_genes_by_counts") >= 500
+            ),
         },
         {
             "name": "max_pct_mt_15",
             "description": "Cells with <=15% mitochondrial genes",
             "h5ad_code": lambda adata: adata.obs[adata.obs.pct_counts_mt <= 15],
             "slaf_code": lambda slaf: slaf.filter_cells(pct_counts_mt="<=15"),
+            "tiledb_code": lambda obs_df: obs_df.filter(pl.col("pct_counts_mt") <= 15),
         },
         {
             "name": "low_mito",
             "description": "Cells with low mitochondrial content",
             "h5ad_code": lambda adata: adata.obs[~adata.obs.high_mito],
             "slaf_code": lambda slaf: slaf.filter_cells(high_mito=False),
+            "tiledb_code": lambda obs_df: obs_df.filter(~pl.col("high_mito")),
         },
         # Cluster-based filtering (common after clustering)
         {
@@ -43,12 +56,16 @@ def demo_realistic_cell_queries():
                 adata.obs.leiden.isin(["0", "1", "2"])
             ],
             "slaf_code": lambda slaf: slaf.filter_cells(leiden=["0", "1", "2"]),
+            "tiledb_code": lambda obs_df: obs_df.filter(
+                pl.col("leiden").is_in(["0", "1", "2"])
+            ),
         },
         {
             "name": "cluster_0",
             "description": "Cells in largest cluster (0)",
             "h5ad_code": lambda adata: adata.obs[adata.obs.leiden == "0"],
             "slaf_code": lambda slaf: slaf.filter_cells(leiden="0"),
+            "tiledb_code": lambda obs_df: obs_df.filter(pl.col("leiden") == "0"),
         },
         # Batch filtering (very common)
         {
@@ -56,6 +73,7 @@ def demo_realistic_cell_queries():
             "description": "Cells from batch_1",
             "h5ad_code": lambda adata: adata.obs[adata.obs.batch == "batch_1"],
             "slaf_code": lambda slaf: slaf.filter_cells(batch="batch_1"),
+            "tiledb_code": lambda obs_df: obs_df.filter(pl.col("batch") == "batch_1"),
         },
         # Combined filtering (most realistic)
         {
@@ -67,6 +85,9 @@ def demo_realistic_cell_queries():
             "slaf_code": lambda slaf: slaf.filter_cells(
                 leiden=["0", "1"], batch="batch_1"
             ),
+            "tiledb_code": lambda obs_df: obs_df.filter(
+                (pl.col("leiden").is_in(["0", "1"])) & (pl.col("batch") == "batch_1")
+            ),
         },
         {
             "name": "high_quality",
@@ -76,6 +97,9 @@ def demo_realistic_cell_queries():
             ],
             "slaf_code": lambda slaf: slaf.filter_cells(
                 n_genes_by_counts=">=1000", pct_counts_mt="<=10"
+            ),
+            "tiledb_code": lambda obs_df: obs_df.filter(
+                (pl.col("n_genes_by_counts") >= 1000) & (pl.col("pct_counts_mt") <= 10)
             ),
         },
         # Additional range queries with new operators
@@ -88,6 +112,9 @@ def demo_realistic_cell_queries():
             "slaf_code": lambda slaf: slaf.filter_cells(total_counts=">=800").filter(
                 pl.col("total_counts") <= 2000
             ),
+            "tiledb_code": lambda obs_df: obs_df.filter(
+                (pl.col("total_counts") >= 800) & (pl.col("total_counts") <= 2000)
+            ),
         },
         {
             "name": "genes_200_1500",
@@ -99,6 +126,10 @@ def demo_realistic_cell_queries():
             "slaf_code": lambda slaf: slaf.filter_cells(
                 n_genes_by_counts=">=200"
             ).filter(pl.col("n_genes_by_counts") <= 1500),
+            "tiledb_code": lambda obs_df: obs_df.filter(
+                (pl.col("n_genes_by_counts") >= 200)
+                & (pl.col("n_genes_by_counts") <= 1500)
+            ),
         },
     ]
     return scenarios
@@ -188,9 +219,94 @@ def _measure_slaf_cell_filtering(slaf_path: str, scenario: dict):
     }
 
 
+def _measure_tiledb_cell_filtering(tiledb_path: str, scenario: dict):
+    """Measure TileDB cell filtering performance"""
+    import gc
+
+    if not TILEDB_AVAILABLE:
+        return {
+            "tiledb_load_time": 0,
+            "tiledb_query_time": 0,
+            "tiledb_load_memory": 0,
+            "tiledb_query_memory": 0,
+            "tiledb_count": 0,
+        }
+
+    gc.collect()
+
+    # Load TileDB experiment
+    start = time.time()
+    try:
+        experiment = tiledbsoma.Experiment.open(tiledb_path)
+        tiledb_load_time = time.time() - start
+        # Measure memory footprint of the experiment object
+        tiledb_load_memory = get_object_memory_usage(experiment)
+    except Exception as e:
+        print(f"TileDB loading failed: {e}")
+        return {
+            "tiledb_load_time": 0,
+            "tiledb_query_time": 0,
+            "tiledb_load_memory": 0,
+            "tiledb_query_memory": 0,
+            "tiledb_count": 0,
+        }
+
+    # Read obs metadata as Arrow Table
+    start = time.time()
+    try:
+        obs_table = experiment.obs.read().concat()
+        obs_df = pl.from_arrow(obs_table)
+        tiledb_query_time = time.time() - start
+        # Measure memory of the obs DataFrame
+        obs_memory = get_object_memory_usage(obs_df)
+    except Exception as e:
+        print(f"TileDB obs reading failed: {e}")
+        tiledb_query_time = 0
+        obs_memory = 0
+        obs_df = None
+
+    # Execute the filtering operation
+    start = time.time()
+    try:
+        if obs_df is not None:
+            result = scenario["tiledb_code"](obs_df)
+            tiledb_filter_time = time.time() - start
+            tiledb_count = len(result)
+            # Measure memory of the result
+            result_memory = get_object_memory_usage(result)
+        else:
+            tiledb_filter_time = 0
+            tiledb_count = 0
+            result_memory = 0
+    except Exception as e:
+        print(f"TileDB filtering failed: {e}")
+        tiledb_filter_time = 0
+        tiledb_count = 0
+        result_memory = 0
+
+    # Total query time includes reading + filtering
+    total_query_time = tiledb_query_time + tiledb_filter_time
+
+    # Total query memory includes obs reading + result
+    total_query_memory = obs_memory + result_memory
+
+    # Clean up
+    del experiment, obs_df
+    gc.collect()
+
+    return {
+        "tiledb_load_time": tiledb_load_time,
+        "tiledb_query_time": total_query_time,
+        "tiledb_load_memory": float(tiledb_load_memory),
+        "tiledb_query_memory": float(total_query_memory),
+        "tiledb_count": int(tiledb_count),
+    }
+
+
 def benchmark_cell_filtering_scenario(
     h5ad_path: str,
     slaf_path: str,
+    tiledb_path: str,
     scenario: dict,
 ):
     """Benchmark a single cell filtering scenario with isolated memory measurement"""
@@ -201,20 +317,22 @@ def benchmark_cell_filtering_scenario(
     # Measure SLAF in isolation
     slaf_result = _measure_slaf_cell_filtering(slaf_path, scenario)
 
+    # Measure TileDB in isolation
+    tiledb_result = _measure_tiledb_cell_filtering(tiledb_path, scenario)
+
     # Calculate totals and speedups
     h5ad_total_time = h5ad_result["h5ad_load_time"] + h5ad_result["h5ad_query_time"]
     slaf_total_time = slaf_result["slaf_init_time"] + slaf_result["slaf_query_time"]
-
-    total_speedup = h5ad_total_time / slaf_total_time if slaf_total_time > 0 else 0
-    query_speedup = (
-        h5ad_result["h5ad_query_time"] / slaf_result["slaf_query_time"]
-        if slaf_result["slaf_query_time"] > 0
-        else 0
+    tiledb_total_time = (
+        tiledb_result["tiledb_load_time"] + tiledb_result["tiledb_query_time"]
     )
-    load_speedup = (
-        h5ad_result["h5ad_load_time"] / slaf_result["slaf_init_time"]
-        if slaf_result["slaf_init_time"] > 0
-        else 0
+
+    # Calculate speedups - focus on SLAF comparisons
+    slaf_vs_h5ad_speedup = (
+        h5ad_total_time / slaf_total_time if slaf_total_time > 0 else 0
+    )
+    slaf_vs_tiledb_speedup = (
+        tiledb_total_time / slaf_total_time if slaf_total_time > 0 else 0
     )
 
     return {
@@ -226,12 +344,19 @@ def benchmark_cell_filtering_scenario(
         "slaf_total_time": 1000 * slaf_total_time,
         "slaf_init_time": 1000 * slaf_result["slaf_init_time"],
         "slaf_query_time": 1000 * slaf_result["slaf_query_time"],
-        "total_speedup": total_speedup,
-        "query_speedup": query_speedup,
-        "load_speedup": load_speedup,
+        "tiledb_total_time": 1000 * tiledb_total_time,
+        "tiledb_load_time": 1000 * tiledb_result["tiledb_load_time"],
+        "tiledb_query_time": 1000 * tiledb_result["tiledb_query_time"],
+        "slaf_vs_h5ad_speedup": slaf_vs_h5ad_speedup,
+        "slaf_vs_tiledb_speedup": slaf_vs_tiledb_speedup,
         "h5ad_count": h5ad_result["h5ad_count"],
         "slaf_count": slaf_result["slaf_count"],
-        "results_match": h5ad_result["h5ad_count"] == slaf_result["slaf_count"],
+        "tiledb_count": tiledb_result["tiledb_count"],
+        "results_match": (
+            h5ad_result["h5ad_count"]
+            == slaf_result["slaf_count"]
+            == tiledb_result["tiledb_count"]
+        ),
         # Memory breakdown
         "h5ad_load_memory_mb": h5ad_result["h5ad_load_memory"],
         "h5ad_query_memory_mb": h5ad_result["h5ad_query_memory"],
@@ -241,11 +366,15 @@ def benchmark_cell_filtering_scenario(
         "slaf_query_memory_mb": slaf_result["slaf_query_memory"],
         "slaf_total_memory_mb": slaf_result["slaf_init_memory"]
         + slaf_result["slaf_query_memory"],
+        "tiledb_load_memory_mb": tiledb_result["tiledb_load_memory"],
+        "tiledb_query_memory_mb": tiledb_result["tiledb_query_memory"],
+        "tiledb_total_memory_mb": tiledb_result["tiledb_load_memory"]
+        + tiledb_result["tiledb_query_memory"],
     }
 
 
 def benchmark_cell_filtering(
-    h5ad_path: str, slaf_path: str, include_memory=True, verbose=False
+    h5ad_path: str, slaf_path: str, tiledb_path: str, include_memory=True, verbose=False
 ):
     """Benchmark realistic cell filtering scenarios"""
     scenarios = demo_realistic_cell_queries()
@@ -283,12 +412,16 @@ def benchmark_cell_filtering(
 
         try:
             # Always include loading time for each scenario
-            result = benchmark_cell_filtering_scenario(h5ad_path, slaf_path, scenario)
+            result = benchmark_cell_filtering_scenario(
+                h5ad_path, slaf_path, tiledb_path, scenario
+            )
 
             results.append(result)
 
             if verbose:
-                print(f"  ✓ Completed: {result['total_speedup']:.1f}x speedup")
+                print(
+                    f"  ✓ Completed: SLAF vs h5ad: {result['slaf_vs_h5ad_speedup']:.1f}x, SLAF vs TileDB: {result['slaf_vs_tiledb_speedup']:.1f}x"
+                )
 
         except Exception as e:
             if verbose:
@@ -304,12 +437,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Benchmark cell filtering")
     parser.add_argument("h5ad_path", help="Path to h5ad file")
     parser.add_argument("slaf_path", help="Path to SLAF dataset")
+    parser.add_argument("tiledb_path", help="Path to TileDB SOMA experiment")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
 
     args = parser.parse_args()
 
     results = benchmark_cell_filtering(
-        args.h5ad_path, args.slaf_path, verbose=args.verbose
+        args.h5ad_path, args.slaf_path, args.tiledb_path, verbose=args.verbose
     )
 
     # Print results table

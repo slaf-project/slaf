@@ -682,6 +682,11 @@ def benchmark(  # type: ignore[misc, assignment, attr-defined]
         "--auto-convert",
         help="Auto-convert h5ad to SLAF if needed (for run/all actions)",
     ),
+    tiledb_path: str = typer.Option(
+        None,
+        "--tiledb-path",
+        help="Path to TileDB SOMA experiment (for three-way comparisons)",
+    ),
     verbose: bool = typer.Option(
         False, "--verbose", "-v", help="Verbose output (for run/all actions)"
     ),
@@ -757,10 +762,9 @@ def benchmark(  # type: ignore[misc, assignment, attr-defined]
                     typer.echo(
                         f"⚠️  No corresponding h5ad file found for {dataset_name}"
                     )
-                    typer.echo("   SLAF-only benchmarking may have limited comparisons")
                     h5ad_path = None
             else:
-                # Find dataset files
+                # Find dataset files with version-specific naming
                 h5ad_pattern = f"{dataset_name}*.h5ad"
                 h5ad_files = list(data_path.glob(h5ad_pattern))
 
@@ -770,7 +774,12 @@ def benchmark(  # type: ignore[misc, assignment, attr-defined]
                     continue
 
                 h5ad_path = h5ad_files[0]
-                slaf_path = data_path / f"{dataset_name}.slaf"
+
+                # Use version-specific SLAF path if available
+                if dataset_name == "synthetic_50k_processed":
+                    slaf_path = data_path / f"{dataset_name}_v21.slaf"
+                else:
+                    slaf_path = data_path / f"{dataset_name}.slaf"
 
             # Run benchmark suite for this dataset
             if h5ad_path is None:
@@ -780,6 +789,7 @@ def benchmark(  # type: ignore[misc, assignment, attr-defined]
             dataset_results = run_benchmark_suite(
                 h5ad_path=str(h5ad_path),
                 slaf_path=str(slaf_path),
+                tiledb_path=tiledb_path,
                 benchmark_types=types,
                 verbose=verbose,
                 auto_convert=auto_convert,
@@ -888,10 +898,9 @@ def benchmark(  # type: ignore[misc, assignment, attr-defined]
                     typer.echo(
                         f"⚠️  No corresponding h5ad file found for {dataset_name}"
                     )
-                    typer.echo("   SLAF-only benchmarking may have limited comparisons")
                     h5ad_path = None
             else:
-                # Find dataset files
+                # Find dataset files with version-specific naming
                 h5ad_pattern = f"{dataset_name}*.h5ad"
                 h5ad_files = list(data_path.glob(h5ad_pattern))
 
@@ -901,7 +910,12 @@ def benchmark(  # type: ignore[misc, assignment, attr-defined]
                     continue
 
                 h5ad_path = h5ad_files[0]
-                slaf_path = data_path / f"{dataset_name}.slaf"
+
+                # Use version-specific SLAF path if available
+                if dataset_name == "synthetic_50k_processed":
+                    slaf_path = data_path / f"{dataset_name}_v21.slaf"
+                else:
+                    slaf_path = data_path / f"{dataset_name}.slaf"
 
             # Run benchmark suite for this dataset
             if h5ad_path is None:
@@ -911,6 +925,7 @@ def benchmark(  # type: ignore[misc, assignment, attr-defined]
             dataset_results = run_benchmark_suite(
                 h5ad_path=str(h5ad_path),
                 slaf_path=str(slaf_path),
+                tiledb_path=tiledb_path,
                 benchmark_types=types,
                 verbose=verbose,
                 auto_convert=auto_convert,

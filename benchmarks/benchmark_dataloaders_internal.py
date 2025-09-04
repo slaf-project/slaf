@@ -702,7 +702,7 @@ class InternalDataloaderBenchmark:
             ),
             (
                 "mos",
-                True,
+                False,
                 True,
                 "Mixture of Scanners (maximum entropy)",
                 1,
