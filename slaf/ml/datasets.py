@@ -311,7 +311,7 @@ class PrefetchBatchProcessor:
         tokenizer: SLAFTokenizer | None,
         seed: int = 42,
         max_genes: int = 1024,
-        batches_per_chunk: int = 50,
+        batches_per_chunk: int = 1,  # Default to 1 for MoS (was 50 for sequential)
         n_expression_bins: int = 10,
         use_binned_expressions: bool = True,
         n_epochs: int = 1,  # Add n_epochs parameter
@@ -319,8 +319,8 @@ class PrefetchBatchProcessor:
         verbose: bool = True,  # Add verbose parameter
         log_metrics: bool = False,  # Add log_metrics parameter
         batch_size: int = 32,  # Add batch_size parameter
-        by_fragment: bool = False,  # Add by_fragment parameter for fragment-based loading
-        use_mixture_of_scanners: bool = False,  # Add MoS parameter
+        by_fragment: bool = True,  # Default to True for MoS (was False for sequential)
+        use_mixture_of_scanners: bool = True,  # Default to True for MoS (was False)
         n_scanners: int = 16,  # Add n_scanners parameter for MoS
         prefetch_batch_size: int = 4194304,  # Add prefetch_batch_size parameter for MoS
     ):
@@ -1404,9 +1404,9 @@ class SLAFIterableDataset(IterableDataset):
         n_epochs: int = 1,  # Add n_epochs parameter
         raw_mode: bool = False,  # Add raw_mode parameter
         verbose: bool = True,  # Add verbose parameter
-        batches_per_chunk: int = 50,  # Add batches_per_chunk parameter
-        by_fragment: bool = False,  # Add by_fragment parameter for fragment-based loading
-        use_mixture_of_scanners: bool = False,  # Add MoS parameter
+        batches_per_chunk: int = 1,  # Default to 1 for MoS (was 50 for sequential)
+        by_fragment: bool = True,  # Default to True for MoS (was False for sequential)
+        use_mixture_of_scanners: bool = True,  # Default to True for MoS (was False)
         n_scanners: int = 16,  # Add n_scanners parameter for MoS
         prefetch_batch_size: int = 4194304,  # Add prefetch_batch_size parameter for MoS
     ):

@@ -167,9 +167,9 @@ class SLAFDataLoader:
     Key Features:
         - Multiple tokenization strategies (GeneFormer, scGPT)
         - Multiple loading modes for different entropy requirements:
-            * Sequential loading: Fastest, lowest entropy
+            * Mixture of Scanners (MoS): Maximum entropy, best randomization (default)
             * Fragment-based loading: Higher entropy, moderate performance
-            * Mixture of Scanners (MoS): Maximum entropy, best randomization
+            * Sequential loading: Fastest, lowest entropy
         - Pre-tokenized sequences for maximum performance (tokenized mode)
         - Raw data output for external processing (raw mode)
         - Device-agnostic CPU tensor output
@@ -179,13 +179,13 @@ class SLAFDataLoader:
         - Comprehensive error handling and validation
 
     Loading Modes:
-        1. Sequential (default): Loads contiguous Lance batches for maximum throughput
+        1. Mixture of Scanners (default): Randomly samples from multiple fragment generators
+           for maximum entropy and randomization (88% of random entropy)
         2. Fragment-based: Loads complete Lance fragments for higher data entropy
-        3. Mixture of Scanners: Randomly samples from multiple fragment generators
-           for maximum entropy and randomization
+        3. Sequential: Loads contiguous Lance batches for maximum throughput
 
     Examples:
-        >>> # Basic usage with default settings (sequential loading)
+        >>> # Basic usage with default settings (MoS loading)
         >>> slaf_array = SLAFArray("path/to/data.slaf")
         >>> dataloader = SLAFDataLoader(slaf_array)
         >>> for batch in dataloader:
@@ -194,24 +194,26 @@ class SLAFDataLoader:
         ...     break
         Batch shape: torch.Size([32, 2048])
         Cell IDs: tensor([0, 1, 2, ..., 29, 30, 31])
+        >>> print(f"MoS enabled: {dataloader.use_mixture_of_scanners}")
+        MoS enabled: True
+
+        >>> # Sequential loading for maximum throughput
+        >>> dataloader = SLAFDataLoader(
+        ...     slaf_array=slaf_array,
+        ...     use_mixture_of_scanners=False,
+        ...     by_fragment=False
+        ... )
+        >>> print(f"Sequential loading: {not dataloader.use_mixture_of_scanners}")
+        Sequential loading: True
 
         >>> # Fragment-based loading for higher entropy
         >>> dataloader = SLAFDataLoader(
         ...     slaf_array=slaf_array,
+        ...     use_mixture_of_scanners=False,
         ...     by_fragment=True
         ... )
         >>> print(f"Fragment-based loading: {dataloader.by_fragment}")
         Fragment-based loading: True
-
-        >>> # Mixture of Scanners for maximum entropy
-        >>> dataloader = SLAFDataLoader(
-        ...     slaf_array=slaf_array,
-        ...     use_mixture_of_scanners=True,
-        ...     n_scanners=16,
-        ...     prefetch_batch_size=4194304
-        ... )
-        >>> print(f"MoS enabled: {dataloader.use_mixture_of_scanners}")
-        MoS enabled: True
 
         >>> # Raw mode for external processing
         >>> dataloader = SLAFDataLoader(
@@ -274,9 +276,9 @@ class SLAFDataLoader:
         n_epochs: int = 1,  # Add n_epochs parameter
         raw_mode: bool = False,  # Add raw_mode parameter
         verbose: bool = True,  # Add verbose parameter
-        batches_per_chunk: int = 50,  # Add batches_per_chunk parameter
-        by_fragment: bool = False,  # Add by_fragment parameter for fragment-based loading
-        use_mixture_of_scanners: bool = False,  # Add MoS parameter
+        batches_per_chunk: int = 1,  # Default to 1 for MoS (was 50 for sequential)
+        by_fragment: bool = True,  # Default to True for MoS (was False for sequential)
+        use_mixture_of_scanners: bool = True,  # Default to True for MoS (was False)
         n_scanners: int = 16,  # Add n_scanners parameter for MoS
         prefetch_batch_size: int = 4194304,  # Add prefetch_batch_size parameter for MoS
     ):
@@ -312,20 +314,18 @@ class SLAFDataLoader:
                      instead of pre-tokenized sequences. This bypasses tokenization
                      and windowing for maximum flexibility. Default: False.
 
-            # Loading Strategy Configuration
+            # Loading Strategy Configuration (MoS is now default)
             batches_per_chunk: Number of Lance batches to load per chunk for sequential loading.
                              Higher values use more memory but may improve throughput.
-                             Range: 10-200, default: 50. Only used when by_fragment=False.
+                             Range: 1-200, default: 1 (optimized for MoS). Only used when by_fragment=False.
             by_fragment: If True, use fragment-based loading instead of batch-based loading.
                         Fragment-based loading provides higher entropy but may be slightly slower.
                         Automatically enabled when use_mixture_of_scanners=True.
-                        Default: False.
-
-            # Mixture of Scanners (MoS) Configuration
+                        Default: True (enabled for MoS).
             use_mixture_of_scanners: If True, use mixture of scanners (MoS) approach for higher
                                    entropy by randomly sampling from multiple fragment generators.
-                                   This provides the best randomization but uses more memory.
-                                   Automatically enables by_fragment=True. Default: False.
+                                   This provides the best randomization and is now the default
+                                   for foundation model training. Default: True.
             n_scanners: Number of fragment generators to sample from simultaneously when using MoS.
                        Higher values provide better entropy but use more memory.
                        Range: 1-100, default: 16. Only used when use_mixture_of_scanners=True.
@@ -346,35 +346,36 @@ class SLAFDataLoader:
             ImportError: If required dependencies are not available.
 
         Loading Strategy Selection Guide:
-            - For maximum throughput: Use default settings (sequential loading)
-            - For higher entropy: Set by_fragment=True
-            - For maximum entropy: Set use_mixture_of_scanners=True
+            - For foundation model training: Use default settings (MoS provides 88% random entropy)
+            - For maximum throughput: Set use_mixture_of_scanners=False, by_fragment=False
             - For external processing: Set raw_mode=True
 
         Examples:
-            >>> # Basic initialization (sequential loading)
+            >>> # Basic initialization (MoS is now default)
             >>> slaf_array = SLAFArray("path/to/data.slaf")
             >>> dataloader = SLAFDataLoader(slaf_array)
             >>> print(f"Batch size: {dataloader.batch_size}")
             Batch size: 32
+            >>> print(f"MoS enabled: {dataloader.use_mixture_of_scanners}")
+            MoS enabled: True
+
+            >>> # Sequential loading for maximum throughput
+            >>> dataloader = SLAFDataLoader(
+            ...     slaf_array=slaf_array,
+            ...     use_mixture_of_scanners=False,
+            ...     by_fragment=False
+            ... )
+            >>> print(f"Sequential loading: {not dataloader.use_mixture_of_scanners}")
+            Sequential loading: True
 
             >>> # Fragment-based loading for higher entropy
             >>> dataloader = SLAFDataLoader(
             ...     slaf_array=slaf_array,
+            ...     use_mixture_of_scanners=False,
             ...     by_fragment=True
             ... )
             >>> print(f"Fragment-based loading: {dataloader.by_fragment}")
             Fragment-based loading: True
-
-            >>> # Mixture of scanners for maximum entropy
-            >>> dataloader = SLAFDataLoader(
-            ...     slaf_array=slaf_array,
-            ...     use_mixture_of_scanners=True,
-            ...     n_scanners=16,
-            ...     prefetch_batch_size=4194304
-            ... )
-            >>> print(f"MoS enabled: {dataloader.use_mixture_of_scanners}")
-            MoS enabled: True
 
             >>> # Raw mode for external processing
             >>> dataloader = SLAFDataLoader(
