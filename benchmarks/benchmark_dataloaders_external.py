@@ -711,7 +711,7 @@ class ExternalDataloaderBenchmark:
         """Benchmark TileDB DataLoader in Tier 1 (raw data loading)."""
 
         try:
-            from tiledb_dataloaders import TileDBDataLoader
+            from slaf.ml import TileDBDataLoader
         except ImportError:
             self.console.print(
                 "[yellow]Warning: TileDB dataloader not available, skipping TileDB benchmark[/yellow]"
