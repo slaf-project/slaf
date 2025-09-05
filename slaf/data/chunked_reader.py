@@ -3,6 +3,7 @@ import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import h5py
 import numpy as np
@@ -873,10 +874,10 @@ class ChunkedTileDBReader(BaseChunkedReader):
         super().__init__(tiledb_path)
         self.collection_name = collection_name
         self.value_type = value_type
-        self._experiment = None
-        self._X = None
-        self._obs_df = None
-        self._var_df = None
+        self._experiment: Any = None
+        self._X: Any = None
+        self._obs_df: pd.DataFrame | None = None
+        self._var_df: pd.DataFrame | None = None
 
     def _open_file(self) -> None:
         """Open TileDB SOMA experiment."""
