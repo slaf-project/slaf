@@ -8,17 +8,20 @@ SLAF provides **dramatic performance improvements** over h5ad across all benchma
 
 ### **Key Performance Summary**
 
-| Category                      | SLAF vs h5ad Speedup | Memory Efficiency      | Dataset                 |
-| ----------------------------- | -------------------- | ---------------------- | ----------------------- |
-| **Bioinformatics Operations** | **68.8x faster**     | **105.5x less memory** | synthetic_50k_processed |
-| **ML Data Loading**           | **56x faster**       | **2.3x less memory**   | Tahoe-100M              |
-| **Expression Queries**        | **6.8x faster**      | **145x less memory**   | synthetic_50k_processed |
+| Category               | SLAF vs h5ad Speedup | Memory Efficiency      | Dataset                 |
+| ---------------------- | -------------------- | ---------------------- | ----------------------- |
+| **Cell Filtering**     | **68.8x faster**     | **105.5x less memory** | synthetic_50k_processed |
+| **Gene Filtering**     | **19.6x faster**     | **2.1x less memory**   | synthetic_50k_processed |
+| **Expression Queries** | **6.8x faster**      | **145x less memory**   | synthetic_50k_processed |
+| **ML Data Loading**    | **56x faster**       | **2.3x less memory**   | Tahoe-100M              |
 
 !!! success "Performance Leadership"
 
     SLAF consistently outperforms h5ad by **6.8x-68.8x** across all operation types while using **2.3x-145x less memory**.
 
 ## **Bioinformatics Benchmarks**
+
+**Input Dataset**: synthetic_50k_processed (49,955 cells × 25,000 genes, 722MB h5ad file)
 
 ### **Cell Filtering Performance**
 
@@ -87,6 +90,8 @@ Expression queries retrieve specific expression data for cells or genes, support
 - **Memory Usage**: SLAF uses 145x less memory than h5ad
 
 ## **Machine Learning Benchmarks**
+
+**Input Dataset**: Tahoe-100M (5,481,420 cells × 62,710 genes, ~8B non-zero values)
 
 ### **Raw Data Loading Performance**
 

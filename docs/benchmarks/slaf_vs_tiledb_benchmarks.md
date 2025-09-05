@@ -8,15 +8,42 @@ Both SLAF and TileDB represent modern approaches to single-cell data storage, us
 
 ### **Key Performance Summary**
 
-| Category                      | SLAF vs TileDB Speedup | Dataset                 |
-| ----------------------------- | ---------------------- | ----------------------- |
-| **Bioinformatics Operations** | **5.6x faster**        | synthetic_50k_processed |
-| **ML Data Loading**           | **20.7x faster**       | Tahoe-100M              |
-| **Expression Queries**        | **TileDB often wins**  | synthetic_50k_processed |
+| Category                   | SLAF vs TileDB Speedup | Dataset                 |
+| -------------------------- | ---------------------- | ----------------------- |
+| **Conversion Performance** | **9.9x faster**        | synthetic_50k_processed |
+| **Cell Filtering**         | **5.6x faster**        | synthetic_50k_processed |
+| **Gene Filtering**         | **8.6x faster**        | synthetic_50k_processed |
+| **Cell-centric Queries**   | **1.1x-1.4x faster**   | synthetic_50k_processed |
+| **Gene-centric Queries**   | **2.5x-3.3x slower**   | synthetic_50k_processed |
+| **Submatrix Queries**      | **2.5x-5.0x slower**   | synthetic_50k_processed |
+| **ML Data Loading**        | **20.7x faster**       | Tahoe-100M              |
 
 !!! success "Modern Format Advantage"
 
     Both SLAF and TileDB significantly outperform traditional h5ad-based approaches, demonstrating the benefits of modern cloud-native storage. SLAF provides additional performance optimizations for streaming and data access.
+
+## **Conversion Performance**
+
+Conversion from h5ad to modern formats demonstrates SLAF's efficiency in data ingestion workflows.
+
+**Input Dataset**: synthetic_50k_processed (49,955 cells × 25,000 genes, ~722MB h5ad file)
+
+| Metric              | SLAF        | TileDB SOMA | SLAF vs TileDB Improvement     |
+| ------------------- | ----------- | ----------- | ------------------------------ |
+| **Conversion Time** | **1.87s**   | 18.44s      | **9.9x faster**                |
+| **Output Size**     | **349.2MB** | 561.1MB     | **38% smaller**                |
+| **Peak Memory**     | **826.6MB** | 4,399.6MB   | **5.3x more memory efficient** |
+
+**Key Advantages:**
+
+- **9.9x faster conversion** from h5ad to SLAF format
+- **38% smaller output size** compared to TileDB SOMA
+- **5.3x more memory efficient** - SLAF uses only 827MB vs TileDB's 4.4GB peak memory
+- **Optimized chunked processing** with efficient memory management
+
+!!! success "Fast Migration Path"
+
+    SLAF's superior conversion performance enables rapid migration of existing h5ad datasets, with conversion times under 2 seconds for 50k cell datasets and significantly smaller output files.
 
 ## **Bioinformatics Benchmarks**
 
@@ -37,9 +64,7 @@ Cell filtering operations demonstrate the efficiency of modern columnar storage 
 | S9       | 12.9              | 1.8             | **7.1x** | Cells with 800-2000 total counts            |
 | S10      | 12.7              | 1.6             | **8.1x** | Cells with 200-1500 genes                   |
 
-**Average Performance:**
-
-- **SLAF vs TileDB**: **5.6x faster**
+**Average Performance: 5.6x faster**
 
 ### **Gene Filtering Performance**
 
@@ -57,9 +82,7 @@ Gene filtering operations show consistent performance advantages for SLAF's opti
 | S8       | 12.0              | 1.7             | **6.8x**  | Genes with 100-10000 total counts           |
 | S9       | 14.1              | 1.7             | **8.2x**  | Genes in 5-1000 cells                       |
 
-**Average Performance:**
-
-- **SLAF vs TileDB**: **8.6x faster**
+**Average Performance: 8.6x faster**
 
 ### **Expression Queries Performance**
 
@@ -81,7 +104,8 @@ Expression queries demonstrate the efficiency of optimized sparse matrix operati
 
 **Average Performance:**
 
-- **SLAF vs TileDB**: **Mixed performance** - SLAF wins cell-centric (1.1x-1.4x), TileDB wins gene-centric (2.5x-3.3x) and submatrix (2.5x-5.0x)
+- SLAF wins cell-centric (1.1x-1.4x),
+- TileDB wins gene-centric (2.5x-3.3x) and submatrix (2.5x-5.0x)
 
 ## **Machine Learning Benchmarks**
 
@@ -94,9 +118,7 @@ Raw data loading performance demonstrates the advantages of SLAF's optimized str
 | **SLAF**          | **22,658**             | Optimized streaming   |
 | TileDB DataLoader | 1,097                  | Custom PyTorch loader |
 
-**Performance Comparison:**
-
-- **SLAF vs TileDB DataLoader**: **20.7x faster**
+**Performance Comparison: 20.7x faster**
 
 ### **GPU-Ready Output Performance**
 
@@ -166,17 +188,15 @@ SLAF provides pre-tokenized sequences ready for GPU training, while TileDB DataL
 ### **Choose TileDB for:**
 
 - **Existing TileDB infrastructure** where migration costs are high
-- **Specific TileDB features** not available in SLAF
-- **Custom data access patterns** requiring TileDB's flexibility
 - **Multi-modal data** where TileDB's broader ecosystem is beneficial
 
 ## **Conclusion**
 
-SLAF provides **consistent performance advantages** over TileDB across all benchmark categories:
+SLAF provides **strong performance advantages** over TileDB across most benchmark categories:
 
-- **Bioinformatics operations**: 5.6x faster with 1.5x memory efficiency
-- **Machine learning data loading**: 20.7x faster with 2.3x memory efficiency
-- **Expression queries**: 1.8x faster with 2.1x memory efficiency
+- **Metadata filtering**: 5.6x-8.6x faster (cell and gene filtering)
+- **Machine learning data loading**: 20.7x faster
+- **Expression queries**: Mixed performance (SLAF wins cell-centric, TileDB wins gene-centric)
 
 While both systems represent modern approaches to single-cell data storage, SLAF's optimized streaming architecture, enhanced ML integration, and simplified API provide significant advantages for most use cases. The benchmarks demonstrate that SLAF's performance optimizations and developer-friendly design make it the preferred choice for high-throughput bioinformatics and machine learning workflows.
 

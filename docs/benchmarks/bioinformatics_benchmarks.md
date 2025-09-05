@@ -14,6 +14,7 @@ These benchmarks demonstrate SLAF's performance advantages in three key areas:
 
 - **Cells**: 49,955 cells
 - **Genes**: 25,000 genes
+- **Input File Size**: ~722MB h5ad file
 
 ### **Hardware Configuration**
 
