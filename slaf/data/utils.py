@@ -13,7 +13,7 @@ def detect_format(input_path: str) -> str:
     Returns:
     --------
     str
-        Detected format: "h5ad", "10x_mtx", or "10x_h5"
+        Detected format: "h5ad", "10x_mtx", "10x_h5", or "tiledb"
 
     Raises:
     -------
@@ -26,6 +26,15 @@ def detect_format(input_path: str) -> str:
         return "h5ad"
     elif path.suffix == ".h5":
         return "10x_h5"
+    elif path.is_dir() and (
+        # Check for TileDB SOMA format indicators
+        any((path / f).suffix == ".tdb" for f in path.iterdir() if f.is_file())
+        or (path / "ms").exists()
+        and (path / "obs").exists()
+    ):
+        # Check for TileDB SOMA format
+        # TileDB SOMA experiments have .tdb files and ms/obs directories
+        return "tiledb"
     elif path.is_dir():
         # Check for 10x MTX files (both old and new formats)
         if (path / "matrix.mtx").exists() or (path / "matrix.mtx.gz").exists():

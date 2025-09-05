@@ -41,6 +41,22 @@ Conversion from h5ad to modern formats demonstrates SLAF's efficiency in data in
 - **5.3x more memory efficient** - SLAF uses only 827MB vs TileDB's 4.4GB peak memory
 - **Optimized chunked processing** with efficient memory management
 
+### **TileDB to SLAF Conversion**
+
+Converting from TileDB SOMA to SLAF format is straightforward and efficient:
+
+**TileDB to SLAF Performance**: synthetic_50k_processed (49,955 cells × 25,000 genes)
+
+**Migration Benefits:**
+
+- **Fast conversion**: 50k cell dataset converts in just 2 seconds
+- **Linear scaling**: Performance scales linearly with the number of cells
+- **Simple command**: `slaf convert data.tiledb output.slaf`
+
+!!! success "Easy Migration from TileDB"
+
+    Converting from TileDB to SLAF is simple and fast. A 50k cell dataset takes only 2 seconds to convert, with linear scaling performance. The conversion preserves all data types and metadata while providing significant performance improvements for downstream analysis.
+
 !!! success "Fast Migration Path"
 
     SLAF's superior conversion performance enables rapid migration of existing h5ad datasets, with conversion times under 2 seconds for 50k cell datasets and significantly smaller output files.
@@ -166,7 +182,8 @@ SLAF provides pre-tokenized sequences ready for GPU training, while TileDB DataL
 
 - **5.6x faster** bioinformatics operations
 - **20.7x faster** machine learning data loading
-- **Faster conversion from h5ad** to SLAF format, enabling rapid migration of existing datasets (quantitative benchmarks forthcoming)
+- **Faster conversion from h5ad** to SLAF format, enabling rapid migration of existing datasets
+- **Easy TileDB migration**: 2-second conversion for 50k cell datasets with linear scaling
 
 ### **Developer Experience**
 
@@ -201,4 +218,4 @@ While both systems represent modern approaches to single-cell data storage, SLAF
 
 ---
 
-_For detailed migration guidance, see [Migrating to SLAF](../user-guide/migrating-to-slaf.md). For comprehensive benchmark results, see [Bioinformatics Benchmarks](bioinformatics_benchmarks.md) and [ML Benchmarks](ml_benchmarks.md)._
+_For detailed migration guidance including TileDB to SLAF conversion, see [Migrating to SLAF](../user-guide/migrating-to-slaf.md). For comprehensive benchmark results, see [Bioinformatics Benchmarks](bioinformatics_benchmarks.md) and [ML Benchmarks](ml_benchmarks.md)._

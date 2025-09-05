@@ -198,7 +198,7 @@ def convert(
         None,
         "--format",
         "-f",
-        help="Input format: h5ad, 10x_mtx, 10x_h5 (auto-detected if not specified)",
+        help="Input format: h5ad, 10x_mtx, 10x_h5, tiledb (auto-detected if not specified)",
     ),
     chunked: bool = typer.Option(
         True,  # Changed from False to True - make chunked the default
@@ -233,6 +233,11 @@ def convert(
         False,
         "--compact/--no-compact",
         help="Compact dataset after writing for optimal storage (default: False)",
+    ),
+    tiledb_collection_name: str = typer.Option(
+        "RNA",
+        "--tiledb-collection",
+        help="Name of the measurement collection for TileDB format (default: RNA)",
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ):
@@ -269,6 +274,7 @@ def convert(
             use_optimized_dtypes=use_optimized_dtypes,
             enable_v2_manifest=enable_v2_manifest,
             compact_after_write=compact_after_write,
+            tiledb_collection_name=tiledb_collection_name,
         )
 
         # Use the new converter with auto-detection
@@ -280,6 +286,7 @@ def convert(
                 "10x_mtx": "10x_mtx",
                 "10x_h5": "10x_h5",
                 "h5ad": "h5ad",
+                "tiledb": "tiledb",
             }
             input_format = format_mapping.get(format, format)
             converter.convert(input_path, output_path, input_format=input_format)
