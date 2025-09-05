@@ -208,6 +208,9 @@ class TileDBBatchProcessor:
 
                 # Convert Arrow table to Polars DataFrame
                 df = pl.from_arrow(arrow_data)
+                assert isinstance(df, pl.DataFrame), (
+                    "Expected DataFrame from Arrow table"
+                )
 
                 # Rename SOMA columns to expected names
                 df = df.rename(
@@ -255,7 +258,9 @@ class TileDBBatchProcessor:
 
             # Count total cells across all chunks
             total_cells_in_chunks = sum(
-                len(chunk["cell_integer_id"].unique()) for chunk in shuffled_chunks
+                len(chunk.get_column("cell_integer_id").unique())
+                for chunk in shuffled_chunks
+                if isinstance(chunk, pl.DataFrame)
             )
 
             # Record cells processed

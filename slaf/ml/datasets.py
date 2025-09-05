@@ -709,9 +709,12 @@ class PrefetchBatchProcessor:
                                     )
 
                         # Update last cell for this generator
-                        self.generator_last_cells[generator_idx] = generator_combined[
-                            "cell_integer_id"
-                        ].item(-1)  # type: ignore
+                        if isinstance(generator_combined, pl.DataFrame):
+                            self.generator_last_cells[generator_idx] = (
+                                generator_combined.get_column("cell_integer_id").item(
+                                    -1
+                                )
+                            )  # type: ignore
 
                         # Add to batch collection
                         batch_dfs.append(generator_combined)

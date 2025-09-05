@@ -978,6 +978,7 @@ class ChunkedTileDBReader(BaseChunkedReader):
 
             # Convert Arrow table to Polars DataFrame for processing
             df = pl.from_arrow(arrow_data)
+            assert isinstance(df, pl.DataFrame), "Expected DataFrame from Arrow table"
 
             # Rename SOMA columns to expected names
             df = df.rename(
@@ -1031,6 +1032,7 @@ class ChunkedTileDBReader(BaseChunkedReader):
 
         # Convert Arrow table to Polars DataFrame for processing
         df = pl.from_arrow(arrow_data)
+        assert isinstance(df, pl.DataFrame), "Expected DataFrame from Arrow table"
 
         # Rename SOMA columns to expected names
         df = df.rename(
