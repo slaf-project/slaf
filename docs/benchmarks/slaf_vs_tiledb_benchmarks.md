@@ -183,7 +183,6 @@ SLAF provides pre-tokenized sequences ready for GPU training, while TileDB DataL
 - **Foundation model training** requiring GPU-ready tokenized sequences
 - **Streaming applications** where continuous data flow is critical
 - **Memory-constrained environments** where efficiency is important
-- **Simplified development** with reduced configuration requirements
 
 ### **Choose TileDB for:**
 
