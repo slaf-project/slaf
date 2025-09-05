@@ -6,12 +6,14 @@ This script measures the entropy (randomness) of different SLAF loading strategi
 by analyzing cell ID distributions across training batches.
 """
 
+import gc
 import random
 import time
 from dataclasses import dataclass
 from itertools import combinations
 
 import numpy as np
+from rich.console import Console
 from tqdm import tqdm
 
 from slaf.core.slaf import SLAFArray
@@ -31,6 +33,21 @@ class EntropyMetrics:
     n_batches: int
     total_cells: int
     measurement_time: float
+
+
+@dataclass
+class EntropyStrategyResult:
+    """Results for different entropy strategies with both entropy and throughput metrics."""
+
+    strategy: str  # "sequential", "fragment", or "mos"
+    throughput_cells_per_sec: float
+    total_cells: int
+    total_batches: int
+    measurement_time: float
+    description: str  # Human-readable description of the strategy
+    # Entropy metrics
+    within_batch_l1: float
+    across_batch_l1: float
 
 
 class EntropyCalculator:
@@ -188,10 +205,11 @@ class EntropyCalculator:
 
 
 class EntropyBenchmark:
-    """Benchmark entropy for different SLAF loading strategies."""
+    """Benchmark entropy and throughput for different SLAF loading strategies."""
 
     def __init__(self, slaf_array: SLAFArray):
         self.slaf_array = slaf_array
+        self.console = Console()
         print("Dataset loaded successfully")
         # Get max number of cells from metadata
         self.max_num_cells = self.slaf_array.cells.count_rows()
@@ -224,6 +242,258 @@ class EntropyBenchmark:
                 1,  # batches_per_chunk
             ),
         ]
+
+    def create_progress_bar(self, desc: str, mode: str = "training") -> tqdm:
+        """Create a beautiful progress bar for SLAF benchmarks."""
+
+        if mode == "prefetch":
+            # Prefetch progress bar with detailed timing breakdown
+            bar_format = (
+                "{l_bar}{bar}| {n_fmt}/{total_fmt} batches "
+                "[{elapsed}<{remaining}, {rate_fmt}] "
+                "{postfix}"
+            )
+        else:
+            # Training progress bar
+            bar_format = (
+                "{l_bar}{bar}| {n_fmt} batches "
+                "[{elapsed}<{remaining}, {rate_fmt}] "
+                "{postfix}"
+            )
+
+        return tqdm(
+            desc=desc, unit="batch", bar_format=bar_format, ncols=100, leave=False
+        )
+
+    def format_training_postfix(self, batch_info: dict) -> str:
+        """Format training batch information for progress bar postfix."""
+
+        # Extract timing information
+        tensor_time = batch_info.get("tensor_time", 0)
+        total_time = batch_info.get("total_time", 0)
+        throughput = batch_info.get("throughput", 0)
+        mode = batch_info.get("mode", "tokenized")
+
+        # Format the postfix string
+        postfix = f"{total_time:.1f}ms/batch, {throughput:.0f} cells/sec"
+
+        # Add mode-specific information
+        if mode == "raw":
+            postfix += " | Raw data"
+        else:
+            postfix += " | Pre-tokenized data"
+
+        # Add tensor creation time if available
+        if tensor_time > 0:
+            postfix += f" | Tensor: {tensor_time:.1f}ms"
+
+        return postfix
+
+    def run_entropy_only_measurement(
+        self,
+        strategy_name: str,
+        by_fragment: bool,
+        use_mos: bool,
+        entropy_batches: int,
+    ) -> tuple[float, float]:
+        """Run entropy measurement only for a specific strategy."""
+        print(f"  - Measuring entropy for {strategy_name} strategy...")
+
+        # Create fresh dataloader for entropy measurement
+        dataloader = SLAFDataLoader(
+            slaf_array=self.slaf_array,
+            batch_size=32,
+            n_epochs=1000,
+            raw_mode=True,
+            verbose=False,
+            by_fragment=by_fragment,
+            use_mixture_of_scanners=use_mos,
+            n_scanners=16,
+            prefetch_batch_size=4194304 if use_mos else 8192,  # 4M rows for MoS
+            batches_per_chunk=(
+                50 if not use_mos else 1
+            ),  # 50 for sequential/fragment, 1 for MoS
+        )
+
+        # Collect cell IDs from batches for entropy measurement
+        all_batch_ids = []
+        start_time = time.time()
+
+        for i, batch in enumerate(tqdm(dataloader, desc="Collecting entropy data")):
+            if i >= entropy_batches:
+                break
+
+            cell_ids = batch["cell_ids"]
+            all_batch_ids.append(cell_ids)
+
+        entropy_measurement_time = time.time() - start_time
+        print(
+            f"    Collected {len(all_batch_ids)} batches in {entropy_measurement_time:.2f}s"
+        )
+
+        # Compute entropy metrics
+        print("    Computing entropy metrics...")
+
+        # Compute within-batch entropy for a sample of batches
+        sample_batches = random.sample(all_batch_ids, min(100, len(all_batch_ids)))
+        within_batch_metrics = {"l1_distance": []}
+
+        for batch_ids in tqdm(sample_batches, desc="Computing within-batch entropy"):
+            metrics = self.entropy_calc.compute_within_batch_entropy(batch_ids)
+            for key in within_batch_metrics:
+                within_batch_metrics[key].append(metrics[key])
+
+        # Compute across-batch entropy
+        across_batch_metrics = self.entropy_calc.compute_across_batch_entropy(
+            all_batch_ids
+        )
+
+        # Clean up
+        del dataloader
+        gc.collect()
+
+        return (
+            np.mean(within_batch_metrics["l1_distance"]),
+            across_batch_metrics["l1_distance"],
+        )
+
+    def run_throughput_only_measurement(
+        self,
+        strategy_name: str,
+        by_fragment: bool,
+        use_mos: bool,
+        throughput_duration: float = 30.0,
+    ) -> tuple[float, int, int, float]:
+        """Run throughput measurement only for a specific strategy."""
+        print(f"  - Measuring throughput for {strategy_name} strategy...")
+
+        # Create fresh dataloader for throughput measurement
+        dataloader = SLAFDataLoader(
+            slaf_array=self.slaf_array,
+            batch_size=32,
+            n_epochs=1000,
+            raw_mode=True,
+            verbose=False,
+            by_fragment=by_fragment,
+            use_mixture_of_scanners=use_mos,
+            n_scanners=16,
+            prefetch_batch_size=4194304 if use_mos else 8192,  # 4M rows for MoS
+            batches_per_chunk=(
+                50 if not use_mos else 1
+            ),  # 50 for sequential/fragment, 1 for MoS
+        )
+
+        # Warm up
+        warmup_batches = 3
+        for i, _batch in enumerate(dataloader):
+            if i >= warmup_batches:
+                break
+
+        # Throughput measurement phase
+        throughput_start_time = time.time()
+        throughput_total_cells = 0
+        throughput_batch_count = 0
+
+        with self.create_progress_bar(
+            f"Throughput: {strategy_name} strategy", "training"
+        ) as pbar:
+            for batch in dataloader:
+                throughput_batch_count += 1
+
+                # Count cells from the batch
+                if "cell_ids" in batch:
+                    batch_size = len(batch["cell_ids"])
+                else:
+                    batch_size = 32  # Fallback
+
+                throughput_total_cells += batch_size
+
+                # Calculate current throughput
+                elapsed = time.time() - throughput_start_time
+                current_throughput = (
+                    throughput_total_cells / elapsed if elapsed > 0 else 0
+                )
+
+                # Update progress bar
+                batch_info = {
+                    "total_time": 0,  # Not tracking individual batch times
+                    "throughput": current_throughput,
+                    "cells": batch_size,
+                }
+
+                postfix = self.format_training_postfix(batch_info)
+                pbar.set_postfix_str(postfix)
+                pbar.update(1)
+
+                # Stop after measurement duration
+                if elapsed >= throughput_duration:
+                    break
+
+        throughput_elapsed_time = time.time() - throughput_start_time
+
+        # Clean up
+        del dataloader
+        gc.collect()
+
+        # Calculate throughput metrics
+        throughput_cells_per_sec = (
+            throughput_total_cells / throughput_elapsed_time
+            if throughput_elapsed_time > 0
+            else 0
+        )
+
+        print(
+            f"    Result: {throughput_cells_per_sec:.0f} cells/sec, {throughput_total_cells:,} cells, {throughput_batch_count} batches"
+        )
+
+        return (
+            throughput_cells_per_sec,
+            throughput_total_cells,
+            throughput_batch_count,
+            throughput_elapsed_time,
+        )
+
+    def run_combined_measurement(
+        self,
+        strategy_name: str,
+        by_fragment: bool,
+        use_mos: bool,
+        entropy_batches: int,
+        throughput_duration: float = 30.0,
+    ) -> EntropyStrategyResult:
+        """Run both entropy and throughput measurement for a specific strategy using separate dataloaders."""
+        print(f"\n🔍 Measuring entropy and throughput for {strategy_name} strategy...")
+
+        # Run entropy measurement first (with its own dataloader)
+        within_batch_l1, across_batch_l1 = self.run_entropy_only_measurement(
+            strategy_name, by_fragment, use_mos, entropy_batches
+        )
+
+        # Run throughput measurement separately (with its own fresh dataloader)
+        throughput_cells_per_sec, total_cells, total_batches, measurement_time = (
+            self.run_throughput_only_measurement(
+                strategy_name, by_fragment, use_mos, throughput_duration
+            )
+        )
+
+        # Get strategy description
+        description = next(
+            (desc for name, _, _, desc, _ in self.strategies if name == strategy_name),
+            f"{strategy_name} strategy",
+        )
+
+        result = EntropyStrategyResult(
+            strategy=strategy_name,
+            throughput_cells_per_sec=throughput_cells_per_sec,
+            total_cells=total_cells,
+            total_batches=total_batches,
+            measurement_time=measurement_time,
+            description=description,
+            within_batch_l1=within_batch_l1,
+            across_batch_l1=across_batch_l1,
+        )
+
+        return result
 
     def run_entropy_measurement(
         self, strategy_name: str, by_fragment: bool, use_mos: bool, n_batches: int
@@ -364,6 +634,162 @@ class EntropyBenchmark:
 
         return results
 
+    def benchmark_all_strategies_combined(
+        self, entropy_batches: int = 10000, throughput_duration: float = 30.0
+    ) -> list[EntropyStrategyResult]:
+        """Run combined entropy and throughput measurement for all strategies."""
+        results = []
+
+        print(
+            f"🚀 Testing {len(self.strategies)} entropy strategies with {entropy_batches:,} batches for entropy and {throughput_duration}s for throughput..."
+        )
+
+        for (
+            strategy_name,
+            by_fragment,
+            use_mos,
+            _description,
+            _batches_per_chunk,
+        ) in tqdm(self.strategies, desc="Testing strategies", unit="strategy"):
+            try:
+                result = self.run_combined_measurement(
+                    strategy_name,
+                    by_fragment,
+                    use_mos,
+                    entropy_batches,
+                    throughput_duration,
+                )
+                results.append(result)
+            except Exception as e:
+                print(f"Error measuring {strategy_name}: {e}")
+                continue
+
+        # Generate random baseline for entropy comparison
+        print("\n🎲 Generating random baseline for entropy comparison...")
+
+        # Generate all random cell IDs at once (much faster than loop)
+        total_cells_needed = entropy_batches * 32
+        all_random_cell_ids = np.random.choice(
+            self.max_num_cells, size=total_cells_needed, replace=False
+        )
+
+        # Chunk into batches of 32
+        random_batch_ids = []
+        for i in range(0, total_cells_needed, 32):
+            batch_ids = all_random_cell_ids[i : i + 32].tolist()
+            random_batch_ids.append(batch_ids)
+
+        print(
+            f"  - Generated {len(random_batch_ids)} random batches with {total_cells_needed} total cells"
+        )
+
+        # Compute random baseline using existing entropy calculation methods
+        print("  - Computing random baseline entropy metrics...")
+
+        # Compute within-batch entropy for random batches
+        random_within_batch_metrics = self.entropy_calc.compute_within_batch_entropy(
+            random_batch_ids
+        )
+
+        # Compute across-batch entropy for random batches
+        random_across_batch_metrics = self.entropy_calc.compute_across_batch_entropy(
+            random_batch_ids
+        )
+
+        # Create a random baseline result (no throughput measurement)
+        random_result = EntropyStrategyResult(
+            strategy="random",
+            throughput_cells_per_sec=0.0,  # No throughput measurement for random baseline
+            total_cells=len(random_batch_ids) * 32,
+            total_batches=len(random_batch_ids),
+            measurement_time=0.0,  # Not measuring time for baseline
+            description="Random baseline for entropy comparison",
+            within_batch_l1=random_within_batch_metrics["l1_distance"],
+            across_batch_l1=random_across_batch_metrics["l1_distance"],
+        )
+        results.append(random_result)
+
+        return results
+
+    def print_combined_results(self, results: list[EntropyStrategyResult]):
+        """Print combined entropy and throughput results with normalized scores."""
+        print("\n" + "=" * 100)
+        print("COMBINED ENTROPY AND THROUGHPUT MEASUREMENT RESULTS")
+        print("=" * 100)
+
+        # Separate real strategies from random baseline
+        strategy_results = [r for r in results if r.strategy != "random"]
+        random_result = next((r for r in results if r.strategy == "random"), None)
+
+        # Print throughput results
+        print("\nThroughput Performance:")
+        print("-" * 100)
+        print(
+            f"{'Strategy':<15} {'Throughput (cells/sec)':<20} {'Total Cells':<15} {'Total Batches':<15}"
+        )
+        print("-" * 100)
+
+        for result in strategy_results:
+            print(
+                f"{result.strategy:<15} {result.throughput_cells_per_sec:<20.0f} "
+                f"{result.total_cells:<15,} {result.total_batches:<15}"
+            )
+
+        # Print raw entropy metrics
+        print("\nRaw Entropy Metrics:")
+        print("-" * 100)
+        print(f"{'Strategy':<15} {'Within-Batch L1':<15} {'Across-Batch L1':<15}")
+        print("-" * 100)
+
+        for result in results:
+            print(
+                f"{result.strategy:<15} {result.within_batch_l1:<15.1f} "
+                f"{result.across_batch_l1:<15.1f}"
+            )
+
+        if random_result is None:
+            print("\n⚠️  No random baseline found, skipping normalized scores")
+            return
+
+        # Print normalized scores
+        print("\nNormalized Entropy Scores [0=Sequential, 1=Random]:")
+        print("-" * 100)
+        print(f"{'Strategy':<15} {'Within-Batch L1':<15} {'Across-Batch L1':<15}")
+        print("-" * 100)
+
+        for result in strategy_results:
+            # Normalize scores using sequential and random baselines
+            sequential_result = next(
+                r for r in strategy_results if r.strategy == "sequential"
+            )
+
+            # Use existing normalize_score function for within-batch
+            l1_score = self.entropy_calc.normalize_score(
+                result.within_batch_l1,
+                sequential_result.within_batch_l1,
+                random_result.within_batch_l1,
+            )
+
+            # Use existing normalize_score function for across-batch
+            batch_l1_score = self.entropy_calc.normalize_score(
+                result.across_batch_l1,
+                sequential_result.across_batch_l1,
+                random_result.across_batch_l1,
+            )
+
+            print(f"{result.strategy:<15} {l1_score:<15.3f} {batch_l1_score:<15.3f}")
+
+        print("\n" + "=" * 100)
+        print("INTERPRETATION GUIDE:")
+        print("• Within-Batch: How random are the cells within each batch")
+        print("• Across-Batch: How much batch composition changes between batches")
+        print("• L1 Distance: Mean absolute difference between cell ID pairs")
+        print("• Sequential: Contiguous cell IDs from Lance batches")
+        print("• Fragment: Complete Lance fragments for higher entropy")
+        print("• MoS: Mixture of Scanners for maximum entropy")
+        print("• Random: Pseudo-random baseline for comparison")
+        print("• Scores closer to 0 = more sequential, closer to 1 = more random")
+
     def print_results(self, results: list[EntropyMetrics]):
         """Print entropy measurement results with normalized scores."""
         print("\n" + "=" * 80)
@@ -436,7 +862,7 @@ class EntropyBenchmark:
 
 
 def main():
-    """Run entropy measurement for different loading strategies."""
+    """Run combined entropy and throughput measurement for different loading strategies."""
 
     # Load SLAF array
     print("Loading SLAF array from ../slaf-datasets/plate1_Tahoe100M_v21.slaf...")
@@ -446,13 +872,15 @@ def main():
     # Create entropy benchmark
     benchmark = EntropyBenchmark(slaf_array)
 
-    # Run entropy measurement for all strategies
-    results = benchmark.benchmark_all_strategies(n_batches=10000)
+    # Run combined entropy and throughput measurement for all strategies
+    results = benchmark.benchmark_all_strategies_combined(
+        entropy_batches=10000, throughput_duration=30.0
+    )
 
-    # Print results
-    benchmark.print_results(results)
+    # Print combined results
+    benchmark.print_combined_results(results)
 
-    print("\n✅ Entropy measurement complete!")
+    print("\n✅ Combined entropy and throughput measurement complete!")
 
 
 if __name__ == "__main__":

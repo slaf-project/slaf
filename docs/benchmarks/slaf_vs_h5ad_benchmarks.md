@@ -13,7 +13,7 @@ SLAF provides **dramatic performance improvements** over h5ad across all benchma
 | **Cell Filtering**     | **68.8x faster**     | **105.5x less memory** | synthetic_50k_processed |
 | **Gene Filtering**     | **19.6x faster**     | **2.1x less memory**   | synthetic_50k_processed |
 | **Expression Queries** | **6.8x faster**      | **145x less memory**   | synthetic_50k_processed |
-| **ML Data Loading**    | **56x faster**       | **2.3x less memory**   | Tahoe-100M              |
+| **ML Data Loading**    | **55x faster**       | **2.3x less memory**   | Tahoe-100M              |
 
 !!! success "Performance Leadership"
 
@@ -99,14 +99,14 @@ Raw data loading measures the base throughput for machine learning workflows wit
 
 | System               | Throughput (cells/sec) | Memory Usage (GB) | Notes                |
 | -------------------- | ---------------------- | ----------------- | -------------------- |
-| **SLAF**             | **22,658**             | 2.1               | Optimized streaming  |
-| h5ad (AnnDataLoader) | 403                    | 4.8               | Traditional approach |
-| h5ad (AnnLoader)     | 199                    | 5.2               | Experimental loader  |
+| **SLAF**             | **24,937**             | 2.1               | Optimized streaming  |
+| h5ad (AnnDataLoader) | 452                    | 4.8               | Traditional approach |
+| h5ad (AnnLoader)     | 245                    | 5.2               | Experimental loader  |
 
 **Performance Comparison:**
 
-- **SLAF vs AnnDataLoader**: **56x faster**
-- **SLAF vs AnnLoader**: **114x faster**
+- **SLAF vs AnnDataLoader**: **55x faster**
+- **SLAF vs AnnLoader**: **102x faster**
 - **Memory Efficiency**: SLAF uses 2.3x less memory
 
 ### **GPU-Ready Output Performance**
@@ -115,7 +115,7 @@ SLAF provides pre-tokenized sequences ready for GPU training, while h5ad-based l
 
 | System       | Throughput (cells/sec) | Throughput (tokens/sec) | Output Type             |
 | ------------ | ---------------------- | ----------------------- | ----------------------- |
-| **SLAF**     | **8,818**              | **18,058,900**          | Pre-tokenized sequences |
+| **SLAF**     | **7,460**              | **15,278,440**          | Pre-tokenized sequences |
 | h5ad loaders | N/A                    | N/A                     | Raw data only           |
 
 !!! success "GPU Training Advantage"

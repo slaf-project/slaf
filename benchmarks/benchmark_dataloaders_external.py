@@ -237,7 +237,7 @@ class ExternalDataloaderBenchmark:
         return postfix
 
     def benchmark_with_memory_tracking(
-        self, dataloader, measurement_duration: float, system_name: str = "Unknown"
+        self, dataloader, total_duration: float, system_name: str = "Unknown"
     ):
         """Run benchmark with memory tracking in parallel and progress bar."""
         import threading
@@ -261,6 +261,8 @@ class ExternalDataloaderBenchmark:
         start_time = time.time()
         total_cells = 0
         batch_count = 0
+        measurement_started = False
+        warmup_duration = 10  # Skip first 10 seconds for MoS stabilization
 
         with self.create_progress_bar(f"Training: {system_name}", "training") as pbar:
             for _batch in dataloader:
@@ -279,12 +281,11 @@ class ExternalDataloaderBenchmark:
                             actual_batch_size = self.batch_size  # Fallback
                     else:
                         actual_batch_size = self.batch_size  # Fallback
-                    total_cells += actual_batch_size
                 else:
                     # External dataloaders: use configured batch size
                     # Note: External dataloaders may have different batch formats
                     # and we use configured batch_size for consistency
-                    total_cells += self.batch_size
+                    actual_batch_size = self.batch_size
 
                 # Force actual data loading by accessing the data
                 # This is crucial for getting realistic throughput measurements
@@ -298,9 +299,26 @@ class ExternalDataloaderBenchmark:
                 batch_end = time.time()
                 batch_time_ms = (batch_end - batch_start) * 1000
 
-                # Calculate current throughput
+                # Calculate elapsed time
                 elapsed = time.time() - start_time
-                current_throughput = total_cells / elapsed if elapsed > 0 else 0
+
+                # Skip warmup period for measurement (for all dataloaders)
+                if elapsed >= warmup_duration and not measurement_started:
+                    measurement_started = True
+                    self.console.print(
+                        f"  Starting measurement after {warmup_duration}s warmup..."
+                    )
+
+                # Only count cells after warmup period
+                if measurement_started:
+                    total_cells += actual_batch_size
+
+                # Calculate current throughput (only for display)
+                current_throughput = (
+                    total_cells / (elapsed - warmup_duration)
+                    if elapsed > warmup_duration
+                    else 0
+                )
 
                 # Update progress bar
                 batch_info = {
@@ -313,8 +331,8 @@ class ExternalDataloaderBenchmark:
                 pbar.set_postfix_str(postfix)
                 pbar.update(1)
 
-                # Stop after measurement duration
-                if elapsed >= measurement_duration:
+                # Stop after total duration
+                if elapsed >= total_duration:
                     break
 
         elapsed_time = time.time() - start_time
@@ -335,7 +353,7 @@ class ExternalDataloaderBenchmark:
             "\n[bold blue]Benchmarking SLAF - Tier 1 (Raw Data Loading)[/bold blue]"
         )
 
-        # Create SLAF dataloader in raw mode
+        # Create SLAF dataloader in raw mode (MoS with same config as internal benchmarks)
         dataloader = SLAFDataLoader(
             slaf_array=self.slaf_array,
             tokenizer_type="raw",  # Explicitly set for raw mode
@@ -346,22 +364,29 @@ class ExternalDataloaderBenchmark:
             n_epochs=1000,
             raw_mode=True,
             verbose=False,  # Added verbose=False to suppress SLAF's detailed timing prints
+            # MoS with same configuration as internal benchmarks
+            use_mixture_of_scanners=True,
+            by_fragment=False,
+            batches_per_chunk=1,
+            n_scanners=16,
+            prefetch_batch_size=1048576,  # 1M rows
         )
 
-        # Warm up
+        # Warm up (increased for MoS stability)
         self.console.print("Warming up...")
-        warmup_batches = 3
+        warmup_batches = 15  # Increased from 3 for MoS warmup
         for i, _batch in enumerate(dataloader):
             if i >= warmup_batches:
                 break
 
         # Benchmark with peak memory tracking
         self.console.print("Running benchmark...")
-        measurement_duration = 10  # 10 seconds
+        warmup_duration = 10  # Skip first 10 seconds for MoS stabilization
+        measurement_duration = 30  # Then measure for 30 seconds
 
         total_cells, batch_count, elapsed_time, peak_memory = (
             self.benchmark_with_memory_tracking(
-                dataloader, measurement_duration, "SLAF Tier 1"
+                dataloader, warmup_duration + measurement_duration, "SLAF Tier 1"
             )
         )
 
@@ -369,12 +394,15 @@ class ExternalDataloaderBenchmark:
         del dataloader
         gc.collect()
 
-        # Calculate metrics
-        throughput_cells_per_sec = total_cells / elapsed_time
+        # Calculate metrics (using only measurement time, not warmup)
+        measurement_time = elapsed_time - warmup_duration
+        throughput_cells_per_sec = (
+            total_cells / measurement_time if measurement_time > 0 else 0
+        )
 
         # Debug output
         self.console.print(
-            f"  Debug: {total_cells} cells, {elapsed_time:.2f}s, {throughput_cells_per_sec:.0f} cells/sec"
+            f"  Debug: {total_cells} cells, {measurement_time:.2f}s measurement, {throughput_cells_per_sec:.0f} cells/sec"
         )
 
         return ExternalBenchmarkResult(
@@ -384,7 +412,7 @@ class ExternalDataloaderBenchmark:
             memory_usage_gb=peak_memory,
             output_type="raw",
             processes=1,
-            measurement_time=elapsed_time,
+            measurement_time=measurement_time,
             total_cells=total_cells,
         )
 
@@ -398,7 +426,7 @@ class ExternalDataloaderBenchmark:
             "\n[bold blue]Benchmarking SLAF - Tier 2 (GPU-Ready Output)[/bold blue]"
         )
 
-        # Create SLAF dataloader in tokenized mode
+        # Create SLAF dataloader in tokenized mode (MoS with same config as internal benchmarks)
         dataloader = SLAFDataLoader(
             slaf_array=self.slaf_array,
             tokenizer_type="geneformer",  # Use Geneformer to match internal benchmark
@@ -409,22 +437,29 @@ class ExternalDataloaderBenchmark:
             n_epochs=1000,
             raw_mode=False,  # Tokenized mode for Tier 2
             verbose=False,  # Added verbose=False to suppress SLAF's detailed timing prints
+            # MoS with same configuration as internal benchmarks
+            use_mixture_of_scanners=True,
+            by_fragment=False,
+            batches_per_chunk=1,
+            n_scanners=16,
+            prefetch_batch_size=1048576,  # 1M rows
         )
 
-        # Warm up
+        # Warm up (increased for MoS stability)
         self.console.print("Warming up...")
-        warmup_batches = 3
+        warmup_batches = 15  # Increased from 3 for MoS warmup
         for i, _batch in enumerate(dataloader):
             if i >= warmup_batches:
                 break
 
         # Benchmark with peak memory tracking
         self.console.print("Running benchmark...")
-        measurement_duration = 10  # 10 seconds
+        warmup_duration = 10  # Skip first 10 seconds for MoS stabilization
+        measurement_duration = 30  # Then measure for 30 seconds
 
         total_cells, batch_count, elapsed_time, peak_memory = (
             self.benchmark_with_memory_tracking(
-                dataloader, measurement_duration, "SLAF Tier 2"
+                dataloader, warmup_duration + measurement_duration, "SLAF Tier 2"
             )
         )
 
@@ -432,12 +467,15 @@ class ExternalDataloaderBenchmark:
         del dataloader
         gc.collect()
 
-        # Calculate metrics
-        throughput_cells_per_sec = total_cells / elapsed_time
+        # Calculate metrics (using only measurement time, not warmup)
+        measurement_time = elapsed_time - warmup_duration
+        throughput_cells_per_sec = (
+            total_cells / measurement_time if measurement_time > 0 else 0
+        )
 
         # Debug output
         self.console.print(
-            f"  Debug: {total_cells} cells, {elapsed_time:.2f}s, {throughput_cells_per_sec:.0f} cells/sec"
+            f"  Debug: {total_cells} cells, {measurement_time:.2f}s measurement, {throughput_cells_per_sec:.0f} cells/sec"
         )
 
         return ExternalBenchmarkResult(
@@ -447,7 +485,7 @@ class ExternalDataloaderBenchmark:
             memory_usage_gb=peak_memory,
             output_type="tokenized",
             processes=1,
-            measurement_time=elapsed_time,
+            measurement_time=measurement_time,
             total_cells=total_cells,
         )
 
@@ -496,20 +534,21 @@ class ExternalDataloaderBenchmark:
             self.console.print(f"[red]Error setting up scDataset: {e}[/red]")
             return None
 
-        # Warm up
+        # Warm up (increased for fair comparison)
         self.console.print("Warming up...")
-        warmup_batches = 3
+        warmup_batches = 15  # Increased from 3 for fair comparison
         for i, _batch in enumerate(dataloader):
             if i >= warmup_batches:
                 break
 
         # Benchmark with peak memory tracking
         self.console.print("Running benchmark...")
-        measurement_duration = 10  # 10 seconds
+        warmup_duration = 10  # Skip first 10 seconds for fair comparison
+        measurement_duration = 30  # Then measure for 30 seconds
 
         total_cells, batch_count, elapsed_time, peak_memory = (
             self.benchmark_with_memory_tracking(
-                dataloader, measurement_duration, "scDataset"
+                dataloader, warmup_duration + measurement_duration, "scDataset"
             )
         )
 
@@ -517,12 +556,15 @@ class ExternalDataloaderBenchmark:
         del dataloader
         gc.collect()
 
-        # Calculate metrics
-        throughput_cells_per_sec = total_cells / elapsed_time
+        # Calculate metrics (using only measurement time, not warmup)
+        measurement_time = elapsed_time - warmup_duration
+        throughput_cells_per_sec = (
+            total_cells / measurement_time if measurement_time > 0 else 0
+        )
 
         # Debug output
         self.console.print(
-            f"  Debug: {total_cells} cells, {elapsed_time:.2f}s, {throughput_cells_per_sec:.0f} cells/sec"
+            f"  Debug: {total_cells} cells, {measurement_time:.2f}s measurement, {throughput_cells_per_sec:.0f} cells/sec"
         )
 
         return ExternalBenchmarkResult(
@@ -532,7 +574,7 @@ class ExternalDataloaderBenchmark:
             memory_usage_gb=peak_memory,
             output_type="raw",
             processes=0,  # Single worker
-            measurement_time=elapsed_time,
+            measurement_time=measurement_time,
             total_cells=total_cells,
         )
 
@@ -584,20 +626,21 @@ class ExternalDataloaderBenchmark:
             self.console.print(f"[red]Error setting up AnnDataLoader: {e}[/red]")
             return None
 
-        # Warm up
+        # Warm up (increased for fair comparison)
         self.console.print("Warming up...")
-        warmup_batches = 3
+        warmup_batches = 15  # Increased from 3 for fair comparison
         for i, _batch in enumerate(dataloader):
             if i >= warmup_batches:
                 break
 
         # Benchmark with peak memory tracking
         self.console.print("Running benchmark...")
-        measurement_duration = 10  # 10 seconds
+        warmup_duration = 10  # Skip first 10 seconds for fair comparison
+        measurement_duration = 30  # Then measure for 30 seconds
 
         total_cells, batch_count, elapsed_time, peak_memory = (
             self.benchmark_with_memory_tracking(
-                dataloader, measurement_duration, "AnnDataLoader"
+                dataloader, warmup_duration + measurement_duration, "AnnDataLoader"
             )
         )
 
@@ -605,12 +648,15 @@ class ExternalDataloaderBenchmark:
         del dataloader
         gc.collect()
 
-        # Calculate metrics
-        throughput_cells_per_sec = total_cells / elapsed_time
+        # Calculate metrics (using only measurement time, not warmup)
+        measurement_time = elapsed_time - warmup_duration
+        throughput_cells_per_sec = (
+            total_cells / measurement_time if measurement_time > 0 else 0
+        )
 
         # Debug output
         self.console.print(
-            f"  Debug: {total_cells} cells, {elapsed_time:.2f}s, {throughput_cells_per_sec:.0f} cells/sec"
+            f"  Debug: {total_cells} cells, {measurement_time:.2f}s measurement, {throughput_cells_per_sec:.0f} cells/sec"
         )
 
         return ExternalBenchmarkResult(
@@ -620,7 +666,7 @@ class ExternalDataloaderBenchmark:
             memory_usage_gb=peak_memory,
             output_type="raw",
             processes=1,  # We're running single process
-            measurement_time=elapsed_time,
+            measurement_time=measurement_time,
             total_cells=total_cells,
         )
 
@@ -660,20 +706,21 @@ class ExternalDataloaderBenchmark:
             self.console.print(f"[red]Error setting up AnnLoader: {e}[/red]")
             return None
 
-        # Warm up
+        # Warm up (increased for fair comparison)
         self.console.print("Warming up...")
-        warmup_batches = 3
+        warmup_batches = 15  # Increased from 3 for fair comparison
         for i, _batch in enumerate(dataloader):
             if i >= warmup_batches:
                 break
 
         # Benchmark with peak memory tracking
         self.console.print("Running benchmark...")
-        measurement_duration = 10  # 10 seconds
+        warmup_duration = 10  # Skip first 10 seconds for fair comparison
+        measurement_duration = 30  # Then measure for 30 seconds
 
         total_cells, batch_count, elapsed_time, peak_memory = (
             self.benchmark_with_memory_tracking(
-                dataloader, measurement_duration, "AnnLoader"
+                dataloader, warmup_duration + measurement_duration, "AnnLoader"
             )
         )
 
@@ -681,12 +728,15 @@ class ExternalDataloaderBenchmark:
         del dataloader
         gc.collect()
 
-        # Calculate metrics
-        throughput_cells_per_sec = total_cells / elapsed_time
+        # Calculate metrics (using only measurement time, not warmup)
+        measurement_time = elapsed_time - warmup_duration
+        throughput_cells_per_sec = (
+            total_cells / measurement_time if measurement_time > 0 else 0
+        )
 
         # Debug output
         self.console.print(
-            f"  Debug: {total_cells} cells, {elapsed_time:.2f}s, {throughput_cells_per_sec:.0f} cells/sec"
+            f"  Debug: {total_cells} cells, {measurement_time:.2f}s measurement, {throughput_cells_per_sec:.0f} cells/sec"
         )
 
         return ExternalBenchmarkResult(
@@ -696,7 +746,7 @@ class ExternalDataloaderBenchmark:
             memory_usage_gb=peak_memory,
             output_type="raw",
             processes=1,
-            measurement_time=elapsed_time,
+            measurement_time=measurement_time,
             total_cells=total_cells,
         )
 
@@ -739,20 +789,21 @@ class ExternalDataloaderBenchmark:
             self.console.print(f"[red]Error setting up TileDB DataLoader: {e}[/red]")
             return None
 
-        # Warm up
+        # Warm up (increased for fair comparison)
         self.console.print("Warming up...")
-        warmup_batches = 3
+        warmup_batches = 15  # Increased from 3 for fair comparison
         for i, _batch in enumerate(dataloader):
             if i >= warmup_batches:
                 break
 
         # Benchmark with peak memory tracking
         self.console.print("Running benchmark...")
-        measurement_duration = 10  # 10 seconds
+        warmup_duration = 10  # Skip first 10 seconds for fair comparison
+        measurement_duration = 30  # Then measure for 30 seconds
 
         total_cells, batch_count, elapsed_time, peak_memory = (
             self.benchmark_with_memory_tracking(
-                dataloader, measurement_duration, "TileDB DataLoader"
+                dataloader, warmup_duration + measurement_duration, "TileDB DataLoader"
             )
         )
 
@@ -760,12 +811,15 @@ class ExternalDataloaderBenchmark:
         del dataloader
         gc.collect()
 
-        # Calculate metrics
-        throughput_cells_per_sec = total_cells / elapsed_time
+        # Calculate metrics (using only measurement time, not warmup)
+        measurement_time = elapsed_time - warmup_duration
+        throughput_cells_per_sec = (
+            total_cells / measurement_time if measurement_time > 0 else 0
+        )
 
         # Debug output
         self.console.print(
-            f"  Debug: {total_cells} cells, {elapsed_time:.2f}s, {throughput_cells_per_sec:.0f} cells/sec"
+            f"  Debug: {total_cells} cells, {measurement_time:.2f}s measurement, {throughput_cells_per_sec:.0f} cells/sec"
         )
 
         return ExternalBenchmarkResult(
@@ -775,7 +829,7 @@ class ExternalDataloaderBenchmark:
             memory_usage_gb=peak_memory,
             output_type="raw",
             processes=1,  # Single process
-            measurement_time=elapsed_time,
+            measurement_time=measurement_time,
             total_cells=total_cells,
         )
 
@@ -792,7 +846,7 @@ class ExternalDataloaderBenchmark:
         self.console.print(
             Panel.fit(
                 "[bold green]SLAF External Dataloader Benchmarks[/bold green]\n"
-                "Comparing SLAF against state-of-the-art dataloaders",
+                "Comparing SLAF against state-of-the-art dataloaders (MoS: 15 warmup batches + 10s warmup + 30s measurement)",
                 border_style="green",
             )
         )

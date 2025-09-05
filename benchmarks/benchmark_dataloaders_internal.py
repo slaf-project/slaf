@@ -66,18 +66,6 @@ class ScalingResult:
     total_batches: int
 
 
-@dataclass
-class EntropyStrategyResult:
-    """Results for different entropy strategies."""
-
-    strategy: str  # "sequential", "fragment", or "mos"
-    throughput_cells_per_sec: float
-    total_cells: int
-    total_batches: int
-    measurement_time: float
-    description: str  # Human-readable description of the strategy
-
-
 class InternalDataloaderBenchmark:
     """Benchmark SLAF dataloaders with different tokenization strategies."""
 
@@ -126,7 +114,7 @@ class InternalDataloaderBenchmark:
     def create_dataloader(self, config: TokenizationConfig) -> SLAFDataLoader:
         """Create a dataloader with the given tokenization configuration."""
 
-        # Create dataloader
+        # Create dataloader (MoS with default configuration and longer measurement)
         dataloader = SLAFDataLoader(
             slaf_array=self.slaf_array,
             tokenizer_type=config.tokenizer_type,
@@ -138,7 +126,13 @@ class InternalDataloaderBenchmark:
             raw_mode=(
                 config.tokenizer_type == "raw"
             ),  # Enable raw mode for "raw" config
-            verbose=False,  # Suppress SLAF's detailed timing prints
+            verbose=False,  # Disable verbose for clean benchmark output
+            # MoS with default configuration (needs longer warmup)
+            use_mixture_of_scanners=True,
+            by_fragment=False,
+            batches_per_chunk=1,
+            n_scanners=16,
+            prefetch_batch_size=1048576,  # 1M rows
         )
 
         return dataloader
@@ -237,9 +231,9 @@ class InternalDataloaderBenchmark:
         # Create dataloader
         dataloader = self.create_dataloader(config)
 
-        # Warm up
+        # Warm up (increased for MoS stability)
         self.console.print("Warming up...")
-        warmup_batches = 3
+        warmup_batches = 15  # Increased from 3 for MoS warmup
         for i, _batch in enumerate(dataloader):
             if i >= warmup_batches:
                 break
@@ -250,12 +244,14 @@ class InternalDataloaderBenchmark:
         # Benchmark with progress bar
         self.console.print("Running benchmark...")
         start_time = time.time()
-        measurement_duration = 10
+        warmup_duration = 10  # Skip first 10 seconds for MoS stabilization
+        measurement_duration = 30  # Then measure for 30 seconds
 
         total_cells = 0
         total_tokens = 0
         batch_times = []
         batch_count = 0
+        measurement_started = False
 
         # Create progress bar
         with self.create_progress_bar(f"Training: {config.name}", "training") as pbar:
@@ -274,16 +270,31 @@ class InternalDataloaderBenchmark:
                     batch_size = batch["input_ids"].shape[0]
                     total_tokens_in_batch = batch["input_ids"].numel()
 
-                total_cells += batch_size
-                total_tokens += total_tokens_in_batch
-
                 batch_end = time.time()
                 batch_time_ms = (batch_end - batch_start) * 1000
-                batch_times.append(batch_time_ms)
 
-                # Calculate current throughput
+                # Calculate elapsed time
                 elapsed = time.time() - start_time
-                current_throughput = total_cells / elapsed if elapsed > 0 else 0
+
+                # Skip warmup period for measurement
+                if elapsed >= warmup_duration and not measurement_started:
+                    measurement_started = True
+                    self.console.print(
+                        f"  Starting measurement after {warmup_duration}s warmup..."
+                    )
+
+                # Only count batches after warmup period
+                if measurement_started:
+                    total_cells += batch_size
+                    total_tokens += total_tokens_in_batch
+                    batch_times.append(batch_time_ms)
+
+                # Calculate current throughput (only for display)
+                current_throughput = (
+                    total_cells / (elapsed - warmup_duration)
+                    if elapsed > warmup_duration
+                    else 0
+                )
 
                 # Update progress bar
                 batch_info = {
@@ -296,8 +307,8 @@ class InternalDataloaderBenchmark:
                 pbar.set_postfix_str(postfix)
                 pbar.update(1)
 
-                # Stop after measurement duration
-                if elapsed >= measurement_duration:
+                # Stop after total duration (warmup + measurement)
+                if elapsed >= warmup_duration + measurement_duration:
                     break
 
         # Clean up the dataloader to stop background processing
@@ -308,10 +319,15 @@ class InternalDataloaderBenchmark:
         memory_after = self.measure_memory_usage()
         memory_usage = memory_after - memory_before
 
-        # Calculate metrics
-        elapsed_time = time.time() - start_time
-        throughput_cells_per_sec = total_cells / elapsed_time
-        throughput_tokens_per_sec = total_tokens / elapsed_time
+        # Calculate metrics (using only measurement time, not warmup)
+        total_elapsed_time = time.time() - start_time
+        measurement_time = total_elapsed_time - warmup_duration
+        throughput_cells_per_sec = (
+            total_cells / measurement_time if measurement_time > 0 else 0
+        )
+        throughput_tokens_per_sec = (
+            total_tokens / measurement_time if measurement_time > 0 else 0
+        )
         avg_batch_time_ms = np.mean(batch_times) if batch_times else 0.0
 
         return BenchmarkResult(
@@ -330,7 +346,7 @@ class InternalDataloaderBenchmark:
         self.console.print(
             Panel.fit(
                 "[bold green]SLAF Internal Dataloader Benchmarks[/bold green]\n"
-                "Testing 5 tokenization strategies with batch_size=32",
+                "Testing 5 tokenization strategies with batch_size=32 (MoS: 15 warmup batches + 10s warmup + 30s measurement)",
                 border_style="green",
             )
         )
@@ -400,7 +416,7 @@ class InternalDataloaderBenchmark:
         )
 
     def benchmark_batch_size(
-        self, mode: str, batch_size: int, measurement_duration: float = 10.0
+        self, mode: str, batch_size: int, measurement_duration: float = 30.0
     ) -> ScalingResult:
         """Benchmark a specific batch size and mode."""
 
@@ -411,18 +427,24 @@ class InternalDataloaderBenchmark:
         # Clear memory before measurement
         gc.collect()
 
-        # Create dataloader
+        # Create dataloader (MoS with default configuration and longer measurement)
         dataloader = SLAFDataLoader(
             slaf_array=self.slaf_array,
             batch_size=batch_size,
             n_epochs=1000,
             raw_mode=(mode == "raw"),
             verbose=False,  # Suppress SLAF's detailed timing prints
+            # MoS with default configuration (needs longer warmup)
+            use_mixture_of_scanners=True,
+            by_fragment=False,
+            batches_per_chunk=1,
+            n_scanners=16,
+            prefetch_batch_size=1048576,  # 1M rows
         )
 
-        # Warm up
+        # Warm up (increased for MoS stability)
         self.console.print("  Warming up...")
-        warmup_batches = 3
+        warmup_batches = 15  # Increased from 3 for MoS warmup
         for i, _batch in enumerate(dataloader):
             if i >= warmup_batches:
                 break
@@ -430,8 +452,12 @@ class InternalDataloaderBenchmark:
         # Measurement phase with progress bar
         self.console.print("  Measuring...")
         start_time = time.time()
+        warmup_duration = 10  # Skip first 10 seconds for MoS stabilization
+        measurement_duration = 30  # Then measure for 30 seconds
+
         total_cells = 0
         batch_count = 0
+        measurement_started = False
 
         with self.create_progress_bar(
             f"Training: {mode} mode (batch_size={batch_size})", "training"
@@ -452,8 +478,6 @@ class InternalDataloaderBenchmark:
                     # Tokenized mode: use input_ids shape
                     actual_batch_size = batch["input_ids"].shape[0]
 
-                total_cells += actual_batch_size
-
                 # Force data loading for realistic measurement
                 if mode == "raw":
                     if "X" in batch:
@@ -464,9 +488,26 @@ class InternalDataloaderBenchmark:
                 batch_end = time.time()
                 batch_time_ms = (batch_end - batch_start) * 1000
 
-                # Calculate current throughput
+                # Calculate elapsed time
                 elapsed = time.time() - start_time
-                current_throughput = total_cells / elapsed if elapsed > 0 else 0
+
+                # Skip warmup period for measurement
+                if elapsed >= warmup_duration and not measurement_started:
+                    measurement_started = True
+                    self.console.print(
+                        f"    Starting measurement after {warmup_duration}s warmup..."
+                    )
+
+                # Only count cells after warmup period
+                if measurement_started:
+                    total_cells += actual_batch_size
+
+                # Calculate current throughput (only for display)
+                current_throughput = (
+                    total_cells / (elapsed - warmup_duration)
+                    if elapsed > warmup_duration
+                    else 0
+                )
 
                 # Update progress bar
                 batch_info = {
@@ -479,18 +520,21 @@ class InternalDataloaderBenchmark:
                 pbar.set_postfix_str(postfix)
                 pbar.update(1)
 
-                # Stop after measurement duration
-                if elapsed >= measurement_duration:
+                # Stop after total duration (warmup + measurement)
+                if elapsed >= warmup_duration + measurement_duration:
                     break
 
-        elapsed_time = time.time() - start_time
+        total_elapsed_time = time.time() - start_time
+        measurement_time = total_elapsed_time - warmup_duration
 
         # Clean up
         del dataloader
         gc.collect()
 
-        # Calculate metrics
-        throughput_cells_per_sec = total_cells / elapsed_time
+        # Calculate metrics (using only measurement time, not warmup)
+        throughput_cells_per_sec = (
+            total_cells / measurement_time if measurement_time > 0 else 0
+        )
 
         # Calculate tokens per second
         if mode == "raw":
@@ -507,7 +551,7 @@ class InternalDataloaderBenchmark:
             batch_size=batch_size,
             throughput_cells_per_sec=throughput_cells_per_sec,
             throughput_tokens_per_sec=throughput_tokens_per_sec,
-            measurement_time=elapsed_time,
+            measurement_time=measurement_time,
             total_cells=total_cells,
             total_batches=batch_count,
         )
@@ -524,7 +568,7 @@ class InternalDataloaderBenchmark:
         self.console.print(
             Panel.fit(
                 "[bold green]SLAF Batch Size Scaling Benchmarks[/bold green]\n"
-                "Testing raw vs tokenized performance scaling",
+                "Testing raw vs tokenized performance scaling (MoS: 15 warmup batches + 10s warmup + 30s measurement)",
                 border_style="green",
             )
         )
@@ -674,211 +718,6 @@ class InternalDataloaderBenchmark:
             return max_throughput / min_throughput
         return 1.0
 
-    def benchmark_entropy_strategies(self) -> list[EntropyStrategyResult]:
-        """Benchmark different entropy strategies: sequential, fragment-based, and Mixture of Scanners."""
-
-        self.console.print(
-            Panel.fit(
-                "[bold green]SLAF Entropy Strategy Benchmark[/bold green]\n"
-                "Testing different loading strategies for data entropy optimization",
-                border_style="green",
-            )
-        )
-
-        strategies = [
-            (
-                "sequential",
-                False,
-                False,
-                "Sequential loading (lowest entropy)",
-                50,
-            ),
-            (
-                "fragment",
-                True,
-                False,
-                "Fragment-based loading (higher entropy)",
-                50,
-            ),
-            (
-                "mos",
-                False,
-                True,
-                "Mixture of Scanners (maximum entropy)",
-                1,
-            ),
-        ]
-
-        results = []
-
-        for (
-            strategy_name,
-            by_fragment,
-            use_mos,
-            description,
-            batches_per_chunk,
-        ) in strategies:
-            self.console.print(
-                f"\n[bold blue]Testing {strategy_name} strategy...[/bold blue]"
-            )
-
-            # Create dataloader with appropriate entropy strategy
-            dataloader = SLAFDataLoader(
-                slaf_array=self.slaf_array,
-                batch_size=32,
-                n_epochs=1000,
-                raw_mode=True,
-                verbose=False,
-                by_fragment=by_fragment,
-                use_mixture_of_scanners=use_mos,
-                n_scanners=16,
-                prefetch_batch_size=4194304 if use_mos else 8192,  # 4M rows for MoS
-                batches_per_chunk=batches_per_chunk,
-            )
-
-            # Warm up
-            self.console.print("  Warming up...")
-            warmup_batches = 3
-            for i, _batch in enumerate(dataloader):
-                if i >= warmup_batches:
-                    break
-
-            # Measurement phase
-            start_time = time.time()
-            measurement_duration = 30.0
-
-            total_cells = 0
-            batch_count = 0
-
-            with self.create_progress_bar(
-                f"Training: {strategy_name} strategy", "training"
-            ) as pbar:
-                for batch in dataloader:
-                    batch_count += 1
-
-                    # Count cells from the batch
-                    if "cell_ids" in batch:
-                        batch_size = len(batch["cell_ids"])
-                    else:
-                        batch_size = 32  # Fallback
-
-                    total_cells += batch_size
-
-                    # Calculate current throughput
-                    elapsed = time.time() - start_time
-                    current_throughput = total_cells / elapsed if elapsed > 0 else 0
-
-                    # Update progress bar
-                    batch_info = {
-                        "total_time": 0,  # Not tracking individual batch times
-                        "throughput": current_throughput,
-                        "cells": batch_size,
-                    }
-
-                    postfix = self.format_training_postfix(batch_info)
-                    pbar.set_postfix_str(postfix)
-                    pbar.update(1)
-
-                    # Stop after measurement duration
-                    if elapsed >= measurement_duration:
-                        break
-
-            elapsed_time = time.time() - start_time
-
-            # Clean up
-            del dataloader
-            gc.collect()
-
-            # Calculate metrics
-            throughput_cells_per_sec = (
-                total_cells / elapsed_time if elapsed_time > 0 else 0
-            )
-
-            result = EntropyStrategyResult(
-                strategy=strategy_name,
-                throughput_cells_per_sec=throughput_cells_per_sec,
-                total_cells=total_cells,
-                total_batches=batch_count,
-                measurement_time=elapsed_time,
-                description=description,
-            )
-
-            results.append(result)
-
-            self.console.print(
-                f"  Result: {throughput_cells_per_sec:.0f} cells/sec, {total_cells:,} cells, {batch_count} batches"
-            )
-
-        return results
-
-    def print_entropy_results(self, results: list[EntropyStrategyResult]):
-        """Print entropy strategy results in a formatted table."""
-
-        self.console.print(
-            "\n[bold blue]Entropy Strategy Performance Comparison[/bold blue]"
-        )
-        table = Table(title="Entropy Strategy Comparison")
-
-        table.add_column("Strategy", style="cyan", no_wrap=True)
-        table.add_column("Description", style="yellow", no_wrap=True)
-        table.add_column("Throughput (cells/sec)", style="magenta", justify="right")
-        table.add_column("Total Cells", style="blue", justify="right")
-        table.add_column("Total Batches", style="blue", justify="right")
-
-        for result in results:
-            table.add_row(
-                f"{result.strategy.capitalize()}",
-                result.description,
-                f"{result.throughput_cells_per_sec:.0f}",
-                f"{result.total_cells:,}",
-                f"{result.total_batches}",
-            )
-
-        self.console.print(table)
-
-        # Calculate performance comparison
-        if len(results) == 3:
-            sequential_result = next(r for r in results if r.strategy == "sequential")
-            fragment_result = next(r for r in results if r.strategy == "fragment")
-            mos_result = next(r for r in results if r.strategy == "mos")
-
-            # Compare fragment vs sequential
-            if sequential_result.throughput_cells_per_sec > 0:
-                fragment_vs_sequential = (
-                    fragment_result.throughput_cells_per_sec
-                    / sequential_result.throughput_cells_per_sec
-                    - 1
-                ) * 100
-            else:
-                fragment_vs_sequential = 0
-
-            # Compare MoS vs sequential
-            if sequential_result.throughput_cells_per_sec > 0:
-                mos_vs_sequential = (
-                    mos_result.throughput_cells_per_sec
-                    / sequential_result.throughput_cells_per_sec
-                    - 1
-                ) * 100
-            else:
-                mos_vs_sequential = 0
-
-            # Compare MoS vs fragment
-            if fragment_result.throughput_cells_per_sec > 0:
-                mos_vs_fragment = (
-                    mos_result.throughput_cells_per_sec
-                    / fragment_result.throughput_cells_per_sec
-                    - 1
-                ) * 100
-            else:
-                mos_vs_fragment = 0
-
-            self.console.print("\n[bold green]Performance Comparison[/bold green]")
-            self.console.print(
-                f"Fragment vs Sequential: {fragment_vs_sequential:+.1f}%"
-            )
-            self.console.print(f"MoS vs Sequential: {mos_vs_sequential:+.1f}%")
-            self.console.print(f"MoS vs Fragment: {mos_vs_fragment:+.1f}%")
-
 
 def main():
     """Run the internal dataloader benchmarks."""
@@ -895,10 +734,6 @@ def main():
     # Run batch scaling benchmarks
     scaling_results = benchmark.run_scaling_benchmarks()
     benchmark.print_scaling_results(scaling_results)
-
-    # Run entropy strategy benchmarks
-    entropy_results = benchmark.benchmark_entropy_strategies()
-    benchmark.print_entropy_results(entropy_results)
 
 
 if __name__ == "__main__":

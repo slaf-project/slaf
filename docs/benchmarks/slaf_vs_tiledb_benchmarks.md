@@ -16,7 +16,7 @@ Both SLAF and TileDB represent modern approaches to single-cell data storage, us
 | **Cell-centric Queries**   | **1.1x-1.4x faster**   | synthetic_50k_processed |
 | **Gene-centric Queries**   | **2.5x-3.3x slower**   | synthetic_50k_processed |
 | **Submatrix Queries**      | **2.5x-5.0x slower**   | synthetic_50k_processed |
-| **ML Data Loading**        | **20.7x faster**       | Tahoe-100M              |
+| **ML Data Loading**        | **14.4x faster**       | Tahoe-100M              |
 
 !!! success "Modern Format Advantage"
 
@@ -131,10 +131,10 @@ Raw data loading performance demonstrates the advantages of SLAF's optimized str
 
 | System            | Throughput (cells/sec) | Notes                 |
 | ----------------- | ---------------------- | --------------------- |
-| **SLAF**          | **22,658**             | Optimized streaming   |
-| TileDB DataLoader | 1,097                  | Custom PyTorch loader |
+| **SLAF**          | **24,937**             | Optimized streaming   |
+| TileDB DataLoader | 1,737                  | Custom PyTorch loader |
 
-**Performance Comparison: 20.7x faster**
+**Performance Comparison: 14.4x faster**
 
 ### **GPU-Ready Output Performance**
 
@@ -142,7 +142,7 @@ SLAF provides pre-tokenized sequences ready for GPU training, while TileDB DataL
 
 | System            | Throughput (cells/sec) | Throughput (tokens/sec) | Output Type             |
 | ----------------- | ---------------------- | ----------------------- | ----------------------- |
-| **SLAF**          | **8,818**              | **18,058,900**          | Pre-tokenized sequences |
+| **SLAF**          | **7,460**              | **15,278,440**          | Pre-tokenized sequences |
 | TileDB DataLoader | N/A                    | N/A                     | Raw data only           |
 
 !!! success "GPU Training Advantage"
@@ -181,7 +181,7 @@ SLAF provides pre-tokenized sequences ready for GPU training, while TileDB DataL
 ### **Performance Improvements**
 
 - **5.6x faster** bioinformatics operations
-- **20.7x faster** machine learning data loading
+- **14.4x faster** machine learning data loading
 - **Faster conversion from h5ad** to SLAF format, enabling rapid migration of existing datasets
 - **Easy TileDB migration**: 2-second conversion for 50k cell datasets with linear scaling
 
@@ -211,7 +211,7 @@ SLAF provides pre-tokenized sequences ready for GPU training, while TileDB DataL
 SLAF provides **strong performance advantages** over TileDB across most benchmark categories:
 
 - **Metadata filtering**: 5.6x-8.6x faster (cell and gene filtering)
-- **Machine learning data loading**: 20.7x faster
+- **Machine learning data loading**: 14.4x faster
 - **Expression queries**: Mixed performance (SLAF wins cell-centric, TileDB wins gene-centric)
 
 While both systems represent modern approaches to single-cell data storage, SLAF's optimized streaming architecture, enhanced ML integration, and simplified API provide significant advantages for most use cases. The benchmarks demonstrate that SLAF's performance optimizations and developer-friendly design make it the preferred choice for high-throughput bioinformatics and machine learning workflows.
