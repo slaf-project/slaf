@@ -93,60 +93,117 @@ def print_benchmark_table(
         print("No benchmark results to display")
         return
 
-    # Calculate summary statistics
-    total_speedups = [r["total_speedup"] for r in results if r["total_speedup"] > 0]
-    query_speedups = [r["query_speedup"] for r in results if r["query_speedup"] > 0]
-    load_speedups = [r["load_speedup"] for r in results if r.get("load_speedup", 0) > 0]
+    # Check if this is a three-way comparison (includes TileDB)
+    has_tiledb = any("tiledb_total_time" in r for r in results)
 
-    avg_total_speedup = np.mean(total_speedups) if total_speedups else 0
-    avg_query_speedup = np.mean(query_speedups) if query_speedups else 0
-    avg_load_speedup = np.mean(load_speedups) if load_speedups else 0
+    if has_tiledb:
+        # Three-way comparison: SLAF vs h5ad and SLAF vs TileDB
+        slaf_vs_h5ad_speedups = [
+            r["slaf_vs_h5ad_speedup"] for r in results if r["slaf_vs_h5ad_speedup"] > 0
+        ]
+        slaf_vs_tiledb_speedups = [
+            r["slaf_vs_tiledb_speedup"]
+            for r in results
+            if r["slaf_vs_tiledb_speedup"] > 0
+        ]
 
-    # Memory statistics
-    memory_results = [r for r in results if "h5ad_total_memory_mb" in r]
-    if memory_results:
-        # Calculate memory efficiency for each result using the same logic as comprehensive summary
-        memory_efficiencies = []
-        for r in memory_results:
-            h5ad_mem = r.get("h5ad_total_memory_mb", 0)
-            slaf_mem = r.get("slaf_total_memory_mb", 0)
+        avg_slaf_vs_h5ad_speedup = (
+            np.mean(slaf_vs_h5ad_speedups) if slaf_vs_h5ad_speedups else 0
+        )
+        avg_slaf_vs_tiledb_speedup = (
+            np.mean(slaf_vs_tiledb_speedups) if slaf_vs_tiledb_speedups else 0
+        )
 
-            if slaf_mem > 0.1 and h5ad_mem > 0.1:
-                # Both used significant memory
-                mem_eff = h5ad_mem / slaf_mem
-                memory_efficiencies.append(mem_eff)
-            elif h5ad_mem > 0.1 and slaf_mem <= 0.1:
-                # h5ad used memory but SLAF didn't - use actual ratio
-                mem_eff = h5ad_mem / 0.01  # Assume SLAF used ~0.01 MB
-                memory_efficiencies.append(mem_eff)
-            elif h5ad_mem <= 0.1 and slaf_mem <= 0.1:
-                # Both used negligible memory - treat as 1x
-                memory_efficiencies.append(1.0)
-
-        if memory_efficiencies:
+        # Memory statistics for three-way comparison
+        memory_results = [r for r in results if "h5ad_total_memory_mb" in r]
+        if memory_results:
             avg_h5ad_total_memory = np.mean(
                 [r["h5ad_total_memory_mb"] for r in memory_results]
             )
             avg_slaf_total_memory = np.mean(
                 [r["slaf_total_memory_mb"] for r in memory_results]
             )
-            memory_efficiency = np.mean(memory_efficiencies)
+            avg_tiledb_total_memory = np.mean(
+                [r["tiledb_total_memory_mb"] for r in memory_results]
+            )
+            memory_efficiency = (
+                avg_h5ad_total_memory / avg_slaf_total_memory
+                if avg_slaf_total_memory > 0
+                else 0
+            )
+        else:
+            avg_h5ad_total_memory = avg_slaf_total_memory = avg_tiledb_total_memory = (
+                memory_efficiency
+            ) = 0
+
+        _print_rich_table_three_way(
+            results,
+            dataset_name,
+            scenario_type,
+            avg_slaf_vs_h5ad_speedup,
+            avg_slaf_vs_tiledb_speedup,
+            memory_efficiency,
+            avg_h5ad_total_memory,
+            avg_slaf_total_memory,
+            avg_tiledb_total_memory,
+        )
+    else:
+        # Original two-way comparison (SLAF vs h5ad only)
+        total_speedups = [r["total_speedup"] for r in results if r["total_speedup"] > 0]
+        query_speedups = [r["query_speedup"] for r in results if r["query_speedup"] > 0]
+        load_speedups = [
+            r["load_speedup"] for r in results if r.get("load_speedup", 0) > 0
+        ]
+
+        avg_total_speedup = np.mean(total_speedups) if total_speedups else 0
+        avg_query_speedup = np.mean(query_speedups) if query_speedups else 0
+        avg_load_speedup = np.mean(load_speedups) if load_speedups else 0
+
+        # Memory statistics
+        memory_results = [r for r in results if "h5ad_total_memory_mb" in r]
+        if memory_results:
+            # Calculate memory efficiency for each result using the same logic as comprehensive summary
+            memory_efficiencies = []
+            for r in memory_results:
+                h5ad_mem = r.get("h5ad_total_memory_mb", 0)
+                slaf_mem = r.get("slaf_total_memory_mb", 0)
+
+                if slaf_mem > 0.1 and h5ad_mem > 0.1:
+                    # Both used significant memory
+                    mem_eff = h5ad_mem / slaf_mem
+                    memory_efficiencies.append(mem_eff)
+                elif h5ad_mem > 0.1 and slaf_mem <= 0.1:
+                    # h5ad used memory but SLAF didn't - use actual ratio
+                    mem_eff = h5ad_mem / 0.01  # Assume SLAF used ~0.01 MB
+                    memory_efficiencies.append(mem_eff)
+                elif h5ad_mem <= 0.1 and slaf_mem <= 0.1:
+                    # Both used negligible memory - treat as 1x
+                    memory_efficiencies.append(1.0)
+
+            if memory_efficiencies:
+                avg_h5ad_total_memory = np.mean(
+                    [r["h5ad_total_memory_mb"] for r in memory_results]
+                )
+                avg_slaf_total_memory = np.mean(
+                    [r["slaf_total_memory_mb"] for r in memory_results]
+                )
+                memory_efficiency = np.mean(memory_efficiencies)
+            else:
+                avg_h5ad_total_memory = avg_slaf_total_memory = memory_efficiency = 0
         else:
             avg_h5ad_total_memory = avg_slaf_total_memory = memory_efficiency = 0
-    else:
-        avg_h5ad_total_memory = avg_slaf_total_memory = memory_efficiency = 0
 
-    _print_rich_table(
-        results,
-        dataset_name,
-        scenario_type,
-        avg_total_speedup,
-        avg_query_speedup,
-        avg_load_speedup,
-        memory_efficiency,
-        avg_h5ad_total_memory,
-        avg_slaf_total_memory,
-    )
+        _print_rich_table(
+            results,
+            dataset_name,
+            scenario_type,
+            avg_total_speedup,
+            avg_query_speedup,
+            avg_load_speedup,
+            memory_efficiency,
+            avg_h5ad_total_memory,
+            avg_slaf_total_memory,
+        )
 
 
 def _print_rich_table(
@@ -457,3 +514,138 @@ def run_with_burn_in(
             continue
 
     return results
+
+
+def _print_rich_table_three_way(
+    results,
+    dataset_name,
+    scenario_type,
+    avg_slaf_vs_h5ad_speedup,
+    avg_slaf_vs_tiledb_speedup,
+    memory_efficiency,
+    avg_h5ad_total_memory,
+    avg_slaf_total_memory,
+    avg_tiledb_total_memory,
+):
+    """Print three-way comparison table using rich library for better formatting"""
+    console = Console()
+
+    # Create main table
+    title = f"BENCHMARK RESULTS: {dataset_name.upper() if dataset_name else 'ALL SCENARIOS'}"
+    if scenario_type:
+        title += f" - {scenario_type.upper()}"
+    title += " (SLAF vs h5ad vs TileDB)"
+
+    table = Table(
+        title=title,
+        show_header=True,
+        header_style="bold magenta",
+        title_style="bold blue",
+    )
+
+    # Add columns for three-way comparison
+    table.add_column("Scenario", style="cyan", width=8)
+    table.add_column("h5ad\nTotal (ms)", justify="right", style="red", width=8)
+    table.add_column("SLAF\nTotal (ms)", justify="right", style="green", width=8)
+    table.add_column("TileDB\nTotal (ms)", justify="right", style="blue", width=8)
+    table.add_column("SLAF vs\nh5ad", justify="right", style="yellow", width=8)
+    table.add_column("SLAF vs\nTileDB", justify="right", style="yellow", width=8)
+    table.add_column("h5ad\nMemory (MB)", justify="right", style="red", width=8)
+    table.add_column("SLAF\nMemory (MB)", justify="right", style="green", width=8)
+    table.add_column("TileDB\nMemory (MB)", justify="right", style="blue", width=8)
+
+    # Add description column if available
+    has_description = any("scenario_description" in r for r in results)
+    if has_description:
+        table.add_column("Description", style="white", width=20)
+
+    # Add data rows
+    for i, result in enumerate(results):
+        scenario_name = f"S{i + 1}"
+
+        # Timing breakdown (already in milliseconds)
+        h5ad_total = result.get("h5ad_total_time", 0)
+        slaf_total = result.get("slaf_total_time", 0)
+        tiledb_total = result.get("tiledb_total_time", 0)
+
+        slaf_vs_h5ad_speedup = result.get("slaf_vs_h5ad_speedup", 0)
+        slaf_vs_tiledb_speedup = result.get("slaf_vs_tiledb_speedup", 0)
+
+        # Memory info
+        h5ad_total_memory = result.get("h5ad_total_memory_mb", 0)
+        slaf_total_memory = result.get("slaf_total_memory_mb", 0)
+        tiledb_total_memory = result.get("tiledb_total_memory_mb", 0)
+
+        # Format speedups with color coding
+        slaf_vs_h5ad_text = (
+            f"{slaf_vs_h5ad_speedup:.1f}x" if slaf_vs_h5ad_speedup > 0 else "N/A"
+        )
+        slaf_vs_tiledb_text = (
+            f"{slaf_vs_tiledb_speedup:.1f}x" if slaf_vs_tiledb_speedup > 0 else "N/A"
+        )
+
+        # Color code speedups
+        if slaf_vs_h5ad_speedup > 1:
+            slaf_vs_h5ad_text = f"[green]{slaf_vs_h5ad_text}[/green]"
+        elif slaf_vs_h5ad_speedup > 0:
+            slaf_vs_h5ad_text = f"[red]{slaf_vs_h5ad_text}[/red]"
+
+        if slaf_vs_tiledb_speedup > 1:
+            slaf_vs_tiledb_text = f"[green]{slaf_vs_tiledb_text}[/green]"
+        elif slaf_vs_tiledb_speedup > 0:
+            slaf_vs_tiledb_text = f"[red]{slaf_vs_tiledb_text}[/red]"
+
+        # Build row data
+        row_data = [
+            scenario_name,
+            f"{h5ad_total:.1f}",
+            f"{slaf_total:.1f}",
+            f"{tiledb_total:.1f}",
+            slaf_vs_h5ad_text,
+            slaf_vs_tiledb_text,
+            f"{h5ad_total_memory:.1f}",
+            f"{slaf_total_memory:.1f}",
+            f"{tiledb_total_memory:.1f}",
+        ]
+
+        # Add description if available
+        if has_description:
+            description = result.get("scenario_description", "")
+            row_data.append(description)
+
+        table.add_row(*row_data)
+
+    # Print the table
+    console.print(table)
+
+    # Print summary
+    summary_table = Table(title="SUMMARY", show_header=False, box=None)
+    summary_table.add_column("Metric", style="bold")
+    summary_table.add_column("Value", justify="right")
+
+    summary_table.add_row(
+        "Average SLAF vs h5ad Speedup", f"{avg_slaf_vs_h5ad_speedup:.1f}x"
+    )
+    summary_table.add_row(
+        "Average SLAF vs TileDB Speedup", f"{avg_slaf_vs_tiledb_speedup:.1f}x"
+    )
+    summary_table.add_row("Average h5ad Memory (MB)", f"{avg_h5ad_total_memory:.1f}")
+    summary_table.add_row("Average SLAF Memory (MB)", f"{avg_slaf_total_memory:.1f}")
+    summary_table.add_row(
+        "Average TileDB Memory (MB)", f"{avg_tiledb_total_memory:.1f}"
+    )
+    summary_table.add_row("Memory Efficiency (h5ad/SLAF)", f"{memory_efficiency:.1f}x")
+
+    console.print(summary_table)
+
+    # Print interpretation
+    console.print("\n[bold]Interpretation:[/bold]")
+    console.print(
+        f"• SLAF vs h5ad: {avg_slaf_vs_h5ad_speedup:.1f}x faster than traditional h5ad"
+    )
+    console.print(
+        f"• SLAF vs TileDB: {avg_slaf_vs_tiledb_speedup:.1f}x faster than TileDB SOMA"
+    )
+    console.print(
+        f"• Memory efficiency: SLAF uses {memory_efficiency:.1f}x less memory than h5ad"
+    )

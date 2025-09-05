@@ -20,11 +20,14 @@ from .samplers import (
     StratifiedShuffle,
     create_shuffle,
 )
+from .tiledb_dataloaders import TileDBDataLoader, TileDBIterableDataset
 from .tokenizers import SLAFTokenizer, TokenizerType
 
 __all__ = [
-    # Core DataLoader
+    # Core DataLoaders
     "SLAFDataLoader",
+    "TileDBDataLoader",
+    "TileDBIterableDataset",
     # Dataset and Processing
     "SLAFIterableDataset",
     "PrefetchBatch",

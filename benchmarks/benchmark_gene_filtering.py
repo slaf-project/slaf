@@ -6,6 +6,14 @@ from benchmark_utils import clear_caches, get_object_memory_usage, get_slaf_memo
 
 from slaf.core.slaf import SLAFArray
 
+# Try to import tiledbsoma
+try:
+    import tiledbsoma
+
+    TILEDB_AVAILABLE = True
+except ImportError:
+    TILEDB_AVAILABLE = False
+
 
 def demo_realistic_gene_queries():
     """Demo realistic gene filtering scenarios for PBMC data"""
@@ -16,24 +24,30 @@ def demo_realistic_gene_queries():
             "description": "Genes expressed in >=10 cells",
             "h5ad_code": lambda adata: adata.var[adata.var.n_cells_by_counts >= 10],
             "slaf_code": lambda slaf: slaf.filter_genes(n_cells_by_counts=">=10"),
+            "tiledb_code": lambda var_df: var_df.filter(
+                pl.col("n_cells_by_counts") >= 10
+            ),
         },
         {
             "name": "min_total_counts_100",
             "description": "Genes with >=100 total counts",
             "h5ad_code": lambda adata: adata.var[adata.var.total_counts >= 100],
             "slaf_code": lambda slaf: slaf.filter_genes(total_counts=">=100"),
+            "tiledb_code": lambda var_df: var_df.filter(pl.col("total_counts") >= 100),
         },
         {
             "name": "min_mean_counts_0.1",
             "description": "Genes with mean expression >=0.1",
             "h5ad_code": lambda adata: adata.var[adata.var.mean_counts >= 0.1],
             "slaf_code": lambda slaf: slaf.filter_genes(mean_counts=">=0.1"),
+            "tiledb_code": lambda var_df: var_df.filter(pl.col("mean_counts") >= 0.1),
         },
         {
             "name": "exclude_mt",
             "description": "Exclude mitochondrial genes",
             "h5ad_code": lambda adata: adata.var[~adata.var.mt],
             "slaf_code": lambda slaf: slaf.filter_genes(mt=False),
+            "tiledb_code": lambda var_df: var_df.filter(~pl.col("mt")),
         },
         # Highly variable gene filtering (post-analysis)
         {
@@ -41,12 +55,14 @@ def demo_realistic_gene_queries():
             "description": "Highly variable genes",
             "h5ad_code": lambda adata: adata.var[adata.var.highly_variable],
             "slaf_code": lambda slaf: slaf.filter_genes(highly_variable=True),
+            "tiledb_code": lambda var_df: var_df.filter(pl.col("highly_variable")),
         },
         {
             "name": "non_highly_variable",
             "description": "Non-highly variable genes",
             "h5ad_code": lambda adata: adata.var[~adata.var.highly_variable],
             "slaf_code": lambda slaf: slaf.filter_genes(highly_variable=False),
+            "tiledb_code": lambda var_df: var_df.filter(~pl.col("highly_variable")),
         },
         # Combined filtering (most realistic)
         {
@@ -57,6 +73,9 @@ def demo_realistic_gene_queries():
             ],
             "slaf_code": lambda slaf: slaf.filter_genes(
                 n_cells_by_counts=">=50", total_counts=">=500"
+            ),
+            "tiledb_code": lambda var_df: var_df.filter(
+                (pl.col("n_cells_by_counts") >= 50) & (pl.col("total_counts") >= 500)
             ),
         },
         # Range queries
@@ -69,6 +88,9 @@ def demo_realistic_gene_queries():
             "slaf_code": lambda slaf: slaf.filter_genes(total_counts=">=100").filter(
                 pl.col("total_counts") <= 10000
             ),
+            "tiledb_code": lambda var_df: var_df.filter(
+                (pl.col("total_counts") >= 100) & (pl.col("total_counts") <= 10000)
+            ),
         },
         {
             "name": "cells_5_1000",
@@ -79,6 +101,10 @@ def demo_realistic_gene_queries():
             ],
             "slaf_code": lambda slaf: slaf.filter_genes(n_cells_by_counts=">=5").filter(
                 pl.col("n_cells_by_counts") <= 1000
+            ),
+            "tiledb_code": lambda var_df: var_df.filter(
+                (pl.col("n_cells_by_counts") >= 5)
+                & (pl.col("n_cells_by_counts") <= 1000)
             ),
         },
     ]
@@ -169,9 +195,94 @@ def _measure_slaf_gene_filtering(slaf_path: str, scenario: dict):
     }
 
 
+def _measure_tiledb_gene_filtering(tiledb_path: str, scenario: dict):
+    """Measure TileDB gene filtering performance"""
+    import gc
+
+    if not TILEDB_AVAILABLE:
+        return {
+            "tiledb_load_time": 0,
+            "tiledb_query_time": 0,
+            "tiledb_load_memory": 0,
+            "tiledb_query_memory": 0,
+            "tiledb_count": 0,
+        }
+
+    gc.collect()
+
+    # Load TileDB experiment
+    start = time.time()
+    try:
+        experiment = tiledbsoma.Experiment.open(tiledb_path)
+        tiledb_load_time = time.time() - start
+        # Measure memory footprint of the experiment object
+        tiledb_load_memory = get_object_memory_usage(experiment)
+    except Exception as e:
+        print(f"TileDB loading failed: {e}")
+        return {
+            "tiledb_load_time": 0,
+            "tiledb_query_time": 0,
+            "tiledb_load_memory": 0,
+            "tiledb_query_memory": 0,
+            "tiledb_count": 0,
+        }
+
+    # Read var metadata as Arrow Table
+    start = time.time()
+    try:
+        var_table = experiment.ms["RNA"].var.read().concat()
+        var_df = pl.from_arrow(var_table)
+        tiledb_query_time = time.time() - start
+        # Measure memory of the var DataFrame
+        var_memory = get_object_memory_usage(var_df)
+    except Exception as e:
+        print(f"TileDB var reading failed: {e}")
+        tiledb_query_time = 0
+        var_memory = 0
+        var_df = None
+
+    # Execute the filtering operation
+    start = time.time()
+    try:
+        if var_df is not None:
+            result = scenario["tiledb_code"](var_df)
+            tiledb_filter_time = time.time() - start
+            tiledb_count = len(result)
+            # Measure memory of the result
+            result_memory = get_object_memory_usage(result)
+        else:
+            tiledb_filter_time = 0
+            tiledb_count = 0
+            result_memory = 0
+    except Exception as e:
+        print(f"TileDB filtering failed: {e}")
+        tiledb_filter_time = 0
+        tiledb_count = 0
+        result_memory = 0
+
+    # Total query time includes reading + filtering
+    total_query_time = tiledb_query_time + tiledb_filter_time
+
+    # Total query memory includes var reading + result
+    total_query_memory = var_memory + result_memory
+
+    # Clean up
+    del experiment, var_df
+    gc.collect()
+
+    return {
+        "tiledb_load_time": tiledb_load_time,
+        "tiledb_query_time": total_query_time,
+        "tiledb_load_memory": float(tiledb_load_memory),
+        "tiledb_query_memory": float(total_query_memory),
+        "tiledb_count": int(tiledb_count),
+    }
+
+
 def benchmark_gene_filtering_scenario(
     h5ad_path: str,
     slaf_path: str,
+    tiledb_path: str,
     scenario: dict,
 ):
     """Benchmark a single gene filtering scenario with isolated memory measurement"""
@@ -182,20 +293,22 @@ def benchmark_gene_filtering_scenario(
     # Measure SLAF in isolation
     slaf_result = _measure_slaf_gene_filtering(slaf_path, scenario)
 
+    # Measure TileDB in isolation
+    tiledb_result = _measure_tiledb_gene_filtering(tiledb_path, scenario)
+
     # Calculate totals and speedups
     h5ad_total_time = h5ad_result["h5ad_load_time"] + h5ad_result["h5ad_query_time"]
     slaf_total_time = slaf_result["slaf_init_time"] + slaf_result["slaf_query_time"]
-
-    total_speedup = h5ad_total_time / slaf_total_time if slaf_total_time > 0 else 0
-    query_speedup = (
-        h5ad_result["h5ad_query_time"] / slaf_result["slaf_query_time"]
-        if slaf_result["slaf_query_time"] > 0
-        else 0
+    tiledb_total_time = (
+        tiledb_result["tiledb_load_time"] + tiledb_result["tiledb_query_time"]
     )
-    load_speedup = (
-        h5ad_result["h5ad_load_time"] / slaf_result["slaf_init_time"]
-        if slaf_result["slaf_init_time"] > 0
-        else 0
+
+    # Calculate speedups - focus on SLAF comparisons
+    slaf_vs_h5ad_speedup = (
+        h5ad_total_time / slaf_total_time if slaf_total_time > 0 else 0
+    )
+    slaf_vs_tiledb_speedup = (
+        tiledb_total_time / slaf_total_time if slaf_total_time > 0 else 0
     )
 
     return {
@@ -207,12 +320,19 @@ def benchmark_gene_filtering_scenario(
         "slaf_total_time": 1000 * slaf_total_time,
         "slaf_init_time": 1000 * slaf_result["slaf_init_time"],
         "slaf_query_time": 1000 * slaf_result["slaf_query_time"],
-        "total_speedup": total_speedup,
-        "query_speedup": query_speedup,
-        "load_speedup": load_speedup,
+        "tiledb_total_time": 1000 * tiledb_total_time,
+        "tiledb_load_time": 1000 * tiledb_result["tiledb_load_time"],
+        "tiledb_query_time": 1000 * tiledb_result["tiledb_query_time"],
+        "slaf_vs_h5ad_speedup": slaf_vs_h5ad_speedup,
+        "slaf_vs_tiledb_speedup": slaf_vs_tiledb_speedup,
         "h5ad_count": h5ad_result["h5ad_count"],
         "slaf_count": slaf_result["slaf_count"],
-        "results_match": h5ad_result["h5ad_count"] == slaf_result["slaf_count"],
+        "tiledb_count": tiledb_result["tiledb_count"],
+        "results_match": (
+            h5ad_result["h5ad_count"]
+            == slaf_result["slaf_count"]
+            == tiledb_result["tiledb_count"]
+        ),
         # Memory breakdown
         "h5ad_load_memory_mb": h5ad_result["h5ad_load_memory"],
         "h5ad_query_memory_mb": h5ad_result["h5ad_query_memory"],
@@ -222,11 +342,15 @@ def benchmark_gene_filtering_scenario(
         "slaf_query_memory_mb": slaf_result["slaf_query_memory"],
         "slaf_total_memory_mb": slaf_result["slaf_init_memory"]
         + slaf_result["slaf_query_memory"],
+        "tiledb_load_memory_mb": tiledb_result["tiledb_load_memory"],
+        "tiledb_query_memory_mb": tiledb_result["tiledb_query_memory"],
+        "tiledb_total_memory_mb": tiledb_result["tiledb_load_memory"]
+        + tiledb_result["tiledb_query_memory"],
     }
 
 
 def benchmark_gene_filtering(
-    h5ad_path: str, slaf_path: str, include_memory=True, verbose=False
+    h5ad_path: str, slaf_path: str, tiledb_path: str, include_memory=True, verbose=False
 ):
     """Benchmark realistic gene filtering scenarios"""
     scenarios = demo_realistic_gene_queries()
@@ -264,12 +388,16 @@ def benchmark_gene_filtering(
 
         try:
             # Always include loading time for each scenario
-            result = benchmark_gene_filtering_scenario(h5ad_path, slaf_path, scenario)
+            result = benchmark_gene_filtering_scenario(
+                h5ad_path, slaf_path, tiledb_path, scenario
+            )
 
             results.append(result)
 
             if verbose:
-                print(f"  ✓ Completed: {result['total_speedup']:.1f}x speedup")
+                print(
+                    f"  ✓ Completed: SLAF vs h5ad: {result['slaf_vs_h5ad_speedup']:.1f}x, SLAF vs TileDB: {result['slaf_vs_tiledb_speedup']:.1f}x"
+                )
 
         except Exception as e:
             if verbose:
@@ -285,12 +413,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Benchmark gene filtering")
     parser.add_argument("h5ad_path", help="Path to h5ad file")
     parser.add_argument("slaf_path", help="Path to SLAF dataset")
+    parser.add_argument("tiledb_path", help="Path to TileDB SOMA experiment")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
 
     args = parser.parse_args()
 
     results = benchmark_gene_filtering(
-        args.h5ad_path, args.slaf_path, verbose=args.verbose
+        args.h5ad_path, args.slaf_path, args.tiledb_path, verbose=args.verbose
     )
 
     # Print results table

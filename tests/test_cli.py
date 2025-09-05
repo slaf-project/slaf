@@ -549,6 +549,7 @@ class TestCLI:
                     use_optimized_dtypes=True,
                     enable_v2_manifest=True,
                     compact_after_write=False,
+                    tiledb_collection_name="RNA",
                 )
 
     @patch("slaf.cli.check_dependencies")
@@ -1140,6 +1141,7 @@ class TestCLI:
                         use_optimized_dtypes=True,
                         enable_v2_manifest=True,
                         compact_after_write=False,
+                        tiledb_collection_name="RNA",
                     )
 
     @patch("slaf.cli.check_dependencies")
@@ -1180,6 +1182,7 @@ class TestCLI:
                     use_optimized_dtypes=True,
                     enable_v2_manifest=True,
                     compact_after_write=False,
+                    tiledb_collection_name="RNA",
                 )
 
     @patch("slaf.cli.check_dependencies")
@@ -1220,6 +1223,7 @@ class TestCLI:
                     use_optimized_dtypes=True,
                     enable_v2_manifest=True,
                     compact_after_write=False,
+                    tiledb_collection_name="RNA",
                 )
 
     def test_convert_help_text_contains_chunked_info(self, runner):

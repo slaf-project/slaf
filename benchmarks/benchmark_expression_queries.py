@@ -5,8 +5,18 @@ from benchmark_utils import get_object_memory_usage, get_slaf_memory_usage
 
 from slaf.core.slaf import SLAFArray
 
+# Try to import tiledbsoma
+try:
+    import tiledbsoma
 
-def demo_realistic_expression_queries(h5ad_path: str, slaf_path: str):
+    TILEDB_AVAILABLE = True
+except ImportError:
+    TILEDB_AVAILABLE = False
+
+
+def demo_realistic_expression_queries(
+    h5ad_path: str, slaf_path: str, tiledb_path: str = None
+):
     """Demo realistic expression query scenarios for PBMC data"""
 
     from slaf.core.slaf import SLAFArray
@@ -250,9 +260,122 @@ def _measure_slaf_expression_query(slaf_path: str, scenario: dict):
     }
 
 
+def _measure_tiledb_expression_query(tiledb_path: str, scenario: dict):
+    """Measure TileDB expression query performance in isolation"""
+    import gc
+
+    import polars as pl
+
+    if not TILEDB_AVAILABLE:
+        raise ImportError("TileDB SOMA is required but not available")
+
+    gc.collect()
+
+    # TileDB load
+    start = time.time()
+    experiment = tiledbsoma.Experiment.open(tiledb_path)
+    X = experiment.ms["RNA"].X["data"]
+    tiledb_load_time = time.time() - start
+    # Measure memory footprint of the experiment object
+    tiledb_load_memory = get_object_memory_usage(experiment)
+
+    # Read metadata for ID mapping
+    obs_table = experiment.obs.read().concat()
+    obs_df = pl.from_arrow(obs_table)
+    var_table = experiment.ms["RNA"].var.read().concat()
+    var_df = pl.from_arrow(var_table)
+
+    # Execute the query based on scenario type
+    start = time.time()
+    try:
+        if scenario["type"] == "single_cell":
+            cell_id = scenario["cell_id"]
+            # Find cell index using soma_joinid
+            cell_row = obs_df.filter(pl.col("obs_id") == cell_id)
+            if cell_row.height == 0:
+                raise ValueError(f"Cell ID {cell_id} not found in TileDB dataset")
+            cell_idx = cell_row["soma_joinid"][0]
+            result = X.read(([cell_idx], slice(None))).coos().concat().to_scipy()
+
+        elif scenario["type"] == "multiple_cells":
+            cell_ids = scenario["cell_ids"]
+            # Find cell indices using soma_joinid
+            cell_indices = []
+            for cell_id in cell_ids:
+                cell_row = obs_df.filter(pl.col("obs_id") == cell_id)
+                if cell_row.height == 0:
+                    raise ValueError(f"Cell ID {cell_id} not found in TileDB dataset")
+                cell_indices.append(cell_row["soma_joinid"][0])
+            result = X.read((cell_indices, slice(None))).coos().concat().to_scipy()
+
+        elif scenario["type"] == "single_gene":
+            gene_id = scenario["gene_id"]
+            # Find gene index using soma_joinid
+            gene_row = var_df.filter(pl.col("var_id") == gene_id)
+            if gene_row.height == 0:
+                raise ValueError(f"Gene ID {gene_id} not found in TileDB dataset")
+            gene_idx = gene_row["soma_joinid"][0]
+            result = X.read((slice(None), [gene_idx])).coos().concat().to_scipy()
+
+        elif scenario["type"] == "multiple_genes":
+            gene_ids = scenario["gene_ids"]
+            # Find gene indices using soma_joinid
+            gene_indices = []
+            for gene_id in gene_ids:
+                gene_row = var_df.filter(pl.col("var_id") == gene_id)
+                if gene_row.height == 0:
+                    raise ValueError(f"Gene ID {gene_id} not found in TileDB dataset")
+                gene_indices.append(gene_row["soma_joinid"][0])
+            result = X.read((slice(None), gene_indices)).coos().concat().to_scipy()
+
+        elif scenario["type"] == "submatrix":
+            cell_range = scenario["cell_range"]
+            gene_range = scenario["gene_range"]
+            result = (
+                X.read(
+                    (
+                        slice(cell_range[0], cell_range[1]),
+                        slice(gene_range[0], gene_range[1]),
+                    )
+                )
+                .coos()
+                .concat()
+                .to_scipy()
+            )
+
+        else:
+            raise ValueError(f"Unknown scenario type: {scenario['type']}")
+
+        tiledb_query_time = time.time() - start
+        # Measure memory of the result
+        tiledb_query_memory = get_object_memory_usage(result)
+        result_size = (
+            result.shape[0] * result.shape[1] if hasattr(result, "shape") else 0
+        )
+
+    except Exception as e:
+        print(f"TileDB query failed: {e}")
+        tiledb_query_time = 0
+        tiledb_query_memory = 0
+        result_size = 0
+
+    # Clean up
+    del experiment, obs_df, var_df
+    gc.collect()
+
+    return {
+        "tiledb_load_time": tiledb_load_time,
+        "tiledb_query_time": tiledb_query_time,
+        "tiledb_load_memory": float(tiledb_load_memory),
+        "tiledb_query_memory": float(tiledb_query_memory),
+        "result_size": result_size,
+    }
+
+
 def benchmark_expression_query_scenario(
     h5ad_path: str,
     slaf_path: str,
+    tiledb_path: str,
     scenario: dict,
 ):
     """Benchmark a single expression query scenario with isolated memory measurement"""
@@ -263,10 +386,19 @@ def benchmark_expression_query_scenario(
     # Measure SLAF in isolation
     slaf_result = _measure_slaf_expression_query(slaf_path, scenario)
 
+    # Measure TileDB in isolation (if available)
+    tiledb_result = None
+    if TILEDB_AVAILABLE and tiledb_path:
+        try:
+            tiledb_result = _measure_tiledb_expression_query(tiledb_path, scenario)
+        except Exception as e:
+            print(f"Warning: TileDB measurement failed: {e}")
+
     # Calculate totals and speedups
     h5ad_total_time = h5ad_result["h5ad_load_time"] + h5ad_result["h5ad_query_time"]
     slaf_total_time = slaf_result["slaf_init_time"] + slaf_result["slaf_query_time"]
 
+    # SLAF vs h5ad speedups
     total_speedup = h5ad_total_time / slaf_total_time if slaf_total_time > 0 else 0
     query_speedup = (
         h5ad_result["h5ad_query_time"] / slaf_result["slaf_query_time"]
@@ -279,7 +411,8 @@ def benchmark_expression_query_scenario(
         else 0
     )
 
-    return {
+    # Initialize result dictionary
+    result = {
         "scenario_type": "expression_query",
         "scenario_description": scenario["description"],
         "h5ad_total_time": 1000 * h5ad_total_time,
@@ -288,12 +421,13 @@ def benchmark_expression_query_scenario(
         "slaf_total_time": 1000 * slaf_total_time,
         "slaf_init_time": 1000 * slaf_result["slaf_init_time"],
         "slaf_query_time": 1000 * slaf_result["slaf_query_time"],
-        "total_speedup": total_speedup,
-        "query_speedup": query_speedup,
-        "load_speedup": load_speedup,
+        "slaf_vs_h5ad_speedup": total_speedup,
+        "slaf_vs_h5ad_query_speedup": query_speedup,
+        "slaf_vs_h5ad_load_speedup": load_speedup,
         "h5ad_result_size": h5ad_result["result_size"],
         "slaf_result_size": slaf_result["result_size"],
-        "results_match": h5ad_result["result_size"] == slaf_result["result_size"],
+        "h5ad_slaf_results_match": h5ad_result["result_size"]
+        == slaf_result["result_size"],
         # Memory breakdown
         "h5ad_load_memory_mb": h5ad_result["h5ad_load_memory"],
         "h5ad_query_memory_mb": h5ad_result["h5ad_query_memory"],
@@ -305,12 +439,58 @@ def benchmark_expression_query_scenario(
         + slaf_result["slaf_query_memory"],
     }
 
+    # Add TileDB results if available
+    if tiledb_result:
+        tiledb_total_time = (
+            tiledb_result["tiledb_load_time"] + tiledb_result["tiledb_query_time"]
+        )
+
+        # SLAF vs TileDB speedups
+        slaf_vs_tiledb_total_speedup = (
+            tiledb_total_time / slaf_total_time if slaf_total_time > 0 else 0
+        )
+        slaf_vs_tiledb_query_speedup = (
+            tiledb_result["tiledb_query_time"] / slaf_result["slaf_query_time"]
+            if slaf_result["slaf_query_time"] > 0
+            else 0
+        )
+        slaf_vs_tiledb_load_speedup = (
+            tiledb_result["tiledb_load_time"] / slaf_result["slaf_init_time"]
+            if slaf_result["slaf_init_time"] > 0
+            else 0
+        )
+
+        result.update(
+            {
+                "tiledb_total_time": 1000 * tiledb_total_time,
+                "tiledb_load_time": 1000 * tiledb_result["tiledb_load_time"],
+                "tiledb_query_time": 1000 * tiledb_result["tiledb_query_time"],
+                "slaf_vs_tiledb_speedup": slaf_vs_tiledb_total_speedup,
+                "slaf_vs_tiledb_query_speedup": slaf_vs_tiledb_query_speedup,
+                "slaf_vs_tiledb_load_speedup": slaf_vs_tiledb_load_speedup,
+                "tiledb_result_size": tiledb_result["result_size"],
+                "slaf_tiledb_results_match": slaf_result["result_size"]
+                == tiledb_result["result_size"],
+                # TileDB memory breakdown
+                "tiledb_load_memory_mb": tiledb_result["tiledb_load_memory"],
+                "tiledb_query_memory_mb": tiledb_result["tiledb_query_memory"],
+                "tiledb_total_memory_mb": tiledb_result["tiledb_load_memory"]
+                + tiledb_result["tiledb_query_memory"],
+            }
+        )
+
+    return result
+
 
 def benchmark_expression_queries(
-    h5ad_path: str, slaf_path: str, include_memory=True, verbose=False
+    h5ad_path: str,
+    slaf_path: str,
+    tiledb_path: str = None,
+    include_memory=True,
+    verbose=False,
 ):
     """Benchmark realistic expression query scenarios"""
-    scenarios = demo_realistic_expression_queries(h5ad_path, slaf_path)
+    scenarios = demo_realistic_expression_queries(h5ad_path, slaf_path, tiledb_path)
 
     if verbose:
         print("Benchmarking expression query scenarios")
@@ -349,12 +529,14 @@ def benchmark_expression_queries(
 
         try:
             # Always include loading time for each scenario
-            result = benchmark_expression_query_scenario(h5ad_path, slaf_path, scenario)
+            result = benchmark_expression_query_scenario(
+                h5ad_path, slaf_path, tiledb_path, scenario
+            )
 
             results.append(result)
 
             if verbose:
-                print(f"  ✓ Completed: {result['total_speedup']:.1f}x speedup")
+                print(f"  ✓ Completed: {result['slaf_vs_h5ad_speedup']:.1f}x speedup")
 
         except Exception as e:
             if verbose:
@@ -362,3 +544,38 @@ def benchmark_expression_queries(
             continue
 
     return results
+
+
+def main():
+    """CLI interface for expression queries benchmark"""
+    import argparse
+
+    from benchmark_utils import print_benchmark_table
+
+    parser = argparse.ArgumentParser(
+        description="Benchmark expression queries across h5ad, SLAF, and TileDB"
+    )
+    parser.add_argument("h5ad_path", help="Path to h5ad file")
+    parser.add_argument("slaf_path", help="Path to SLAF file")
+    parser.add_argument("tiledb_path", help="Path to TileDB file")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
+
+    args = parser.parse_args()
+
+    # Run the benchmark
+    results = benchmark_expression_queries(
+        h5ad_path=args.h5ad_path,
+        slaf_path=args.slaf_path,
+        tiledb_path=args.tiledb_path,
+        verbose=args.verbose,
+    )
+
+    # Print results table
+    if results:
+        print_benchmark_table(results)
+    else:
+        print("No benchmark results to display")
+
+
+if __name__ == "__main__":
+    main()

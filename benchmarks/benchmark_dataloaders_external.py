@@ -114,6 +114,15 @@ class ExternalDataloaderBenchmark:
                 "processes": 1,
                 "estimated_performance": 300,  # cells/sec estimate
             },
+            "TileDB DataLoader": {
+                "tier1": {"raw_mode": True, "batch_size": self.batch_size},
+                "tier2": {
+                    "raw_mode": True,
+                    "batch_size": self.batch_size,
+                },  # No tokenization
+                "processes": 1,
+                "estimated_performance": 800,  # cells/sec estimate
+            },
         }
 
     def measure_memory_usage_gb(self) -> float:
@@ -698,6 +707,85 @@ class ExternalDataloaderBenchmark:
         # So we don't report it in tier 2
         return None
 
+    def benchmark_tiledbloader_tier1(self) -> ExternalBenchmarkResult | None:
+        """Benchmark TileDB DataLoader in Tier 1 (raw data loading)."""
+
+        try:
+            from slaf.ml import TileDBDataLoader
+        except ImportError:
+            self.console.print(
+                "[yellow]Warning: TileDB dataloader not available, skipping TileDB benchmark[/yellow]"
+            )
+            return None
+
+        self.console.print(
+            "\n[bold blue]Benchmarking TileDB DataLoader - Tier 1 (Raw Data Loading)[/bold blue]"
+        )
+
+        # Setup TileDB DataLoader
+        try:
+            tiledb_path = "../slaf-datasets/synthetic_50k_processed.tiledb"
+
+            dataloader = TileDBDataLoader(
+                tiledb_path=tiledb_path,
+                batch_size=self.batch_size,
+                prefetch_batch_size=1024,
+                seed=42,
+                n_epochs=1000,  # Match SLAF's n_epochs for continuous streaming
+                verbose=False,  # Suppress verbose output for clean benchmark
+                max_queue_size=500,
+            )
+        except Exception as e:
+            self.console.print(f"[red]Error setting up TileDB DataLoader: {e}[/red]")
+            return None
+
+        # Warm up
+        self.console.print("Warming up...")
+        warmup_batches = 3
+        for i, _batch in enumerate(dataloader):
+            if i >= warmup_batches:
+                break
+
+        # Benchmark with peak memory tracking
+        self.console.print("Running benchmark...")
+        measurement_duration = 10  # 10 seconds
+
+        total_cells, batch_count, elapsed_time, peak_memory = (
+            self.benchmark_with_memory_tracking(
+                dataloader, measurement_duration, "TileDB DataLoader"
+            )
+        )
+
+        # Clean up the dataloader to stop background processing
+        del dataloader
+        gc.collect()
+
+        # Calculate metrics
+        throughput_cells_per_sec = total_cells / elapsed_time
+
+        # Debug output
+        self.console.print(
+            f"  Debug: {total_cells} cells, {elapsed_time:.2f}s, {throughput_cells_per_sec:.0f} cells/sec"
+        )
+
+        return ExternalBenchmarkResult(
+            system_name="TileDB DataLoader",
+            tier="tier1",
+            throughput_cells_per_sec=throughput_cells_per_sec,
+            memory_usage_gb=peak_memory,
+            output_type="raw",
+            processes=1,  # Single process
+            measurement_time=elapsed_time,
+            total_cells=total_cells,
+        )
+
+    def benchmark_tiledbloader_tier2(self) -> ExternalBenchmarkResult | None:
+        """Benchmark TileDB DataLoader in Tier 2 (GPU-ready output)."""
+
+        # TileDB DataLoader only provides raw data, not GPU-ready output
+        # So we don't report it in tier 2
+        return None
+
     def run_benchmarks(self) -> list[ExternalBenchmarkResult]:
         """Run benchmarks for all external dataloaders."""
 
@@ -758,6 +846,18 @@ class ExternalDataloaderBenchmark:
                 results.append(annloader_tier2)
         except Exception as e:
             self.console.print(f"[red]Error benchmarking AnnLoader: {e}[/red]")
+
+        # Run TileDB DataLoader benchmarks
+        try:
+            tiledbloader_tier1 = self.benchmark_tiledbloader_tier1()
+            if tiledbloader_tier1:
+                results.append(tiledbloader_tier1)
+
+            tiledbloader_tier2 = self.benchmark_tiledbloader_tier2()
+            if tiledbloader_tier2:
+                results.append(tiledbloader_tier2)
+        except Exception as e:
+            self.console.print(f"[red]Error benchmarking TileDB DataLoader: {e}[/red]")
 
         return results
 

@@ -3,10 +3,12 @@ import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import h5py
 import numpy as np
 import pandas as pd
+import polars as pl
 import pyarrow as pa
 from scipy import sparse
 
@@ -855,6 +857,210 @@ class Chunked10xMTXReader(BaseChunkedReader):
         return chunk_table
 
 
+class ChunkedTileDBReader(BaseChunkedReader):
+    """Chunked reader for TileDB SOMA format files."""
+
+    def __init__(
+        self, tiledb_path: str, collection_name: str = "RNA", value_type: str = "auto"
+    ):
+        """
+        Initialize TileDB chunked reader.
+
+        Args:
+            tiledb_path: Path to TileDB SOMA experiment directory
+            collection_name: Name of the measurement collection (default: "RNA")
+            value_type: Data type for expression values (default: "uint16")
+        """
+        super().__init__(tiledb_path)
+        self.collection_name = collection_name
+        self.value_type = value_type
+        self._experiment: Any = None
+        self._X: Any = None
+        self._obs_df: pd.DataFrame | None = None
+        self._var_df: pd.DataFrame | None = None
+
+    def _open_file(self) -> None:
+        """Open TileDB SOMA experiment."""
+        try:
+            import tiledbsoma
+        except ImportError as e:
+            raise ImportError(
+                "TileDB SOMA is required for TileDB format support. "
+                "Install with: pip install tiledbsoma"
+            ) from e
+
+        self._experiment = tiledbsoma.Experiment.open(self.file_path)
+        assert self._experiment is not None, "Failed to open TileDB experiment"
+
+        # Get the measurement collection
+        if self.collection_name not in self._experiment.ms:
+            available_collections = list(self._experiment.ms.keys())
+            raise ValueError(
+                f"Collection '{self.collection_name}' not found. "
+                f"Available collections: {available_collections}"
+            )
+
+        self._X = self._experiment.ms[self.collection_name].X["data"]
+
+    def _close_file(self) -> None:
+        """Close TileDB SOMA experiment."""
+        if self._experiment is not None:
+            self._experiment.close()
+            self._experiment = None
+            self._X = None
+
+    @property
+    def n_obs(self) -> int:
+        """Number of observations (cells)."""
+        if self._X is None:
+            raise RuntimeError("File not opened")
+        return self._X.shape[0]
+
+    @property
+    def n_vars(self) -> int:
+        """Number of variables (genes)."""
+        if self._X is None:
+            raise RuntimeError("File not opened")
+        return self._X.shape[1]
+
+    @property
+    def obs_names(self) -> np.ndarray:
+        """Observation names (cell IDs)."""
+        if self._obs_df is None:
+            self._obs_df = self.get_obs_metadata()
+        assert self._obs_df is not None, "Failed to load observation metadata"
+        return self._obs_df.index.values
+
+    @property
+    def var_names(self) -> np.ndarray:
+        """Variable names (gene IDs)."""
+        if self._var_df is None:
+            self._var_df = self.get_var_metadata()
+        assert self._var_df is not None, "Failed to load variable metadata"
+        return self._var_df.index.values
+
+    def get_obs_metadata(self) -> pd.DataFrame:
+        """Get observation metadata."""
+        if self._experiment is None:
+            raise RuntimeError("File not opened")
+
+        # Get obs dataframe from the experiment level
+        obs_df = pl.from_arrow(self._experiment.obs.read().concat()).to_pandas()
+        return obs_df
+
+    def get_var_metadata(self) -> pd.DataFrame:
+        """Get variable metadata."""
+        if self._experiment is None:
+            raise RuntimeError("File not opened")
+
+        # Get var dataframe from the measurement collection
+        var_df = pl.from_arrow(
+            self._experiment.ms[self.collection_name].var.read().concat()
+        ).to_pandas()
+        return var_df
+
+    def iter_chunks(self, chunk_size: int = 1000, obs_chunk: bool = True):
+        """Iterate over chunks by reading from TileDB and returning Arrow tables."""
+        if not obs_chunk:
+            raise NotImplementedError(
+                "Variable chunking not supported for TileDB files"
+            )
+
+        if self._X is None:
+            raise RuntimeError("File not opened")
+
+        total_obs = self.n_obs
+        for start in range(0, total_obs, chunk_size):
+            end = min(start + chunk_size, total_obs)
+
+            # Read slice from TileDB as Arrow table
+            arrow_data = self._X.read((slice(start, end),)).tables().concat()
+
+            # Convert Arrow table to Polars DataFrame for processing
+            df = pl.from_arrow(arrow_data)
+
+            # Rename SOMA columns to expected names
+            df = df.rename(
+                {
+                    "soma_dim_0": "cell_integer_id",
+                    "soma_dim_1": "gene_integer_id",
+                    "soma_data": "value",
+                }
+            )
+
+            # Convert data types to match expected schema
+            # Always convert cell and gene IDs to the correct types
+            df = df.with_columns(
+                [
+                    pl.col("cell_integer_id").cast(pl.UInt32),
+                    pl.col("gene_integer_id").cast(pl.UInt16),
+                ]
+            )
+
+            # Only convert value column if value_type is specified and different from original
+            if self.value_type == "uint16":
+                df = df.with_columns([pl.col("value").cast(pl.UInt16)])
+            elif self.value_type == "float32":
+                df = df.with_columns([pl.col("value").cast(pl.Float32)])
+            # If value_type is None or "auto", keep original data type for validation
+
+            # Convert back to Arrow table
+            chunk_table = df.to_arrow()
+
+            # Create slice for this chunk
+            obs_slice = slice(start, end)
+
+            yield chunk_table, obs_slice
+
+    def _get_chunk_impl(self, obs_slice: slice, var_slice: slice):
+        """Get a specific chunk of data."""
+        if self._X is None:
+            raise RuntimeError("File not opened")
+
+        # Read slice from TileDB as Arrow table
+        arrow_data = (
+            self._X.read(
+                (
+                    obs_slice,
+                    var_slice,
+                )
+            )
+            .tables()
+            .concat()
+        )
+
+        # Convert Arrow table to Polars DataFrame for processing
+        df = pl.from_arrow(arrow_data)
+
+        # Rename SOMA columns to expected names
+        df = df.rename(
+            {
+                "soma_dim_0": "cell_integer_id",
+                "soma_dim_1": "gene_integer_id",
+                "soma_data": "value",
+            }
+        )
+
+        # Convert data types to match expected schema
+        # Always convert cell and gene IDs to the correct types
+        df = df.with_columns(
+            [
+                pl.col("cell_integer_id").cast(pl.UInt32),
+                pl.col("gene_integer_id").cast(pl.UInt16),
+            ]
+        )
+
+        # Only convert value column if value_type is specified and different from original
+        if self.value_type == "uint16":
+            df = df.with_columns([pl.col("value").cast(pl.UInt16)])
+        elif self.value_type == "float32":
+            df = df.with_columns([pl.col("value").cast(pl.Float32)])
+        # If value_type is None or "auto", keep original data type for validation
+
+        # Convert back to Arrow table
+        return df.to_arrow()
+
+
 class Chunked10xH5Reader(BaseChunkedReader):
     """
     Native chunked reader for 10x H5 file format.
@@ -1320,7 +1526,10 @@ class Chunked10xH5Reader(BaseChunkedReader):
 
 
 def create_chunked_reader(
-    file_path: str, chunk_size: int = 25000, value_type: str = "uint16"
+    file_path: str,
+    chunk_size: int = 25000,
+    value_type: str = "uint16",
+    collection_name: str = "RNA",
 ) -> BaseChunkedReader:
     """
     Factory function to create the appropriate chunked reader based on file format.
@@ -1331,6 +1540,10 @@ def create_chunked_reader(
         Path to the data file or directory
     chunk_size : int
         Size of chunks for processing. Default: 25,000 elements.
+    value_type : str
+        Data type for expression values. Default: "uint16".
+    collection_name : str
+        Name of the measurement collection for TileDB format. Default: "RNA".
 
     Returns:
     --------
@@ -1358,5 +1571,11 @@ def create_chunked_reader(
         return Chunked10xMTXReader(file_path, value_type=value_type)
     elif format_type == "10x_h5":
         return Chunked10xH5Reader(file_path, value_type=value_type)
+    elif format_type == "tiledb":
+        # For TileDB, use "auto" as default to preserve original data types for validation
+        tiledb_value_type = value_type if value_type != "uint16" else "auto"
+        return ChunkedTileDBReader(
+            file_path, collection_name=collection_name, value_type=tiledb_value_type
+        )
     else:
         raise ValueError(f"Unsupported format for chunked reading: {format_type}")
