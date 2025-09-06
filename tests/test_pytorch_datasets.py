@@ -84,7 +84,8 @@ class TestSLAFIterableDataset:
         assert processor.n_expression_bins == 10
         assert processor.use_binned_expressions is True
         assert hasattr(processor, "expression_dataset")
-        assert hasattr(processor, "batch_generator")
+        # With MoS enabled by default, we should have fragment_generators instead of batch_generator
+        assert hasattr(processor, "fragment_generators")
 
     def test_prefetch_batch_processor_fragment_parameter(self, tiny_slaf):
         """Test the by_fragment parameter in PrefetchBatchProcessor."""
@@ -92,7 +93,7 @@ class TestSLAFIterableDataset:
         shuffle = RandomShuffle()
         tokenizer = SLAFTokenizer(tiny_slaf)
 
-        # Test fragment-based loading
+        # Test fragment-based loading (with MoS disabled to test fragment mode)
         processor_fragment = PrefetchBatchProcessor(
             slaf_array=tiny_slaf,
             window=window,
@@ -101,11 +102,12 @@ class TestSLAFIterableDataset:
             batch_size=32,
             verbose=False,
             by_fragment=True,
+            use_mixture_of_scanners=False,  # Disable MoS to test fragment mode
         )
 
         assert processor_fragment.by_fragment is True
 
-        # Test batch-based loading
+        # Test batch-based loading (with MoS disabled to test batch mode)
         processor_batch = PrefetchBatchProcessor(
             slaf_array=tiny_slaf,
             window=window,
@@ -114,6 +116,7 @@ class TestSLAFIterableDataset:
             batch_size=32,
             verbose=False,
             by_fragment=False,
+            use_mixture_of_scanners=False,  # Disable MoS to test batch mode
         )
 
         assert processor_batch.by_fragment is False
@@ -786,14 +789,16 @@ class TestPrefetchBatchProcessing:
             }
         )
 
-        mock_generator = iter([mock_batch])
-        mock_dataset.to_batches.return_value = mock_generator
+        # Mock fragment for MoS mode
+        mock_fragment = Mock()
+        mock_fragment.to_batches.return_value = iter([mock_batch])
+        mock_dataset.get_fragments.return_value = [mock_fragment]
 
         # Mock Lance
         with patch("slaf.ml.datasets.lance") as mock_lance:
             mock_lance.dataset.return_value = mock_dataset
 
-            # Create processor
+            # Create processor with MoS disabled to avoid fragment generator issues
             window = GeneformerWindow()
             shuffle = RandomShuffle()
             tokenizer = SLAFTokenizer(mock_slaf)
@@ -804,6 +809,7 @@ class TestPrefetchBatchProcessing:
                 shuffle=shuffle,
                 tokenizer=tokenizer,
                 batches_per_chunk=1,
+                use_mixture_of_scanners=False,  # Disable MoS to avoid fragment generator issues
             )
 
             # Test that processor can be initialized
@@ -1129,31 +1135,36 @@ class TestPrefetchBatchProcessing:
         )
 
     def test_mixture_of_scanners_backward_compatibility(self, tiny_slaf):
-        """Test that MoS is backward compatible (disabled by default)"""
+        """Test that MoS is backward compatible (enabled by default) in PrefetchBatchProcessor"""
+        window = ScGPTWindow()
+        shuffle = RandomShuffle()
         tokenizer = SLAFTokenizer(tiny_slaf)
 
-        # Default behavior (MoS disabled)
-        dataset_default = SLAFIterableDataset(
+        # Default behavior (MoS enabled)
+        processor_default = PrefetchBatchProcessor(
             slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
             tokenizer=tokenizer,
-            batch_size=32,
         )
 
-        assert dataset_default.batch_processor.use_mixture_of_scanners is False
-        assert not hasattr(dataset_default.batch_processor, "fragment_generators")
-        assert hasattr(dataset_default.batch_processor, "batch_generator")
+        assert processor_default.use_mixture_of_scanners is True
+        assert hasattr(processor_default, "fragment_generators")
+        assert not hasattr(processor_default, "batch_generator")
 
-        # Explicitly disable MoS
-        dataset_disabled = SLAFIterableDataset(
+        # Explicitly disable MoS and use batch mode
+        processor_disabled = PrefetchBatchProcessor(
             slaf_array=tiny_slaf,
+            window=window,
+            shuffle=shuffle,
             tokenizer=tokenizer,
-            batch_size=32,
             use_mixture_of_scanners=False,
+            by_fragment=False,  # Set to False to get batch_generator
         )
 
-        assert dataset_disabled.batch_processor.use_mixture_of_scanners is False
-        assert not hasattr(dataset_disabled.batch_processor, "fragment_generators")
-        assert hasattr(dataset_disabled.batch_processor, "batch_generator")
+        assert processor_disabled.use_mixture_of_scanners is False
+        assert not hasattr(processor_disabled, "fragment_generators")
+        assert hasattr(processor_disabled, "batch_generator")
 
     def test_mixture_of_scanners_with_raw_mode(self, tiny_slaf):
         """Test MoS functionality with raw mode"""
@@ -1406,12 +1417,12 @@ class TestPrefetchBatchProcessing:
         assert len(processor.generator_active) == len(processor.fragment_generators)
 
     def test_prefetch_batch_processor_mos_backward_compatibility(self, tiny_slaf):
-        """Test that MoS is backward compatible (disabled by default) in PrefetchBatchProcessor"""
+        """Test that MoS is backward compatible (enabled by default) in PrefetchBatchProcessor"""
         window = ScGPTWindow()
         shuffle = RandomShuffle()
         tokenizer = SLAFTokenizer(tiny_slaf)
 
-        # Default behavior (MoS disabled)
+        # Default behavior (MoS enabled)
         processor_default = PrefetchBatchProcessor(
             slaf_array=tiny_slaf,
             window=window,
@@ -1419,17 +1430,18 @@ class TestPrefetchBatchProcessing:
             tokenizer=tokenizer,
         )
 
-        assert processor_default.use_mixture_of_scanners is False
-        assert not hasattr(processor_default, "fragment_generators")
-        assert hasattr(processor_default, "batch_generator")
+        assert processor_default.use_mixture_of_scanners is True
+        assert hasattr(processor_default, "fragment_generators")
+        assert not hasattr(processor_default, "batch_generator")
 
-        # Explicitly disable MoS
+        # Explicitly disable MoS and use batch mode
         processor_disabled = PrefetchBatchProcessor(
             slaf_array=tiny_slaf,
             window=window,
             shuffle=shuffle,
             tokenizer=tokenizer,
             use_mixture_of_scanners=False,
+            by_fragment=False,  # Set to False to get batch_generator
         )
 
         assert processor_disabled.use_mixture_of_scanners is False

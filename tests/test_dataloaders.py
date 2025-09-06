@@ -718,16 +718,16 @@ class TestSLAFDataLoader:
         assert batch_count > 0
 
     def test_mixture_of_scanners_backward_compatibility(self, tiny_slaf):
-        """Test that MoS is backward compatible (disabled by default) in SLAFDataLoader"""
-        # Default behavior (MoS disabled)
+        """Test that MoS is backward compatible (enabled by default) in SLAFDataLoader"""
+        # Default behavior (MoS enabled)
         dataloader_default = SLAFDataLoader(
             slaf_array=tiny_slaf,
             batch_size=32,
         )
 
-        assert dataloader_default.use_mixture_of_scanners is False
+        assert dataloader_default.use_mixture_of_scanners is True
         assert (
-            dataloader_default._dataset.batch_processor.use_mixture_of_scanners is False
+            dataloader_default._dataset.batch_processor.use_mixture_of_scanners is True
         )
 
         # Explicitly disable MoS
