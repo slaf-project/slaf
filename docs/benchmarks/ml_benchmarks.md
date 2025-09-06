@@ -1,6 +1,6 @@
 # ML Benchmarks: SLAF vs State-of-the-Art Dataloaders
 
-SLAF provides state-of-the-art (SOTA) performance in data loading throughput for machine learning workflows, reaching **2x speedups** relative to current standards, particularly for training transformer-based single-cell foundation models. What follows are comprehensive benchmarks comparing SLAF against state-of-the-art dataloaders including scDataset, AnnDataLoader, and AnnLoader.
+SLAF provides state-of-the-art (SOTA) performance in data loading throughput for machine learning workflows, reaching **2.3x speedups** relative to current SOTA, particularly for training transformer-based single-cell foundation models. What follows are comprehensive benchmarks comparing SLAF against state-of-the-art dataloaders including scDataset, AnnDataLoader, AnnLoader, and TileDB DataLoader.
 
 ## **Motivation**
 
@@ -10,11 +10,11 @@ The goal of these benchmarks is to demonstrate that SLAF can stream tokens to mo
 
 ### **Dataset: Tahoe-100M**
 
-We downloaded one of the 7 h5ad files comprising the [Tahoe-100M dataset](https://www.biorxiv.org/content/10.1101/2025.02.20.639398v1) made accessible by [ARC Institute](https://github.com/ArcInstitute/arc-virtual-cell-atlas/tree/main). This slice of the dataset contains 5,481,420 cells and 62,710 genes, with approximately 8B non-zero expression values. All benchmarks reported below used this dataset unless indicated otherwise.
+We downloaded one of the 7 h5ad files comprising the [Tahoe-100M dataset](https://www.biorxiv.org/content/10.1101/2025.02.20.639398v1) made accessible by [ARC Institute](https://github.com/ArcInstitute/arc-virtual-cell-atlas/tree/main). This slice of the dataset contains 5,481,420 cells and 62,710 genes, with approximately 8B non-zero expression values. All benchmarks reported below used this dataset except for the TileDB dataloader since we couldn't successfully convert a 5M-cell dataset to the Tile DB SOMA Experiment format with 32G RAM. For the TileDB DataLoader alone, we report numbers on a smaller 50k-cell synthetic dataset.
 
 ### **Conversion and Optimization**
 
-We used the [SLAF converter](../api/data/#slafconverter) (see [Migrating to SLAF](../user-guide/migrating-to-slaf.md)) to convert the h5ad file to SLAF format. The Lance table fragments (Lance's term for partitions) were optimized for compression/query tradeoffs, with 50M non-zeros (rows) per fragment in the expression table. While inherently parallelizable, conversion is currently single process, and took about 10 minutes for this dataset.
+We used the [SLAF converter](../api/data/#slafconverter) (see [Migrating to SLAF](../user-guide/migrating-to-slaf.md)) to convert the h5ad file to SLAF format. The Lance table fragments (Lance's term for partitions) were optimized for compression/query tradeoffs, with 5-10M non-zeros (rows) per fragment in the expression table. While inherently parallelizable, conversion is currently single process, and took about 10 minutes for this dataset.
 
 ### **Hardware Configuration**
 
@@ -31,7 +31,14 @@ We used the [SLAF converter](../api/data/#slafconverter) (see [Migrating to SLAF
 
 ### **Methodology**
 
-We used a batch size of 32, 3 warmup batches, and a measurement duration of 10 seconds for all internal benchmarks.
+We used a batch size of 32 with an enhanced warmup and measurement procedure to ensure accurate and consistent results, especially for the Mixture of Scanners (MoS) strategy:
+
+- **Initial Warmup**: 15 batches to initialize the dataloader
+- **Extended Warmup**: 10 seconds to allow MoS to fully stabilize all fragment generators
+- **Measurement Period**: 40 seconds of pure performance measurement (excluding warmup time)
+- **Total Runtime**: 50 seconds per benchmark (10s warmup + 40s measurement)
+
+This methodology ensures that all dataloader strategies reach steady-state performance before measurement begins, eliminating variance from incomplete initialization.
 
 ### **Tokenization Strategy Comparison**
 
@@ -39,17 +46,17 @@ We benchmarked different tokenization strategies to understand the performance i
 
 | Tokenization Strategy                   | Throughput (cells/sec) | Throughput (tokens/sec) |
 | --------------------------------------- | ---------------------- | ----------------------- |
-| scGPT with binning                      | 6,633                  | 13,598,202              |
-| scGPT without binning                   | 6,750                  | 13,839,536              |
-| Geneformer with percentile filtering    | 9,246                  | 18,937,785              |
-| Geneformer without percentile filtering | 9,496                  | 19,448,877              |
-| Raw mode (no tokenization)              | 25,184                 | N/A                     |
+| scGPT with binning                      | 5,350                  | 10,967,687              |
+| scGPT without binning                   | 5,157                  | 10,572,411              |
+| Geneformer with percentile filtering    | 6,999                  | 14,335,137              |
+| Geneformer without percentile filtering | 6,494                  | 13,300,337              |
+| Raw mode (no tokenization)              | 22,323                 | N/A                     |
 
 !!! success "Strategy Insights"
 
-    - **Geneformer strategies** show ~40% higher throughput than scGPT strategies
-    - **Binning and filtering** have minimal performance impact (~2% difference)
-    - **Raw mode** provides 2.8x higher throughput than tokenized modes, demonstrating the tokenization overhead
+    - **Geneformer strategies** show ~30% higher throughput than scGPT strategies
+    - **Binning and filtering** have minimal performance impact (~7% difference)
+    - **Raw mode** provides 3.4x higher throughput than tokenized modes, demonstrating the tokenization overhead
 
 ### **Raw Mode Performance Scaling**
 
@@ -57,10 +64,10 @@ Raw mode bypasses tokenization and returns Polars DataFrames that have the exact
 
 | Batch Size | Throughput (cells/sec) | Total Cells | Measurement Time (s) |
 | ---------- | ---------------------- | ----------- | -------------------- |
-| 32         | 23,988                 | 240,374     | 10.0                 |
-| 64         | 23,650                 | 236,505     | 10.0                 |
-| 128        | 27,691                 | 277,052     | 10.0                 |
-| 256        | 28,125                 | 281,315     | 10.0                 |
+| 32         | 23,783                 | 713,577     | 30.0                 |
+| 64         | 25,259                 | 765,957     | 30.3                 |
+| 128        | 28,079                 | 842,394     | 30.0                 |
+| 256        | 28,169                 | 850,146     | 30.2                 |
 
 !!! success "Optimization Validation"
 
@@ -81,7 +88,7 @@ SLAF supports two loading strategies: fragment-based and batch-based loading. Fr
 
 !!! info "Strategy Selection"
 
-    Batch-based loading is the default strategy in SLAF as it has lower memory overhead. Fragment-based loading is available as an alternative with just a single additional argument (`by_fragment=True`) to the SLAFDataLoader for users who prefer processing larger data chunks.
+    Mixture of Scanners (MoS) is the default strategy in SLAF for foundation model training, providing 88% of random entropy with only 3.2% throughput penalty. Sequential loading is available for maximum throughput by setting `use_mixture_of_scanners=False, by_fragment=False` to the SLAFDataLoader for users who prioritize speed over entropy.
 
 ### **Tokenized Mode: Tokens/sec Scaling**
 
@@ -89,24 +96,85 @@ Tokenized mode provides pre-tokenized sequences ready for GPU training, demonstr
 
 | Batch Size | Throughput (cells/sec) | Throughput (tokens/sec) | Total Cells | Measurement Time (s) |
 | ---------- | ---------------------- | ----------------------- | ----------- | -------------------- |
-| 32         | 9,424                  | 19,299,581              | 95,157      | 10.1                 |
-| 64         | 9,526                  | 19,508,342              | 95,436      | 10.0                 |
-| 128        | 9,598                  | 19,657,469              | 96,038      | 10.0                 |
-| 256        | 9,655                  | 19,773,029              | 96,769      | 10.0                 |
+| 32         | 7,141                  | 14,624,846              | 215,990     | 30.2                 |
+| 64         | 7,147                  | 14,637,356              | 223,872     | 31.3                 |
+| 128        | 7,309                  | 14,969,420              | 224,663     | 30.7                 |
+| 256        | 7,269                  | 14,885,945              | 224,511     | 30.9                 |
 
 !!! success "Tokenization Efficiency"
 
     Token throughput remains remarkably constant across batch sizes (1.0x scaling), demonstrating that SLAF's tokenization pipeline is well-optimized and not the bottleneck. This validates that tokens/sec is the meaningful metric for GPU training workloads.
 
+### **Entropy Measurement: Training Batch Randomness**
+
+To ensure models don't converge to local minima due to biased and highly correlated training batches, we want to make training batches as random as possible. However, random reads are more expensive than sequential reads, so we need to balance randomness with performance.
+
+To address this challenge, we developed a novel dataloader strategy called the **Mixture of Scanners (MoS)** approach, which randomly tasks a small randomized group of scanners to populate a queue of training batches by reading from different starting points of the dataset. A deeper dive into our approach to optimize dataloaders is available [here](../blog/blazing-fast-dataloaders.md) and a more detailed write up of the MoS dataloader is in the works.
+
+To measure entropy without using metadata, we simulate random cell IDs and measure L1 distance between pairs of cell IDs both within and across adjacent training batches for our different dataloaders to show how each dataloader strategy performs relative to a purely sequential (lowerbound) vs a truly random approach (upperbound).
+
+We ran a test on 10,000 batches with a batch_size of 32 from a 5.4M cell dataset and found these results:
+
+**Entropy Measurement Results:**
+
+| Strategy   | Within-Batch L1 | Across-Batch L1 |
+| ---------- | --------------- | --------------- |
+| sequential | 94.1            | 104.5           |
+| fragment   | 1,643.5         | 1,672.6         |
+| mos        | 1,608,648.2     | 1,642,829.9     |
+| random     | 1,828,595.2     | 1,824,468.9     |
+
+**Normalized Entropy Scores [0=Sequential, 1=Random]:**
+
+| Strategy   | Within-Batch L1 | Across-Batch L1 |
+| ---------- | --------------- | --------------- |
+| sequential | 0.000           | 0.000           |
+| fragment   | 0.001           | 0.001           |
+| mos        | 0.880           | 0.900           |
+
+**Throughput Performance Results:**
+
+| Strategy   | Throughput (cells/sec) | Total Cells | Total Batches |
+| ---------- | ---------------------- | ----------- | ------------- |
+| sequential | 23,728                 | 711,990     | 23,509        |
+| fragment   | 26,769                 | 803,072     | 25,216        |
+| mos        | 22,972                 | 689,234     | 21,546        |
+
+!!! success "Entropy Strategy Performance"
+
+    - **Sequential loading** provides the lowest entropy (0.000), with contiguous cell IDs from Lance batches
+    - **Fragment-based loading** shows minimal improvement (0.001), processing complete Lance fragments for slightly higher entropy
+    - **Mixture of Scanners (MoS)** achieves near-random entropy (0.88+), demonstrating effective randomization while maintaining high throughput
+    - **MoS approach** provides **88% of the entropy** of truly random sampling while maintaining the performance benefits of structured data access
+
+!!! success "Throughput Performance Analysis"
+
+    - **Fragment-based loading** achieves the highest throughput (26,769 cells/sec), showing **12.8% improvement** over sequential loading
+    - **MoS approach** maintains competitive throughput (22,972 cells/sec), only **3.2% slower** than sequential loading despite providing 88% random entropy
+    - **Performance-entropy trade-off**: MoS successfully balances high entropy (0.88) with minimal throughput penalty (3.2% vs sequential)
+    - **All strategies** maintain excellent throughput (>22K cells/sec), demonstrating SLAF's efficient data loading architecture
+
+!!! info "Entropy Interpretation Guide"
+
+    - **Within-Batch**: How random are the cells within each batch
+    - **Across-Batch**: How much batch composition changes between batches
+    - **L1 Distance**: Mean absolute difference between cell ID pairs
+    - **Scores closer to 0** = more sequential, **closer to 1** = more random
+
+!!! info "MoS Implementation Benefits"
+
+    The Mixture of Scanners approach successfully balances the competing demands of training batch randomness and data loading performance. By using multiple scanners reading from different dataset locations, MoS achieves 88% of the entropy of truly random sampling without creating pre-randomized copies of datasets. The approach maintains 96.8% of sequential loading throughput while providing near-random batch composition, making it ideal for training foundation models that require both high throughput and effective batch randomization.
+
 ## **External Benchmarks**
 
 ### **Alternate Dataloaders**
 
-We compared SLAF against three state-of-the-art dataloaders:
+We compared SLAF against four state-of-the-art dataloaders:
 
 1. **[AnnLoader](https://anndata.readthedocs.io/en/latest/generated/anndata.experimental.AnnLoader.html)** - Experimental PyTorch DataLoader for AnnData objects from `anndata.experimental`
 2. **[AnnDataLoader](https://docs.scvi-tools.org/en/stable/api/reference/scvi.dataloaders.AnnDataLoader.html)** - From [scvi-tools](https://docs.scvi-tools.org/en/stable/index.html), designed for training variational autoencoder (VAE)-style models
 3. **[scDataset](https://github.com/Kidara/scDataset/tree/main)** - Recently released high-performance dataloader with multiprocessing support
+4. **[TileDB DataLoader](https://tiledbsoma.readthedocs.io/)** - An internal custom PyTorch DataLoader for TileDB SOMA experiments
 
 !!! question "Help"
 
@@ -116,24 +184,34 @@ We compared SLAF against three state-of-the-art dataloaders:
 
 To match the benchmarks from the [scDataset paper](https://arxiv.org/pdf/2506.01883) as closely as possible, we used a `batch_size=64` across all comparisons. For scDataset itself, we used the optimal parameters in our hardware (`block_size=8`, `fetch_factor=64`, which were different from the ones found to be optimal in the paper). However, we couldn't use `num_workers=12` out of the box because h5ad datasets aren't pickle-able and PyTorch DataLoaders expect this since they use multiprocessing.
 
+**Enhanced Measurement Procedure**: All external benchmarks now use the same enhanced measurement procedure as internal benchmarks for fair comparison:
+
+- **Initial Warmup**: 15 batches to initialize each dataloader
+- **Extended Warmup**: 10 seconds to allow all systems to reach steady state
+- **Measurement Period**: 40 seconds of pure performance measurement (excluding warmup time)
+- **Total Runtime**: 50 seconds per benchmark (10s warmup + 40s measurement)
+
+This ensures fair and consistent performance comparisons across all dataloader systems.
+
 ### **Tier 1: Raw Data Loading Comparison**
 
 Raw data loading performance measures the base throughput of each system without any tokenization overhead.
 
-| System        | Throughput (cells/sec) |
-| ------------- | ---------------------- |
-| **SLAF**      | **26,816**             |
-| scDataset     | 10,849                 |
-| AnnDataLoader | 408                    |
-| AnnLoader     | 224                    |
+| System            | Throughput (cells/sec) |
+| ----------------- | ---------------------- |
+| **SLAF**          | **25,244**             |
+| scDataset         | 9,411                  |
+| TileDB DataLoader | 552                    |
+| AnnDataLoader     | 413                    |
+| AnnLoader         | 250                    |
 
 !!! success "SOTA Performance"
 
-    SLAF achieves **2.5x higher throughput** than scDataset and **66x higher throughput** than AnnDataLoader in raw data loading.
+    SLAF achieves **2.7x higher throughput** than scDataset, **45.7x higher throughput** than TileDB DataLoader, **61.1x higher throughput** than AnnDataLoader, and **101x higher throughput** than AnnLoader in raw data loading.
 
 !!! info "scDataset Performance Analysis"
 
-    Our comprehensive benchmarks reveal that scDataset can achieve excellent performance with proper parameter tuning. We observed **10,849 cells/sec** with optimized parameters, which is **5.4x higher** than the paper's reported ~2,000 cells/sec, even without using multiprocessing. Note that these are completely different systems though (M1 Max vs NVIDIA DGX CPU).
+    Our comprehensive benchmarks reveal that scDataset can achieve excellent performance with proper parameter tuning. We observed **9,411 cells/sec** with optimized parameters, which is **4.7x higher** than the paper's reported ~2,000 cells/sec, even without using multiprocessing. Note that these are completely different systems though (M1 Max vs NVIDIA DGX CPU).
 
     However, we found significant limitations with multiprocessing due to pickling issues with h5py-backed AnnData objects. See our [detailed scDataset benchmarks](scdataset_benchmarks.md) for complete analysis including parameter scaling and multiprocessing limitations.
 
@@ -151,11 +229,11 @@ Raw data loading benchmarks are great, provided that we intend to train on gene 
 
 This GPU-ready throughput measures end-to-end performance including tokenization (that includes windowing, ranking, vocabulary mapping and padding), which is critical for training workflows involving models that turn cells into sentences.
 
-Even though SLAF's tokenizing dataloaders do more work, we find that their throughput exceeds scDataset's raw-data dataloader by 1.8x.
+Even though SLAF's tokenizing dataloaders do more work (tokenization), we find that their throughput remains competitive with scDataset's raw-data dataloader, achieving comparable performance despite the additional processing overhead.
 
 | System   | Throughput (cells/sec) | Throughput (tokens/sec) |
 | -------- | ---------------------- | ----------------------- |
-| **SLAF** | **9,607**              | **19,675,243**          |
+| **SLAF** | **7,465**              | **15,288,876**          |
 
 !!! success "GPU-Ready Cell Sentences"
 
@@ -173,7 +251,7 @@ Even though SLAF's tokenizing dataloaders do more work, we find that their throu
 
 !!! info "In-memory formats matter"
 
-    The performance difference between AnnDataLoader (392 cells/sec) and scDataset (10,785 cells/sec) is dramatic. While scDataset is smarter at batching and randomization, since our benchmark tests them on loading from h5ad, it's important to compare apples to apples dataloader outputs. AnnDataLoader and AnnLoader return `torch.sparse_csr` tensors whereas scDataset returns `scipy.sparse.csr_matrix`.
+    The performance difference between AnnDataLoader (413 cells/sec) and scDataset (9,411 cells/sec) is dramatic. While scDataset is smarter at batching and randomization, since our benchmark tests them on loading from h5ad, it's important to compare apples to apples dataloader outputs. AnnDataLoader and AnnLoader return `torch.sparse_csr` tensors whereas scDataset returns `scipy.sparse.csr_matrix`, and these format inter-conversions represent non-zero overhead.
 
     In our work, we noticed different overheads for conversion from polars dataframe (SLAF's preferred format for raw data) to torch and scipy sparse formats, and ultimately decided to keep raw outputs in polars. The performance of AnnLoader and AnnDataLoader relative to scDataset is almost certainly due to the overhead of conversion from scipy sparse arrays to torch arrays and worth benchmarking more carefully to identify low-hanging fruit for optimizations in both AnnLoader and AnnDataLoader.
 

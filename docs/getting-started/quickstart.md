@@ -307,7 +307,7 @@ input_ids, attention_mask = tokenizer.tokenize(
 ```python
 from slaf.ml import SLAFDataLoader
 
-# Create DataLoader
+# Create DataLoader (uses MoS by default for high entropy)
 dataloader = SLAFDataLoader(
     slaf_array=slaf_array,
     tokenizer_type="geneformer",  # or "scgpt"

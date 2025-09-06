@@ -79,6 +79,7 @@ class SLAFConverter:
         use_optimized_dtypes: bool = True,  # Use uint16/uint32 for better compression
         enable_v2_manifest: bool = True,  # Enable v2 manifest paths for better performance
         compact_after_write: bool = False,  # Compact dataset after writing for optimal storage (disabled by default to avoid manifest corruption)
+        tiledb_collection_name: str = "RNA",  # Collection name for TileDB format
     ):
         """
         Initialize converter with optimization options.
@@ -102,6 +103,8 @@ class SLAFConverter:
                               This is recommended for large datasets.
             compact_after_write: Compact the dataset after writing to optimize storage.
                                This creates a new version but significantly reduces file size.
+            tiledb_collection_name: Name of the measurement collection for TileDB format.
+                                  Default: "RNA". Only used when converting from TileDB format.
 
         Examples:
             >>> # Default optimization (recommended)
@@ -128,6 +131,7 @@ class SLAFConverter:
         self.use_optimized_dtypes = use_optimized_dtypes
         self.enable_v2_manifest = enable_v2_manifest
         self.compact_after_write = compact_after_write
+        self.tiledb_collection_name = tiledb_collection_name
 
     def convert(self, input_path: str, output_path: str, input_format: str = "auto"):
         """
@@ -142,6 +146,7 @@ class SLAFConverter:
             - **10x MTX**: 10x Genomics MTX directories containing matrix.mtx,
               barcodes.tsv, and genes.tsv files
             - **10x H5**: 10x Genomics H5 files (.h5) - Cell Ranger output format
+            - **tiledb**: TileDB SOMA format (.tiledb) - high-performance single-cell format
 
         The converter automatically detects the input format based on file extension
         and directory structure. For optimal performance, you can also specify the
@@ -159,6 +164,7 @@ class SLAFConverter:
                          - "h5ad": AnnData format
                          - "10x_mtx": 10x MTX directory format
                          - "10x_h5": 10x H5 file format
+                         - "tiledb": TileDB SOMA format
 
         Raises:
             FileNotFoundError: If the input file doesn't exist.
@@ -184,6 +190,12 @@ class SLAFConverter:
             >>> converter.convert("data.h5", "output.slaf")
             Converting 10x H5 file data.h5 to SLAF format...
             Loaded: 2700 cells × 32738 genes
+            Conversion complete! Saved to output.slaf
+
+            >>> # Convert TileDB SOMA file
+            >>> converter.convert("data.tiledb", "output.slaf")
+            Converting TileDB SOMA file data.tiledb to SLAF format...
+            Loaded: 50000 cells × 20000 genes
             Conversion complete! Saved to output.slaf
 
             >>> # Explicit format specification
@@ -221,6 +233,8 @@ class SLAFConverter:
             self._convert_10x_mtx(input_path, output_path)
         elif input_format == "10x_h5":
             self._convert_10x_h5(input_path, output_path)
+        elif input_format == "tiledb":
+            self._convert_tiledb(input_path, output_path)
         else:
             raise ValueError(f"Unsupported format: {input_format}")
 
@@ -343,6 +357,23 @@ class SLAFConverter:
             # Convert using existing AnnData conversion logic
             self._convert_anndata(adata, output_path)
 
+    def _convert_tiledb(self, tiledb_path: str, output_path: str):
+        """Convert TileDB SOMA file to SLAF format"""
+        logger.info(f"Converting TileDB SOMA file {tiledb_path} to SLAF format...")
+
+        if self.chunked:
+            # Use native chunked reader for TileDB
+            logger.info("Using native chunked reader for TileDB...")
+            self._convert_chunked(tiledb_path, output_path)
+        else:
+            # For non-chunked mode, we need to load the entire dataset
+            # This is not recommended for large datasets
+            logger.warning("Non-chunked mode not recommended for TileDB format")
+            raise NotImplementedError(
+                "Non-chunked conversion not supported for TileDB format. "
+                "Use chunked=True (default) for TileDB conversion."
+            )
+
     def _convert_anndata(self, adata, output_path: str):
         """Internal method to convert AnnData object to SLAF format"""
         # Create output directory
@@ -417,7 +448,9 @@ class SLAFConverter:
 
         # First, create a temporary reader to determine the value type
         with create_chunked_reader(
-            h5ad_path, chunk_size=self.chunk_size
+            h5ad_path,
+            chunk_size=self.chunk_size,
+            collection_name=self.tiledb_collection_name,
         ) as temp_reader:
             # Validate optimized data types and determine value type
             validation_result, value_type = self._validate_optimized_dtypes(temp_reader)
@@ -426,7 +459,10 @@ class SLAFConverter:
 
         # Now create the reader with the correct value type
         with create_chunked_reader(
-            h5ad_path, chunk_size=self.chunk_size, value_type=value_type
+            h5ad_path,
+            chunk_size=self.chunk_size,
+            value_type=value_type,
+            collection_name=self.tiledb_collection_name,
         ) as reader:
             logger.info(f"Loaded: {reader.n_obs:,} cells × {reader.n_vars:,} genes")
 
@@ -710,7 +746,56 @@ class SLAFConverter:
         logger.info("Sampling original expression values to determine data type...")
 
         # For chunked readers, we need to check the original data type from the file
-        if hasattr(reader, "file") and reader.file is not None:
+        # Handle TileDB readers specially
+        if hasattr(reader, "_experiment") and reader._experiment is not None:
+            # TileDB reader - check original data directly
+            try:
+                X = reader._experiment.ms[reader.collection_name].X["data"]
+                # Sample some original data
+                sample_size = min(10000, X.shape[0])
+                sample_data = X.read((slice(0, sample_size),)).tables().concat()
+                sample_values = sample_data.column("soma_data").to_numpy()
+
+                # Check if original data is integer or float
+                is_integer = np.issubdtype(sample_values.dtype, np.integer)
+                max_value = np.max(sample_values)
+                min_value = np.min(sample_values)
+
+                if is_integer and max_value <= 65535 and min_value >= 0:
+                    logger.info(
+                        f"Original integer expression values fit in uint16 range: [{min_value}, {max_value}]"
+                    )
+                    logger.info("Using uint16 for integer count data")
+                    return True, "uint16"
+                elif not is_integer:
+                    # Check if float data contains only integer values
+                    rounded_data = np.round(sample_values)
+                    is_integer_values = np.allclose(
+                        sample_values, rounded_data, rtol=1e-10
+                    )
+
+                    if is_integer_values and max_value <= 65535 and min_value >= 0:
+                        logger.info(
+                            f"Float data contains only integer values: [{min_value}, {max_value}]"
+                        )
+                        logger.info("Converting to uint16 for count data")
+                        return True, "uint16"
+                    else:
+                        logger.info(
+                            f"Float data contains fractional values: [{min_value}, {max_value}]"
+                        )
+                        logger.info("Keeping as float32 for normalized/float data")
+                        return False, "float32"
+                else:
+                    logger.info(
+                        f"Warning: Original integer values range [{min_value}, {max_value}] exceeds uint16 range [0, 65535]"
+                    )
+                    logger.info("Falling back to float32")
+                    return False, "float32"
+            except Exception as e:
+                logger.warning(f"Error checking TileDB original data: {e}")
+                # Fall through to fallback logic
+        elif hasattr(reader, "file") and reader.file is not None:
             # Check the original data type from the h5ad file
             X_group = reader.file["X"]
             if "data" in X_group:

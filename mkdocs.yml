@@ -165,6 +165,7 @@ nav:
       - ML Training: examples/ml-training.md
       - SQL Queries: examples/sql-queries.md
   - Benchmarks:
+      - Overview: benchmarks/index.md
       - For Bioinformaticians: benchmarks/bioinformatics_benchmarks.md
       - For ML Engineers: benchmarks/ml_benchmarks.md
   - API Reference:

@@ -9,6 +9,7 @@ Convert your single-cell data to SLAF format with just one command:
 slaf convert data.h5ad output.slaf
 slaf convert filtered_feature_bc_matrix/ output.slaf
 slaf convert data.h5 output.slaf
+slaf convert data.tiledb output.slaf
 ```
 
 That's it! SLAF automatically detects your file format and converts it with optimized settings.
@@ -20,6 +21,7 @@ SLAF supports conversion from these common single-cell formats:
 - **AnnData** (.h5ad files) - The standard single-cell format
 - **10x MTX** (filtered_feature_bc_matrix directories) - Cell Ranger output
 - **10x H5** (.h5 files) - Cell Ranger H5 output format
+- **TileDB SOMA** (.tiledb directories) - High-performance single-cell format
 
 ## Python API
 
@@ -31,6 +33,7 @@ converter = SLAFConverter()
 converter.convert("data.h5ad", "output.slaf")
 converter.convert("filtered_feature_bc_matrix/", "output.slaf")
 converter.convert("data.h5", "output.slaf")
+converter.convert("data.tiledb", "output.slaf")
 
 # Convert existing AnnData object
 import scanpy as sc
@@ -65,6 +68,7 @@ Most users won't need these, but they're available if needed:
 ```bash
 # Specify format explicitly (if auto-detection fails)
 slaf convert data.h5 output.slaf --format 10x_h5
+slaf convert data.tiledb output.slaf --format tiledb
 
 # Use non-chunked processing (not recommended for large datasets)
 slaf convert small_data.h5ad output.slaf --no-chunked
@@ -74,6 +78,9 @@ slaf convert data.h5ad output.slaf --no-optimize-storage
 
 # Verbose output
 slaf convert data.h5ad output.slaf --verbose
+
+# TileDB-specific options
+slaf convert data.tiledb output.slaf --tiledb-collection RNA
 ```
 
 ### Python API Options
@@ -85,10 +92,47 @@ converter = SLAFConverter(
     create_indices=True,        # Faster queries
     optimize_storage=True,      # Smaller files (default)
     use_optimized_dtypes=True,  # Better compression (default)
+    tiledb_collection_name="RNA",  # TileDB collection name (default: "RNA")
 )
 
 converter.convert("data.h5ad", "output.slaf")
+converter.convert("data.tiledb", "output.slaf")
 ```
+
+## TileDB SOMA Conversion
+
+SLAF provides excellent support for TileDB SOMA format, which is increasingly popular for large-scale single-cell datasets:
+
+### Basic TileDB Conversion
+
+```bash
+# Auto-detect TileDB format
+slaf convert experiment.tiledb output.slaf
+
+# Specify collection name (default: "RNA")
+slaf convert experiment.tiledb output.slaf --tiledb-collection RNA
+```
+
+### Python API for TileDB
+
+```python
+from slaf.data import SLAFConverter
+
+# Basic TileDB conversion
+converter = SLAFConverter()
+converter.convert("experiment.tiledb", "output.slaf")
+
+# With custom collection name
+converter = SLAFConverter(tiledb_collection_name="RNA")
+converter.convert("experiment.tiledb", "output.slaf")
+```
+
+### TileDB Benefits
+
+- **Memory Efficient**: TileDB's chunked storage works seamlessly with SLAF's chunked processing
+- **Large Datasets**: Optimized for datasets with millions of cells
+- **Data Preservation**: Maintains exact floating-point precision from TileDB
+- **Fast Conversion**: Leverages TileDB's efficient data access patterns
 
 ## What SLAF Does
 

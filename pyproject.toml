@@ -21,17 +21,17 @@ dependencies = [
     "h5py>=3.10.0",     # For chunked H5AD reading
     "requests>=2.32.4", # For downloading datasets
     # CLI and utilities
-    "typer>=0.9.0",        # CLI framework
-    "rich>=14.0.0",        # Rich console output
-    "tqdm>=4.67.0",        # Progress bars
+    "typer>=0.9.0",       # CLI framework
+    "rich>=14.0.0",       # Rich console output
+    "tqdm>=4.67.0",       # Progress bars
     "build>=1.2.2.post1",
     "lancedb>=0.24.2",
-    "vortex-data>=0.33.2",
+    "boto3>=1.40.10",
 ]
 
 [project.optional-dependencies]
 # Machine learning - for ML modules
-ml = ["torch>=2.7.1"]
+ml = ["torch>=2.7.1", "tiledb>=0.34.2", "tiledbsoma>=1.17.1"]
 
 # Advanced single-cell tools
 advanced = ["igraph>=0.11.9", "leidenalg>=0.10.2"]
@@ -56,6 +56,11 @@ dev = [
     # Benchmark dependencies
     "scvi-tools>=1.3.3",
     "scdataset>=0.1.1",
+
+    # Experimental dependencies
+    "vortex-data>=0.33.2",
+    "datasets>=4.0.0",
+    "ray>=2.49.0",
 ]
 
 docs = [
