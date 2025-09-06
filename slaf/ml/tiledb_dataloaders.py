@@ -83,11 +83,14 @@ class TileDBBatchProcessor:
         self,
         tiledb_path: str,
         batch_size: int = 32,
-        prefetch_batch_size: int = 1024,
+        prefetch_batch_size: int = 100,
         seed: int = 42,
         n_epochs: int = 1,
         verbose: bool = True,
         log_metrics: bool = False,
+        use_mixture_of_scanners: bool = True,
+        n_readers: int = 50,
+        n_scanners: int = 8,
     ):
         """Initialize the TileDB batch processor."""
         if not TILEDB_AVAILABLE:
@@ -100,6 +103,18 @@ class TileDBBatchProcessor:
         self.n_epochs = n_epochs
         self.verbose = verbose
         self.log_metrics = log_metrics
+        self.use_mixture_of_scanners = use_mixture_of_scanners
+        self.n_readers = n_readers
+        self.n_scanners = n_scanners
+
+        # Validate MoS parameters
+        if self.use_mixture_of_scanners:
+            if self.n_readers < 1:
+                raise ValueError("n_readers must be at least 1")
+            if self.n_scanners < 1:
+                raise ValueError("n_scanners must be at least 1")
+            if self.n_scanners > self.n_readers:
+                raise ValueError("n_scanners cannot exceed n_readers")
 
         # Initialize state
         self.batch_id = 0
@@ -118,6 +133,10 @@ class TileDBBatchProcessor:
 
         self.shuffle = create_shuffle(ShuffleType.RANDOM)
 
+        # Initialize MoS generators if enabled
+        if self.use_mixture_of_scanners:
+            self._initialize_mos_generators()
+
         # Initialize timing metrics for benchmarking
         self._timing_metrics: dict[str, list[float]] | None
         if self.log_metrics:
@@ -134,6 +153,38 @@ class TileDBBatchProcessor:
         self._last_load_time = 0.0
         self._last_memory_mb = 0.0
 
+    def _initialize_mos_generators(self):
+        """Initialize MoS generators with evenly distributed scan ranges."""
+        # Calculate scan ranges for each generator
+        cells_per_reader = self.total_cells // self.n_readers
+        remainder = self.total_cells % self.n_readers
+
+        self.generators = []
+        current_position = 0
+
+        for i in range(self.n_readers):
+            # Distribute remainder cells among first few readers
+            reader_cell_count = cells_per_reader + (1 if i < remainder else 0)
+
+            generator = {
+                "generator_id": i,
+                "start_position": current_position,
+                "current_position": current_position,
+                "end_position": current_position + reader_cell_count,
+                "is_active": True,
+            }
+
+            self.generators.append(generator)
+            current_position += reader_cell_count
+
+        if self.verbose:
+            print_prefetch(
+                f"TileDB MoS initialized: {self.n_readers} generators, "
+                f"{self.n_scanners} active scanners, "
+                f"prefetch_batch_size={self.prefetch_batch_size}",
+                self.verbose,
+            )
+
     def reset_for_epoch(self, epoch: int) -> None:
         """Reset the processor for a new epoch."""
         if epoch < 0 or epoch >= self.n_epochs:
@@ -143,6 +194,12 @@ class TileDBBatchProcessor:
 
         self.current_epoch = epoch
         self.batch_id = 0
+
+        # Reset MoS generators if enabled
+        if self.use_mixture_of_scanners:
+            for generator in self.generators:
+                generator["current_position"] = generator["start_position"]
+                generator["is_active"] = True
 
         if self.verbose:
             print(f"🔄 Reset TileDB processor for epoch {epoch}")
@@ -160,25 +217,21 @@ class TileDBBatchProcessor:
 
     def load_prefetch_batch(self) -> TileDBPrefetchBatch:
         """
-        Load and process a chunk of TileDB data into batches.
+        Load and process a chunk of TileDB data into batches using MoS strategy.
         """
         # Iterative approach to handle epoch transitions
         while True:
             start_time = time.time()
 
-            # Calculate current position in the dataset
-            # For continuous streaming, just wrap around the dataset
-            current_position = (
-                self.batch_id * self.prefetch_batch_size
-            ) % self.total_cells
+            if self.use_mixture_of_scanners:
+                # MoS approach: randomly sample from active generators
+                import numpy as np
 
-            # Only check for epoch transitions when we actually wrap around
-            # This happens when current_position becomes smaller than the previous position
-            if self.batch_id > 0:
-                prev_position = (
-                    (self.batch_id - 1) * self.prefetch_batch_size
-                ) % self.total_cells
-                if current_position < prev_position:  # We wrapped around
+                # Get indices of currently active generators
+                active_generators = [g for g in self.generators if g["is_active"]]
+
+                if not active_generators:
+                    # Check if we should start a new epoch
                     if self.current_epoch + 1 < self.n_epochs:
                         if self.verbose:
                             print(
@@ -189,41 +242,137 @@ class TileDBBatchProcessor:
                     else:
                         raise StopIteration("No more epochs available") from None
 
-            # Load data from TileDB
-            load_start = time.time()
-            try:
-                # Read slice from TileDB as Arrow table
-                arrow_data = (
-                    self.X.read(
-                        (
-                            slice(
-                                current_position,
-                                current_position + self.prefetch_batch_size,
-                            ),
-                        )
+                # Randomly sample from active generators
+                n_to_sample = min(self.n_scanners, len(active_generators))
+                selected_generators = np.random.choice(
+                    active_generators, size=n_to_sample, replace=False
+                )
+
+                if self.verbose and self.batch_id % 10 == 0:
+                    print_prefetch(
+                        f"TileDB MoS sampling: {len(active_generators)} active generators, "
+                        f"sampling from {n_to_sample} generators",
+                        self.verbose,
                     )
-                    .tables()
-                    .concat()
-                )
 
-                # Convert Arrow table to Polars DataFrame
-                df = pl.from_arrow(arrow_data)
-                assert isinstance(df, pl.DataFrame), (
-                    "Expected DataFrame from Arrow table"
-                )
+                # Load data from selected generators
+                load_start = time.time()
+                batch_dfs = []
 
-                # Rename SOMA columns to expected names
-                df = df.rename(
-                    {
-                        "soma_dim_0": "cell_integer_id",
-                        "soma_dim_1": "gene_integer_id",
-                        "soma_data": "value",
-                    }
-                )
+                for generator in selected_generators:
+                    try:
+                        start_cell = generator["current_position"]
+                        end_cell = min(
+                            start_cell + self.prefetch_batch_size,
+                            generator["end_position"],
+                        )
 
-            except Exception as e:
-                logger.error(f"Error loading TileDB data: {e}")
-                raise StopIteration(f"Failed to load TileDB data: {e}") from e
+                        if start_cell >= generator["end_position"]:
+                            # Generator exhausted
+                            generator["is_active"] = False
+                            continue
+
+                        # Read slice from TileDB
+                        arrow_data = (
+                            self.X.read((slice(start_cell, end_cell),))
+                            .tables()
+                            .concat()
+                        )
+
+                        # Convert Arrow table to Polars DataFrame
+                        df = pl.from_arrow(arrow_data)
+                        assert isinstance(df, pl.DataFrame), (
+                            "Expected DataFrame from Arrow table"
+                        )
+
+                        # Rename SOMA columns to expected names
+                        df = df.rename(
+                            {
+                                "soma_dim_0": "cell_integer_id",
+                                "soma_dim_1": "gene_integer_id",
+                                "soma_data": "value",
+                            }
+                        )
+
+                        batch_dfs.append(df)
+
+                        # Update generator position
+                        generator["current_position"] = end_cell
+
+                        # Mark as inactive if exhausted
+                        if generator["current_position"] >= generator["end_position"]:
+                            generator["is_active"] = False
+
+                    except Exception as e:
+                        logger.error(
+                            f"Error loading TileDB data from generator {generator['generator_id']}: {e}"
+                        )
+                        generator["is_active"] = False
+                        continue
+
+                if not batch_dfs:
+                    # All selected generators are exhausted, continue to next iteration
+                    continue
+
+                # Combine all batches
+                combined_df = pl.concat(batch_dfs, how="vertical")
+            else:
+                # Sequential approach (original implementation)
+                current_position = (
+                    self.batch_id * self.prefetch_batch_size
+                ) % self.total_cells
+
+                # Only check for epoch transitions when we actually wrap around
+                if self.batch_id > 0:
+                    prev_position = (
+                        (self.batch_id - 1) * self.prefetch_batch_size
+                    ) % self.total_cells
+                    if current_position < prev_position:  # We wrapped around
+                        if self.current_epoch + 1 < self.n_epochs:
+                            if self.verbose:
+                                print(
+                                    f"🔄 Epoch {self.current_epoch} complete, starting epoch {self.current_epoch + 1}"
+                                )
+                            self.reset_for_epoch(self.current_epoch + 1)
+                            continue
+                        else:
+                            raise StopIteration("No more epochs available") from None
+
+                # Load data from TileDB
+                load_start = time.time()
+                try:
+                    # Read slice from TileDB as Arrow table
+                    arrow_data = (
+                        self.X.read(
+                            (
+                                slice(
+                                    current_position,
+                                    current_position + self.prefetch_batch_size,
+                                ),
+                            )
+                        )
+                        .tables()
+                        .concat()
+                    )
+
+                    # Convert Arrow table to Polars DataFrame
+                    combined_df = pl.from_arrow(arrow_data)
+                    assert isinstance(combined_df, pl.DataFrame), (
+                        "Expected DataFrame from Arrow table"
+                    )
+
+                    # Rename SOMA columns to expected names
+                    combined_df = combined_df.rename(
+                        {
+                            "soma_dim_0": "cell_integer_id",
+                            "soma_dim_1": "gene_integer_id",
+                            "soma_data": "value",
+                        }
+                    )
+
+                except Exception as e:
+                    logger.error(f"Error loading TileDB data: {e}")
+                    raise StopIteration(f"Failed to load TileDB data: {e}") from e
 
             load_time = time.time() - load_start
             self._record_timing("tiledb_loading", load_time)
@@ -244,7 +393,7 @@ class TileDBBatchProcessor:
 
             # Apply shuffling with chunking
             shuffled_chunks = self.shuffle.apply(
-                df,
+                combined_df,
                 self.seed + self.batch_id + self.current_epoch * 10000,
                 batch_size=self.batch_size,
             )
@@ -268,7 +417,8 @@ class TileDBBatchProcessor:
 
             # Print consolidated prefetch batch reporting
             if self.batch_id % 10 == 0:
-                prefetch_report = f"TileDB prefetch batch {self.batch_id} (epoch {self.current_epoch}):\n"
+                strategy_name = "MoS" if self.use_mixture_of_scanners else "sequential"
+                prefetch_report = f"TileDB {strategy_name} prefetch batch {self.batch_id} (epoch {self.current_epoch}):\n"
                 prefetch_report += f"   TileDB loading: {self._last_load_time * 1000:.1f}ms ({self.prefetch_batch_size} cells)\n"
                 prefetch_report += (
                     f"   Processing: {shuffle_time * 1000:.1f}ms shuffle\n"
@@ -421,11 +571,14 @@ class TileDBIterableDataset(IterableDataset):
         self,
         tiledb_path: str,
         batch_size: int = 32,
-        prefetch_batch_size: int = 1024,
+        prefetch_batch_size: int = 100,
         seed: int = 42,
         max_queue_size: int = 500,
         n_epochs: int = 1,
         verbose: bool = True,
+        use_mixture_of_scanners: bool = True,
+        n_readers: int = 50,
+        n_scanners: int = 8,
     ):
         super().__init__()
         self.tiledb_path = tiledb_path
@@ -435,6 +588,9 @@ class TileDBIterableDataset(IterableDataset):
         self.max_queue_size = max_queue_size
         self.n_epochs = n_epochs
         self.verbose = verbose
+        self.use_mixture_of_scanners = use_mixture_of_scanners
+        self.n_readers = n_readers
+        self.n_scanners = n_scanners
 
         # Initialize batch processor
         self.batch_processor = TileDBBatchProcessor(
@@ -445,6 +601,9 @@ class TileDBIterableDataset(IterableDataset):
             n_epochs=n_epochs,
             verbose=verbose,
             log_metrics=False,
+            use_mixture_of_scanners=use_mixture_of_scanners,
+            n_readers=n_readers,
+            n_scanners=n_scanners,
         )
 
         # Initialize async prefetcher
@@ -584,11 +743,14 @@ class TileDBDataLoader:
         self,
         tiledb_path: str,
         batch_size: int = 32,
-        prefetch_batch_size: int = 1024,
+        prefetch_batch_size: int = 100,
         seed: int = 42,
         n_epochs: int = 1,
         verbose: bool = True,
         max_queue_size: int = 500,
+        use_mixture_of_scanners: bool = True,
+        n_readers: int = 50,
+        n_scanners: int = 8,
     ):
         """
         Initialize the TileDB DataLoader with training configuration.
@@ -596,11 +758,14 @@ class TileDBDataLoader:
         Args:
             tiledb_path: Path to the TileDB SOMA experiment
             batch_size: Number of cells per batch
-            prefetch_batch_size: Number of cells to prefetch from TileDB
+            prefetch_batch_size: Number of cells to prefetch from TileDB (default: 100 for 50k cell datasets)
             seed: Random seed for reproducible shuffling
             n_epochs: Number of epochs to run
             verbose: Whether to print verbose output
             max_queue_size: Maximum size of the prefetch queue
+            use_mixture_of_scanners: Whether to use MoS strategy for higher entropy (default: True)
+            n_readers: Total number of generators to create (default: 50)
+            n_scanners: Number of active scanners per batch (default: 8)
         """
         self.tiledb_path = tiledb_path
         self.batch_size = batch_size
@@ -609,6 +774,9 @@ class TileDBDataLoader:
         self.n_epochs = n_epochs
         self.verbose = verbose
         self.max_queue_size = max_queue_size
+        self.use_mixture_of_scanners = use_mixture_of_scanners
+        self.n_readers = n_readers
+        self.n_scanners = n_scanners
 
         # Check that required modules are available
         if not TILEDB_AVAILABLE:
@@ -623,6 +791,9 @@ class TileDBDataLoader:
             max_queue_size=max_queue_size,
             n_epochs=n_epochs,
             verbose=verbose,
+            use_mixture_of_scanners=use_mixture_of_scanners,
+            n_readers=n_readers,
+            n_scanners=n_scanners,
         )
 
     def __iter__(self):

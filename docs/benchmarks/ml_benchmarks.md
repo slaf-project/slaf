@@ -199,25 +199,21 @@ Raw data loading performance measures the base throughput of each system without
 
 | System            | Throughput (cells/sec) |
 | ----------------- | ---------------------- |
-| **SLAF**          | **24,937**             |
-| scDataset         | 10,084                 |
-| TileDB DataLoader | 1,737                  |
-| AnnDataLoader     | 452                    |
-| AnnLoader         | 245                    |
+| **SLAF**          | **25,244**             |
+| scDataset         | 9,411                  |
+| TileDB DataLoader | 552                    |
+| AnnDataLoader     | 413                    |
+| AnnLoader         | 250                    |
 
 !!! success "SOTA Performance"
 
-    SLAF achieves **2.5x higher throughput** than scDataset, **14.4x higher throughput** than TileDB DataLoader, **55x higher throughput** than AnnDataLoader, and **102x higher throughput** than AnnLoader in raw data loading.
+    SLAF achieves **2.7x higher throughput** than scDataset, **45.7x higher throughput** than TileDB DataLoader, **61.1x higher throughput** than AnnDataLoader, and **101x higher throughput** than AnnLoader in raw data loading.
 
 !!! info "scDataset Performance Analysis"
 
-    Our comprehensive benchmarks reveal that scDataset can achieve excellent performance with proper parameter tuning. We observed **10,084 cells/sec** with optimized parameters, which is **5.0x higher** than the paper's reported ~2,000 cells/sec, even without using multiprocessing. Note that these are completely different systems though (M1 Max vs NVIDIA DGX CPU).
+    Our comprehensive benchmarks reveal that scDataset can achieve excellent performance with proper parameter tuning. We observed **9,411 cells/sec** with optimized parameters, which is **4.7x higher** than the paper's reported ~2,000 cells/sec, even without using multiprocessing. Note that these are completely different systems though (M1 Max vs NVIDIA DGX CPU).
 
     However, we found significant limitations with multiprocessing due to pickling issues with h5py-backed AnnData objects. See our [detailed scDataset benchmarks](scdataset_benchmarks.md) for complete analysis including parameter scaling and multiprocessing limitations.
-
-!!! info "TileDB DataLoader Performance"
-
-    The TileDB DataLoader demonstrates solid performance with **1,737 cells/sec**, showing that modern cloud-native storage formats can provide significant advantages over traditional h5ad-based approaches. However, SLAF's optimized streaming architecture provides **14.4x higher throughput** than TileDB DataLoader.
 
 !!! info "Parameter Scaling Validation"
 
@@ -237,7 +233,7 @@ Even though SLAF's tokenizing dataloaders do more work (tokenization), we find t
 
 | System   | Throughput (cells/sec) | Throughput (tokens/sec) |
 | -------- | ---------------------- | ----------------------- |
-| **SLAF** | **7,460**              | **15,278,440**          |
+| **SLAF** | **7,465**              | **15,288,876**          |
 
 !!! success "GPU-Ready Cell Sentences"
 
@@ -255,13 +251,9 @@ Even though SLAF's tokenizing dataloaders do more work (tokenization), we find t
 
 !!! info "In-memory formats matter"
 
-    The performance difference between AnnDataLoader (452 cells/sec) and scDataset (10,084 cells/sec) is dramatic. While scDataset is smarter at batching and randomization, since our benchmark tests them on loading from h5ad, it's important to compare apples to apples dataloader outputs. AnnDataLoader and AnnLoader return `torch.sparse_csr` tensors whereas scDataset returns `scipy.sparse.csr_matrix`.
+    The performance difference between AnnDataLoader (413 cells/sec) and scDataset (9,411 cells/sec) is dramatic. While scDataset is smarter at batching and randomization, since our benchmark tests them on loading from h5ad, it's important to compare apples to apples dataloader outputs. AnnDataLoader and AnnLoader return `torch.sparse_csr` tensors whereas scDataset returns `scipy.sparse.csr_matrix`, and these format inter-conversions represent non-zero overhead.
 
     In our work, we noticed different overheads for conversion from polars dataframe (SLAF's preferred format for raw data) to torch and scipy sparse formats, and ultimately decided to keep raw outputs in polars. The performance of AnnLoader and AnnDataLoader relative to scDataset is almost certainly due to the overhead of conversion from scipy sparse arrays to torch arrays and worth benchmarking more carefully to identify low-hanging fruit for optimizations in both AnnLoader and AnnDataLoader.
-
-!!! info "Modern format advantages"
-
-    The performance comparison between SLAF and TileDB DataLoader demonstrates the advantages of modern columnar storage formats over traditional h5ad-based approaches. Both systems can stream Arrow tables into memory and provide significant performance improvements over h5ad-based dataloaders. However, SLAF's optimized streaming architecture and efficient data access patterns provide additional performance benefits.
 
 ## **Conclusion**
 

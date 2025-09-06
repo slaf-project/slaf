@@ -761,7 +761,7 @@ class ExternalDataloaderBenchmark:
         """Benchmark TileDB DataLoader in Tier 1 (raw data loading)."""
 
         try:
-            from slaf.ml import TileDBDataLoader
+            from slaf.ml.tiledb_dataloaders import TileDBDataLoader
         except ImportError:
             self.console.print(
                 "[yellow]Warning: TileDB dataloader not available, skipping TileDB benchmark[/yellow]"
@@ -769,21 +769,24 @@ class ExternalDataloaderBenchmark:
             return None
 
         self.console.print(
-            "\n[bold blue]Benchmarking TileDB DataLoader - Tier 1 (Raw Data Loading)[/bold blue]"
+            "\n[bold blue]Benchmarking TileDB DataLoader - Tier 1 (Raw Data Loading with MoS)[/bold blue]"
         )
 
-        # Setup TileDB DataLoader
+        # Setup TileDB DataLoader with MoS enabled
         try:
             tiledb_path = "../slaf-datasets/synthetic_50k_processed.tiledb"
 
             dataloader = TileDBDataLoader(
                 tiledb_path=tiledb_path,
                 batch_size=self.batch_size,
-                prefetch_batch_size=1024,
+                prefetch_batch_size=100,  # Updated for 50k cell dataset
                 seed=42,
                 n_epochs=1000,  # Match SLAF's n_epochs for continuous streaming
                 verbose=False,  # Suppress verbose output for clean benchmark
                 max_queue_size=500,
+                use_mixture_of_scanners=True,  # Enable MoS for fair comparison
+                n_readers=50,  # Default for 50k cells
+                n_scanners=8,  # Default
             )
         except Exception as e:
             self.console.print(f"[red]Error setting up TileDB DataLoader: {e}[/red]")
@@ -823,7 +826,7 @@ class ExternalDataloaderBenchmark:
         )
 
         return ExternalBenchmarkResult(
-            system_name="TileDB DataLoader",
+            system_name="TileDB DataLoader (MoS)",
             tier="tier1",
             throughput_cells_per_sec=throughput_cells_per_sec,
             memory_usage_gb=peak_memory,
@@ -846,7 +849,8 @@ class ExternalDataloaderBenchmark:
         self.console.print(
             Panel.fit(
                 "[bold green]SLAF External Dataloader Benchmarks[/bold green]\n"
-                "Comparing SLAF against state-of-the-art dataloaders (MoS: 15 warmup batches + 10s warmup + 30s measurement)",
+                "Comparing SLAF against state-of-the-art dataloaders with MoS strategy\n"
+                "(15 warmup batches + 10s warmup + 30s measurement)",
                 border_style="green",
             )
         )
@@ -901,7 +905,7 @@ class ExternalDataloaderBenchmark:
         except Exception as e:
             self.console.print(f"[red]Error benchmarking AnnLoader: {e}[/red]")
 
-        # Run TileDB DataLoader benchmarks
+        # Run TileDB DataLoader benchmarks (MoS mode)
         try:
             tiledbloader_tier1 = self.benchmark_tiledbloader_tier1()
             if tiledbloader_tier1:
