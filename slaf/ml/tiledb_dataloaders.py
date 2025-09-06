@@ -40,7 +40,23 @@ except ImportError:
 
 
 def print_prefetch(message: str, verbose: bool = True):
-    """Print prefetch-related messages in cyan with a panel."""
+    """
+    Print prefetch-related messages with colored formatting.
+
+    This function prints prefetch-related messages using rich console formatting
+    when available, or falls back to loguru logging. Messages are displayed in
+    cyan-colored panels for better visual distinction during training.
+
+    Args:
+        message: The message to print.
+        verbose: If True, print the message. If False, suppress output.
+
+    Examples:
+        >>> # Print a prefetch message
+        >>> print_prefetch("Loading batch 1 of 100")
+        >>> # Suppress output
+        >>> print_prefetch("Loading batch 1 of 100", verbose=False)
+    """
     if not verbose:
         return
 
@@ -51,7 +67,23 @@ def print_prefetch(message: str, verbose: bool = True):
 
 
 def print_training(message: str, verbose: bool = True):
-    """Print training-related messages in green with a panel."""
+    """
+    Print training-related messages with colored formatting.
+
+    This function prints training-related messages using rich console formatting
+    when available, or falls back to loguru logging. Messages are displayed in
+    green-colored panels for better visual distinction during training.
+
+    Args:
+        message: The message to print.
+        verbose: If True, print the message. If False, suppress output.
+
+    Examples:
+        >>> # Print a training message
+        >>> print_training("Processing batch with 32 cells")
+        >>> # Suppress output
+        >>> print_training("Processing batch with 32 cells", verbose=False)
+    """
     if not verbose:
         return
 
@@ -63,7 +95,34 @@ def print_training(message: str, verbose: bool = True):
 
 @dataclass
 class TileDBPrefetchBatch:
-    """Container for a batch of TileDB data."""
+    """
+    Container for a batch of TileDB data with metadata.
+
+    This dataclass holds a processed batch of TileDB SOMA data along with
+    associated metadata for tracking performance and debugging. It serves as
+    the primary data structure passed between the batch processor and the
+    async prefetcher.
+
+    Attributes:
+        batch_id: Unique identifier for this batch within the current epoch.
+        batch_df: Polars DataFrame containing the cell-gene expression data
+                 with columns: cell_integer_id, gene_integer_id, value.
+        cell_integer_ids: List of unique cell IDs present in this batch.
+        process_time: Time taken to process this batch (in seconds).
+        memory_mb: Memory usage at the time of batch creation (in MB).
+
+    Examples:
+        >>> # Create a batch container
+        >>> batch = TileDBPrefetchBatch(
+        ...     batch_id=0,
+        ...     batch_df=df,
+        ...     cell_integer_ids=[0, 1, 2, 3],
+        ...     process_time=0.1,
+        ...     memory_mb=128.5
+        ... )
+        >>> print(f"Batch {batch.batch_id} has {len(batch.cell_integer_ids)} cells")
+        Batch 0 has 4 cells
+    """
 
     batch_id: int
     batch_df: (
@@ -76,7 +135,56 @@ class TileDBPrefetchBatch:
 
 class TileDBBatchProcessor:
     """
-    Processes TileDB SOMA data into batches using streaming and shuffling.
+    High-performance batch processor for TileDB SOMA data with multiple loading strategies.
+
+    TileDBBatchProcessor provides efficient streaming and processing of single-cell data
+    from TileDB SOMA format. It supports multiple loading strategies including Mixture
+    of Scanners (MoS) for maximum entropy and sequential loading for maximum throughput.
+
+    Key Features:
+        - Multiple loading strategies:
+            * Mixture of Scanners (MoS): Random sampling from multiple generators for
+              maximum entropy and randomization (default)
+            * Sequential loading: Contiguous data loading for maximum throughput
+        - Streaming data processing with configurable batch sizes
+        - Built-in shuffling strategies for data randomization
+        - Multi-epoch training support with automatic epoch transitions
+        - Comprehensive timing and memory monitoring
+        - Error handling and recovery mechanisms
+        - Configurable prefetch batch sizes for different dataset sizes
+
+    Loading Strategies:
+        1. Mixture of Scanners (default): Randomly samples from multiple fragment
+           generators for maximum entropy and randomization
+        2. Sequential: Loads contiguous data chunks for maximum throughput
+
+    Examples:
+        >>> # Basic usage with default MoS strategy
+        >>> processor = TileDBBatchProcessor(
+        ...     tiledb_path="path/to/experiment",
+        ...     batch_size=32,
+        ...     prefetch_batch_size=100
+        ... )
+        >>> batch = processor.load_prefetch_batch()
+        >>> print(f"Loaded batch with {len(batch.cell_integer_ids)} cells")
+        Loaded batch with 100 cells
+
+        >>> # Sequential loading for maximum throughput
+        >>> processor = TileDBBatchProcessor(
+        ...     tiledb_path="path/to/experiment",
+        ...     use_mixture_of_scanners=False,
+        ...     batch_size=64
+        ... )
+        >>> print(f"MoS enabled: {processor.use_mixture_of_scanners}")
+        MoS enabled: False
+
+        >>> # Multi-epoch training
+        >>> processor = TileDBBatchProcessor(
+        ...     tiledb_path="path/to/experiment",
+        ...     n_epochs=3
+        ... )
+        >>> print(f"Number of epochs: {processor.n_epochs}")
+        Number of epochs: 3
     """
 
     def __init__(
@@ -92,7 +200,71 @@ class TileDBBatchProcessor:
         n_readers: int = 50,
         n_scanners: int = 8,
     ):
-        """Initialize the TileDB batch processor."""
+        """
+        Initialize the TileDB batch processor with training configuration.
+
+        Args:
+            tiledb_path: Path to the TileDB SOMA experiment directory.
+                         Must contain a valid SOMA experiment with RNA measurement data.
+            batch_size: Number of cells per training batch. Larger batches use more
+                       memory but may improve training efficiency. Range: 1-512, default: 32.
+            prefetch_batch_size: Number of cells to load per prefetch batch from TileDB.
+                               Higher values improve throughput but use more memory.
+                               Range: 10-10000, default: 100.
+            seed: Random seed for reproducible shuffling and MoS sampling.
+                  Used for consistent data ordering across runs. Default: 42.
+            n_epochs: Number of epochs to run. The processor will automatically reset
+                     after each epoch, enabling multi-epoch training. Default: 1.
+            verbose: If True, print detailed timing and progress information.
+                    If False, suppress all internal prints for clean output. Default: True.
+            log_metrics: If True, collect detailed timing metrics for performance analysis.
+                        Metrics include loading time, shuffle time, and memory usage.
+                        Default: False.
+            use_mixture_of_scanners: If True, use MoS strategy for higher entropy by
+                                   randomly sampling from multiple fragment generators.
+                                   Provides better randomization for foundation model training.
+                                   Default: True.
+            n_readers: Total number of fragment generators to create when using MoS.
+                      Higher values provide better entropy but use more memory.
+                      Range: 1-1000, default: 50.
+            n_scanners: Number of active scanners to sample from simultaneously when using MoS.
+                       Higher values provide better entropy but use more memory.
+                       Range: 1-100, default: 8.
+
+        Raises:
+            ImportError: If TileDB SOMA is not available.
+            ValueError: If MoS parameters are invalid (n_readers < 1, n_scanners < 1,
+                       or n_scanners > n_readers).
+            RuntimeError: If the TileDB experiment cannot be opened or is invalid.
+
+        Examples:
+            >>> # Basic initialization with default MoS strategy
+            >>> processor = TileDBBatchProcessor(
+            ...     tiledb_path="path/to/experiment",
+            ...     batch_size=32,
+            ...     prefetch_batch_size=100
+            ... )
+            >>> print(f"Total cells: {processor.total_cells}")
+            Total cells: 50000
+
+            >>> # Sequential loading for maximum throughput
+            >>> processor = TileDBBatchProcessor(
+            ...     tiledb_path="path/to/experiment",
+            ...     use_mixture_of_scanners=False,
+            ...     batch_size=64
+            ... )
+            >>> print(f"MoS enabled: {processor.use_mixture_of_scanners}")
+            MoS enabled: False
+
+            >>> # High-entropy MoS configuration
+            >>> processor = TileDBBatchProcessor(
+            ...     tiledb_path="path/to/experiment",
+            ...     n_readers=100,
+            ...     n_scanners=16
+            ... )
+            >>> print(f"MoS readers: {processor.n_readers}, scanners: {processor.n_scanners}")
+            MoS readers: 100, scanners: 16
+        """
         if not TILEDB_AVAILABLE:
             raise ImportError("TileDB SOMA is required but not available")
 
@@ -186,7 +358,34 @@ class TileDBBatchProcessor:
             )
 
     def reset_for_epoch(self, epoch: int) -> None:
-        """Reset the processor for a new epoch."""
+        """
+        Reset the processor for a new epoch.
+
+        This method resets the batch processor state to start a new epoch,
+        including resetting batch counters, MoS generator positions, and
+        shuffling seeds. It is called automatically during multi-epoch training.
+
+        Args:
+            epoch: The epoch number to start (0-based indexing).
+                  Must be 0 <= epoch < n_epochs.
+
+        Raises:
+            ValueError: If epoch is invalid (negative or >= n_epochs).
+
+        Examples:
+            >>> # Reset for epoch 1
+            >>> processor = TileDBBatchProcessor("path/to/experiment", n_epochs=3)
+            >>> processor.reset_for_epoch(1)
+            >>> print(f"Current epoch: {processor.current_epoch}")
+            Current epoch: 1
+
+            >>> # Invalid epoch raises error
+            >>> try:
+            ...     processor.reset_for_epoch(5)  # n_epochs=3
+            ... except ValueError as e:
+            ...     print(f"Error: {e}")
+            Error: Invalid epoch 5. Must be 0 <= epoch < 3
+        """
         if epoch < 0 or epoch >= self.n_epochs:
             raise ValueError(
                 f"Invalid epoch {epoch}. Must be 0 <= epoch < {self.n_epochs}"
@@ -217,7 +416,57 @@ class TileDBBatchProcessor:
 
     def load_prefetch_batch(self) -> TileDBPrefetchBatch:
         """
-        Load and process a chunk of TileDB data into batches using MoS strategy.
+        Load and process a chunk of TileDB data into batches using configured strategy.
+
+        This method loads a batch of data from TileDB SOMA format, applies shuffling,
+        and returns a processed batch ready for training. It supports both MoS and
+        sequential loading strategies and handles epoch transitions automatically.
+
+        The method performs the following steps:
+        1. Load data from TileDB using the configured strategy (MoS or sequential)
+        2. Convert Arrow data to Polars DataFrame
+        3. Apply shuffling strategy for data randomization
+        4. Return processed batch with metadata
+
+        Returns:
+            TileDBPrefetchBatch: Processed batch containing:
+                - batch_df: Polars DataFrame with cell-gene expression data
+                - cell_integer_ids: List of unique cell IDs in the batch
+                - process_time: Time taken to process the batch
+                - memory_mb: Memory usage at batch creation time
+
+        Raises:
+            StopIteration: When all epochs are completed and no more data is available.
+            RuntimeError: If TileDB data loading fails.
+
+        Examples:
+            >>> # Load a batch with MoS strategy
+            >>> processor = TileDBBatchProcessor(
+            ...     tiledb_path="path/to/experiment",
+            ...     use_mixture_of_scanners=True
+            ... )
+            >>> batch = processor.load_prefetch_batch()
+            >>> print(f"Batch {batch.batch_id} has {len(batch.cell_integer_ids)} cells")
+            Batch 0 has 100 cells
+
+            >>> # Load a batch with sequential strategy
+            >>> processor = TileDBBatchProcessor(
+            ...     tiledb_path="path/to/experiment",
+            ...     use_mixture_of_scanners=False
+            ... )
+            >>> batch = processor.load_prefetch_batch()
+            >>> print(f"Sequential batch shape: {batch.batch_df.shape}")
+            Sequential batch shape: (100, 3)
+
+            >>> # Handle epoch completion
+            >>> processor = TileDBBatchProcessor("path/to/experiment", n_epochs=1)
+            >>> try:
+            ...     while True:
+            ...         batch = processor.load_prefetch_batch()
+            ...         print(f"Processed batch {batch.batch_id}")
+            ... except StopIteration:
+            ...     print("All epochs completed")
+            All epochs completed
         """
         # Iterative approach to handle epoch transitions
         while True:
@@ -451,13 +700,71 @@ class TileDBBatchProcessor:
 
 class TileDBAsyncPrefetcher:
     """
-    Asynchronous prefetcher for TileDB batch processing.
+    Asynchronous prefetcher for TileDB batch processing with background loading.
+
+    TileDBAsyncPrefetcher provides background batch processing and prefetching
+    for TileDB data to improve training throughput. It runs a separate worker
+    thread that continuously loads and processes batches while the main training
+    loop consumes pre-processed data.
+
+    Key Features:
+        - Background batch processing in separate worker thread
+        - Configurable queue size for memory management
+        - Comprehensive performance monitoring and statistics
+        - Automatic epoch transition handling
+        - Graceful shutdown and cleanup
+        - Real-time rate monitoring and reporting
+        - Error handling and recovery
+
+    The prefetcher maintains a queue of pre-processed batches and provides
+    statistics about loading rates, memory usage, and processing times.
+
+    Examples:
+            >>> # Create prefetcher with a batch processor
+            >>> processor = TileDBBatchProcessor("path/to/experiment")
+            >>> prefetcher = TileDBAsyncPrefetcher(processor, max_queue_size=100)
+            >>>
+            >>> # Start background processing
+            >>> prefetcher.start()
+            >>>
+            >>> # Get pre-processed batches
+            >>> batch = prefetcher.get_batch()
+            >>> if batch:
+            ...     print(f"Got batch {batch.batch_id} with {len(batch.cell_integer_ids)} cells")
+            >>>
+            >>> # Check performance statistics
+            >>> stats = prefetcher.get_stats()
+            >>> print(f"Loading rate: {stats['cells_per_sec']:.1f} cells/sec")
+            >>>
+            >>> # Stop background processing
+            >>> prefetcher.stop()
     """
 
     def __init__(
         self, batch_processor: TileDBBatchProcessor, max_queue_size: int = 500
     ):
-        """Initialize the TileDB async prefetcher."""
+        """
+        Initialize the TileDB async prefetcher with background processing.
+
+        Args:
+            batch_processor: TileDBBatchProcessor instance to use for loading batches.
+                           Must be properly initialized with TileDB path and configuration.
+            max_queue_size: Maximum number of pre-processed batches to keep in queue.
+                          Higher values use more memory but provide better buffering.
+                          Range: 10-10000, default: 500.
+
+        Examples:
+            >>> # Create prefetcher with default queue size
+            >>> processor = TileDBBatchProcessor("path/to/experiment")
+            >>> prefetcher = TileDBAsyncPrefetcher(processor)
+            >>> print(f"Max queue size: {prefetcher.max_queue_size}")
+            Max queue size: 500
+
+            >>> # Create prefetcher with custom queue size
+            >>> prefetcher = TileDBAsyncPrefetcher(processor, max_queue_size=1000)
+            >>> print(f"Custom queue size: {prefetcher.max_queue_size}")
+            Custom queue size: 1000
+        """
         self.batch_processor = batch_processor
         self.max_queue_size = max_queue_size
         self.queue: Queue[TileDBPrefetchBatch] = Queue(maxsize=max_queue_size)
@@ -473,7 +780,34 @@ class TileDBAsyncPrefetcher:
         self.current_epoch = 0
 
     def start(self):
-        """Start the prefetching worker thread."""
+        """
+        Start the prefetching worker thread for background batch processing.
+
+        This method starts a background worker thread that continuously loads
+        and processes batches from the TileDB batch processor. The worker thread
+        runs as a daemon thread and will automatically stop when the main
+        process exits.
+
+        The prefetcher will begin loading batches immediately after starting.
+        Use get_batch() to retrieve pre-processed batches from the queue.
+
+        Examples:
+            >>> # Start background prefetching
+            >>> processor = TileDBBatchProcessor("path/to/experiment")
+            >>> prefetcher = TileDBAsyncPrefetcher(processor)
+            >>> prefetcher.start()
+            >>> print("Prefetcher started")
+            Prefetcher started
+
+            >>> # Check if prefetcher is ready
+            >>> import time
+            >>> time.sleep(1)  # Wait for first batch
+            >>> if prefetcher.has_batch():
+            ...     print("Prefetcher is ready with data")
+            ... else:
+            ...     print("Prefetcher not ready yet")
+            Prefetcher is ready with data
+        """
         if self.worker_thread is None or not self.worker_thread.is_alive():
             self.should_stop = False
             self.start_time = time.time()
@@ -483,7 +817,30 @@ class TileDBAsyncPrefetcher:
             self.worker_thread.start()
 
     def stop(self):
-        """Stop the prefetching worker thread."""
+        """
+        Stop the prefetching worker thread and clean up resources.
+
+        This method gracefully stops the background worker thread and waits
+        for it to finish processing the current batch. It sets the stop flag
+        and joins the thread with a timeout to prevent hanging.
+
+        After calling stop(), the prefetcher will no longer load new batches.
+        Any remaining batches in the queue can still be retrieved with get_batch().
+
+        Examples:
+            >>> # Stop the prefetcher
+            >>> processor = TileDBBatchProcessor("path/to/experiment")
+            >>> prefetcher = TileDBAsyncPrefetcher(processor)
+            >>> prefetcher.start()
+            >>>
+            >>> # Do some work...
+            >>> batch = prefetcher.get_batch()
+            >>>
+            >>> # Stop when done
+            >>> prefetcher.stop()
+            >>> print("Prefetcher stopped")
+            Prefetcher stopped
+        """
         self.should_stop = True
         if self.worker_thread and self.worker_thread.is_alive():
             self.worker_thread.join(timeout=1.0)
@@ -534,18 +891,132 @@ class TileDBAsyncPrefetcher:
                 break
 
     def get_batch(self) -> TileDBPrefetchBatch | None:
-        """Get the next pre-processed batch from the queue."""
+        """
+        Get the next pre-processed batch from the queue.
+
+        This method retrieves a pre-processed batch from the internal queue.
+        If no batch is available, it returns None. The method has a timeout
+        to prevent blocking indefinitely.
+
+        Returns:
+            TileDBPrefetchBatch | None: The next available batch, or None if
+                                       no batch is available within the timeout.
+
+        Examples:
+            >>> # Get a batch from the prefetcher
+            >>> processor = TileDBBatchProcessor("path/to/experiment")
+            >>> prefetcher = TileDBAsyncPrefetcher(processor)
+            >>> prefetcher.start()
+            >>>
+            >>> # Wait for a batch
+            >>> batch = prefetcher.get_batch()
+            >>> if batch:
+            ...     print(f"Got batch {batch.batch_id} with {len(batch.cell_integer_ids)} cells")
+            ... else:
+            ...     print("No batch available")
+            Got batch 0 with 100 cells
+
+            >>> # Check for multiple batches
+            >>> batches = []
+            >>> for _ in range(3):
+            ...     batch = prefetcher.get_batch()
+            ...     if batch:
+            ...         batches.append(batch)
+            ...     else:
+            ...         break
+            >>> print(f"Retrieved {len(batches)} batches")
+            Retrieved 3 batches
+        """
         try:
             return self.queue.get(timeout=1.0)
         except queue.Empty:
             return None
 
     def has_batch(self) -> bool:
-        """Check if a pre-processed batch is available in the queue."""
+        """
+        Check if a pre-processed batch is available in the queue.
+
+        This method provides a non-blocking way to check if batches are
+        available for immediate retrieval. It returns True if the queue
+        contains at least one batch, False otherwise.
+
+        Returns:
+            bool: True if at least one batch is available, False otherwise.
+
+        Examples:
+            >>> # Check for available batches
+            >>> processor = TileDBBatchProcessor("path/to/experiment")
+            >>> prefetcher = TileDBAsyncPrefetcher(processor)
+            >>> prefetcher.start()
+            >>>
+            >>> # Check if batches are ready
+            >>> if prefetcher.has_batch():
+            ...     batch = prefetcher.get_batch()
+            ...     print(f"Processing batch {batch.batch_id}")
+            ... else:
+            ...     print("No batches ready yet")
+            No batches ready yet
+
+            >>> # Wait and check again
+            >>> import time
+            >>> time.sleep(2)
+            >>> if prefetcher.has_batch():
+            ...     print("Batches are now available")
+            ... else:
+            ...     print("Still waiting for batches")
+            Batches are now available
+        """
         return not self.queue.empty()
 
     def get_stats(self) -> dict:
-        """Get comprehensive statistics about the prefetcher's performance."""
+        """
+        Get comprehensive statistics about the prefetcher's performance.
+
+        This method returns detailed performance statistics including loading
+        rates, memory usage, queue status, and processing times. Useful for
+        monitoring and debugging the prefetcher's performance.
+
+        Returns:
+            dict: Performance statistics dictionary containing:
+                - total_cells: Total number of cells processed
+                - elapsed_time: Total time since prefetcher started (seconds)
+                - cells_per_sec: Average loading rate (cells per second)
+                - queue_size: Current number of batches in queue
+                - queue_full: Whether the queue is at maximum capacity
+                - total_process_time: Total time spent processing batches
+                - process_count: Number of batches processed
+                - avg_process_time_ms: Average processing time per batch (ms)
+                - current_epoch: Current epoch number
+                - n_epochs: Total number of epochs configured
+
+        Examples:
+            >>> # Get performance statistics
+            >>> processor = TileDBBatchProcessor("path/to/experiment")
+            >>> prefetcher = TileDBAsyncPrefetcher(processor)
+            >>> prefetcher.start()
+            >>>
+            >>> # Wait for some processing
+            >>> import time
+            >>> time.sleep(5)
+            >>>
+            >>> # Get and display stats
+            >>> stats = prefetcher.get_stats()
+            >>> print(f"Loading rate: {stats['cells_per_sec']:.1f} cells/sec")
+            >>> print(f"Queue size: {stats['queue_size']}/{prefetcher.max_queue_size}")
+            >>> print(f"Current epoch: {stats['current_epoch']}/{stats['n_epochs']}")
+            Loading rate: 1250.5 cells/sec
+            Queue size: 45/500
+            Current epoch: 0/1
+
+            >>> # Monitor performance over time
+            >>> for i in range(3):
+            ...     stats = prefetcher.get_stats()
+            ...     print(f"Check {i+1}: {stats['cells_per_sec']:.1f} cells/sec")
+            ...     time.sleep(2)
+            Check 1: 1200.3 cells/sec
+            Check 2: 1250.5 cells/sec
+            Check 3: 1180.7 cells/sec
+        """
         elapsed = time.time() - (self.start_time or 0)
         rate = self.total_cells_added / elapsed if elapsed > 0 else 0
         avg_process_time = (
@@ -570,6 +1041,65 @@ class TileDBAsyncPrefetcher:
 class TileDBIterableDataset(IterableDataset):
     """
     PyTorch IterableDataset for streaming TileDB SOMA data with async prefetching.
+
+    TileDBIterableDataset provides a PyTorch-compatible interface for streaming
+    single-cell data from TileDB SOMA format. It combines the TileDBBatchProcessor
+    and TileDBAsyncPrefetcher to provide efficient, asynchronous data loading
+    for machine learning training.
+
+    Key Features:
+        - PyTorch IterableDataset compatibility
+        - Asynchronous background prefetching for improved throughput
+        - Multiple loading strategies (MoS and sequential)
+        - Multi-epoch training support
+        - Automatic epoch transition handling
+        - Memory-efficient streaming
+        - Comprehensive error handling
+        - Configurable batch and prefetch sizes
+
+    The dataset automatically manages background prefetching and provides
+    seamless iteration over batches of TileDB data. It handles epoch
+    transitions and provides detailed timing information for performance
+    monitoring.
+
+    Examples:
+            >>> # Create dataset with default MoS strategy
+            >>> dataset = TileDBIterableDataset(
+            ...     tiledb_path="path/to/experiment",
+            ...     batch_size=32,
+            ...     prefetch_batch_size=100
+            ... )
+            >>>
+            >>> # Iterate through batches
+            >>> for batch in dataset:
+            ...     print(f"Batch keys: {list(batch.keys())}")
+            ...     print(f"Cell IDs: {batch['cell_ids']}")
+            ...     break
+        Batch keys: ['X', 'cell_ids']
+        Cell IDs: [0, 1, 2, ..., 29, 30, 31]
+
+        >>> # Sequential loading for maximum throughput
+        >>> dataset = TileDBIterableDataset(
+        ...     tiledb_path="path/to/experiment",
+        ...     use_mixture_of_scanners=False,
+        ...     batch_size=64
+        ... )
+        >>> print(f"MoS enabled: {dataset.use_mixture_of_scanners}")
+        MoS enabled: False
+
+        >>> # Multi-epoch training
+        >>> dataset = TileDBIterableDataset(
+        ...     tiledb_path="path/to/experiment",
+        ...     n_epochs=3
+        ... )
+        >>> epochs_seen = set()
+        >>> for batch in dataset:
+        ...     if 'epoch' in batch:
+        ...         epochs_seen.add(batch['epoch'])
+        ...     if len(epochs_seen) >= 3:
+        ...         break
+        >>> print(f"Epochs completed: {sorted(epochs_seen)}")
+        Epochs completed: [0, 1, 2]
     """
 
     def __init__(
@@ -585,6 +1115,70 @@ class TileDBIterableDataset(IterableDataset):
         n_readers: int = 50,
         n_scanners: int = 8,
     ):
+        """
+        Initialize the TileDB IterableDataset with async prefetching.
+
+        Args:
+            tiledb_path: Path to the TileDB SOMA experiment directory.
+                         Must contain a valid SOMA experiment with RNA measurement data.
+            batch_size: Number of cells per training batch. Larger batches use more
+                       memory but may improve training efficiency. Range: 1-512, default: 32.
+            prefetch_batch_size: Number of cells to load per prefetch batch from TileDB.
+                               Higher values improve throughput but use more memory.
+                               Range: 10-10000, default: 100.
+            seed: Random seed for reproducible shuffling and MoS sampling.
+                  Used for consistent data ordering across runs. Default: 42.
+            max_queue_size: Maximum number of pre-processed batches to keep in queue.
+                          Higher values use more memory but provide better buffering.
+                          Range: 10-10000, default: 500.
+            n_epochs: Number of epochs to run. The dataset will automatically reset
+                     after each epoch, enabling multi-epoch training. Default: 1.
+            verbose: If True, print detailed timing and progress information.
+                    If False, suppress all internal prints for clean output. Default: True.
+            use_mixture_of_scanners: If True, use MoS strategy for higher entropy by
+                                   randomly sampling from multiple fragment generators.
+                                   Provides better randomization for foundation model training.
+                                   Default: True.
+            n_readers: Total number of fragment generators to create when using MoS.
+                      Higher values provide better entropy but use more memory.
+                      Range: 1-1000, default: 50.
+            n_scanners: Number of active scanners to sample from simultaneously when using MoS.
+                       Higher values provide better entropy but use more memory.
+                       Range: 1-100, default: 8.
+
+        Raises:
+            ImportError: If TileDB SOMA is not available.
+            ValueError: If MoS parameters are invalid.
+            RuntimeError: If the TileDB experiment cannot be opened or is invalid.
+
+        Examples:
+            >>> # Basic initialization with default MoS strategy
+            >>> dataset = TileDBIterableDataset(
+            ...     tiledb_path="path/to/experiment",
+            ...     batch_size=32,
+            ...     prefetch_batch_size=100
+            ... )
+            >>> print(f"MoS enabled: {dataset.use_mixture_of_scanners}")
+            MoS enabled: True
+
+            >>> # Sequential loading for maximum throughput
+            >>> dataset = TileDBIterableDataset(
+            ...     tiledb_path="path/to/experiment",
+            ...     use_mixture_of_scanners=False,
+            ...     batch_size=64
+            ... )
+            >>> print(f"Sequential loading: {not dataset.use_mixture_of_scanners}")
+            Sequential loading: True
+
+            >>> # High-entropy MoS configuration
+            >>> dataset = TileDBIterableDataset(
+            ...     tiledb_path="path/to/experiment",
+            ...     n_readers=100,
+            ...     n_scanners=16
+            ... )
+            >>> print(f"MoS readers: {dataset.n_readers}, scanners: {dataset.n_scanners}")
+            MoS readers: 100, scanners: 16
+        """
         super().__init__()
         self.tiledb_path = tiledb_path
         self.batch_size = batch_size
@@ -641,7 +1235,62 @@ class TileDBIterableDataset(IterableDataset):
             )
 
     def __iter__(self) -> Iterator[dict]:
-        """Iterate through batches of TileDB data."""
+        """
+        Iterate through batches of TileDB data with async prefetching.
+
+        This method provides an iterator over batches of TileDB data, automatically
+        handling background prefetching, epoch transitions, and error recovery.
+        It yields dictionaries containing the batch data and metadata.
+
+        The iterator automatically manages:
+        - Background prefetching for improved throughput
+        - Epoch transitions for multi-epoch training
+        - Error handling and recovery
+        - Performance monitoring and reporting
+
+        Yields:
+            dict: Batch dictionary containing:
+                - X: Polars DataFrame with cell-gene expression data
+                - cell_ids: List of unique cell IDs in the batch
+                - epoch: Current epoch number (when n_epochs > 1)
+
+        Examples:
+            >>> # Basic iteration
+            >>> dataset = TileDBIterableDataset("path/to/experiment")
+            >>> for batch in dataset:
+            ...     print(f"Batch keys: {list(batch.keys())}")
+            ...     print(f"Cell IDs: {batch['cell_ids']}")
+            ...     break
+            Batch keys: ['X', 'cell_ids']
+            Cell IDs: [0, 1, 2, ..., 29, 30, 31]
+
+            >>> # Multi-epoch training
+            >>> dataset = TileDBIterableDataset("path/to/experiment", n_epochs=3)
+            >>> epochs_seen = set()
+            >>> for batch in dataset:
+            ...     if 'epoch' in batch:
+            ...         epochs_seen.add(batch['epoch'])
+            ...     if len(epochs_seen) >= 3:
+            ...         break
+            >>> print(f"Epochs completed: {sorted(epochs_seen)}")
+            Epochs completed: [0, 1, 2]
+
+            >>> # Training loop with error handling
+            >>> dataset = TileDBIterableDataset("path/to/experiment")
+            >>> for batch_idx, batch in enumerate(dataset):
+            ...     try:
+            ...         x = batch["X"]
+            ...         cell_ids = batch["cell_ids"]
+            ...         print(f"Processed batch {batch_idx} with {len(cell_ids)} cells")
+            ...     except Exception as e:
+            ...         print(f"Error in batch {batch_idx}: {e}")
+            ...         continue
+            ...     if batch_idx >= 2:  # Just first few batches
+            ...         break
+            Processed batch 0 with 32 cells
+            Processed batch 1 with 32 cells
+            Processed batch 2 with 32 cells
+        """
         batches_yielded = 0
         current_epoch = 0
         last_epoch = -1
@@ -735,13 +1384,89 @@ class TileDBIterableDataset(IterableDataset):
             yield batch_dict
 
     def __del__(self):
-        """Cleanup when dataset is destroyed."""
+        """
+        Cleanup when dataset is destroyed.
+
+        This method is called when the dataset object is garbage collected.
+        It ensures that the underlying prefetcher is properly stopped to
+        prevent resource leaks and background thread issues.
+
+        Examples:
+            >>> # Dataset cleanup happens automatically
+            >>> dataset = TileDBIterableDataset("path/to/experiment")
+            >>> print("Dataset created")
+            Dataset created
+            >>> # When dataset goes out of scope, __del__ is called automatically
+            >>> del dataset
+            >>> print("Dataset destroyed and cleaned up")
+            Dataset destroyed and cleaned up
+        """
         self.prefetcher.stop()
 
 
 class TileDBDataLoader:
     """
     High-performance DataLoader for TileDB SOMA data optimized for ML training.
+
+    TileDBDataLoader provides efficient streaming of single-cell data from TileDB
+    SOMA format for machine learning applications. It uses async batch processing
+    and provides multiple loading strategies for different use cases.
+
+    Key Features:
+        - Multiple loading strategies for different entropy requirements:
+            * Mixture of Scanners (MoS): Maximum entropy, best randomization (default)
+            * Sequential loading: Fastest, lowest entropy
+        - Asynchronous background prefetching for improved throughput
+        - Multi-epoch training support with automatic epoch transitions
+        - Memory-efficient streaming with configurable batch sizes
+        - Comprehensive error handling and validation
+        - Performance monitoring and statistics
+        - PyTorch IterableDataset compatibility
+
+    Loading Strategies:
+        1. Mixture of Scanners (default): Randomly samples from multiple generators
+           for maximum entropy and randomization
+        2. Sequential: Loads contiguous data chunks for maximum throughput
+
+    Examples:
+        >>> # Basic usage with default MoS strategy
+        >>> dataloader = TileDBDataLoader(
+        ...     tiledb_path="path/to/experiment",
+        ...     batch_size=32,
+        ...     prefetch_batch_size=100
+        ... )
+        >>> for batch in dataloader:
+        ...     print(f"Batch keys: {list(batch.keys())}")
+        ...     print(f"Cell IDs: {batch['cell_ids']}")
+        ...     break
+        Batch keys: ['X', 'cell_ids']
+        Cell IDs: [0, 1, 2, ..., 29, 30, 31]
+
+        >>> # Sequential loading for maximum throughput
+        >>> dataloader = TileDBDataLoader(
+        ...     tiledb_path="path/to/experiment",
+        ...     use_mixture_of_scanners=False,
+        ...     batch_size=64
+        ... )
+        >>> print(f"MoS enabled: {dataloader.use_mixture_of_scanners}")
+        MoS enabled: False
+
+        >>> # Multi-epoch training
+        >>> dataloader = TileDBDataLoader(
+        ...     tiledb_path="path/to/experiment",
+        ...     n_epochs=3
+        ... )
+        >>> print(f"Number of epochs: {dataloader.n_epochs}")
+        Number of epochs: 3
+
+        >>> # Custom MoS configuration
+        >>> dataloader = TileDBDataLoader(
+        ...     tiledb_path="path/to/experiment",
+        ...     n_readers=100,
+        ...     n_scanners=16
+        ... )
+        >>> print(f"MoS readers: {dataloader.n_readers}, scanners: {dataloader.n_scanners}")
+        MoS readers: 100, scanners: 16
     """
 
     def __init__(
@@ -761,16 +1486,65 @@ class TileDBDataLoader:
         Initialize the TileDB DataLoader with training configuration.
 
         Args:
-            tiledb_path: Path to the TileDB SOMA experiment
-            batch_size: Number of cells per batch
-            prefetch_batch_size: Number of cells to prefetch from TileDB (default: 100 for 50k cell datasets)
-            seed: Random seed for reproducible shuffling
-            n_epochs: Number of epochs to run
-            verbose: Whether to print verbose output
-            max_queue_size: Maximum size of the prefetch queue
-            use_mixture_of_scanners: Whether to use MoS strategy for higher entropy (default: True)
-            n_readers: Total number of generators to create (default: 50)
-            n_scanners: Number of active scanners per batch (default: 8)
+            tiledb_path: Path to the TileDB SOMA experiment directory.
+                         Must contain a valid SOMA experiment with RNA measurement data.
+            batch_size: Number of cells per training batch. Larger batches use more
+                       memory but may improve training efficiency. Range: 1-512, default: 32.
+            prefetch_batch_size: Number of cells to prefetch from TileDB per batch.
+                               Higher values improve throughput but use more memory.
+                               Range: 10-10000, default: 100.
+            seed: Random seed for reproducible shuffling and MoS sampling.
+                  Used for consistent data ordering across runs. Default: 42.
+            n_epochs: Number of epochs to run. The dataloader will automatically reset
+                     after each epoch, enabling multi-epoch training. Default: 1.
+            verbose: If True, print detailed timing and progress information.
+                    If False, suppress all internal prints for clean output. Default: True.
+            max_queue_size: Maximum number of pre-processed batches to keep in queue.
+                          Higher values use more memory but provide better buffering.
+                          Range: 10-10000, default: 500.
+            use_mixture_of_scanners: If True, use MoS strategy for higher entropy by
+                                   randomly sampling from multiple fragment generators.
+                                   Provides better randomization for foundation model training.
+                                   Default: True.
+            n_readers: Total number of fragment generators to create when using MoS.
+                      Higher values provide better entropy but use more memory.
+                      Range: 1-1000, default: 50.
+            n_scanners: Number of active scanners to sample from simultaneously when using MoS.
+                       Higher values provide better entropy but use more memory.
+                       Range: 1-100, default: 8.
+
+        Raises:
+            ImportError: If TileDB SOMA is not available.
+            ValueError: If MoS parameters are invalid.
+            RuntimeError: If the TileDB experiment cannot be opened or is invalid.
+
+        Examples:
+            >>> # Basic initialization with default MoS strategy
+            >>> dataloader = TileDBDataLoader(
+            ...     tiledb_path="path/to/experiment",
+            ...     batch_size=32,
+            ...     prefetch_batch_size=100
+            ... )
+            >>> print(f"MoS enabled: {dataloader.use_mixture_of_scanners}")
+            MoS enabled: True
+
+            >>> # Sequential loading for maximum throughput
+            >>> dataloader = TileDBDataLoader(
+            ...     tiledb_path="path/to/experiment",
+            ...     use_mixture_of_scanners=False,
+            ...     batch_size=64
+            ... )
+            >>> print(f"Sequential loading: {not dataloader.use_mixture_of_scanners}")
+            Sequential loading: True
+
+            >>> # High-entropy MoS configuration
+            >>> dataloader = TileDBDataLoader(
+            ...     tiledb_path="path/to/experiment",
+            ...     n_readers=100,
+            ...     n_scanners=16
+            ... )
+            >>> print(f"MoS readers: {dataloader.n_readers}, scanners: {dataloader.n_scanners}")
+            MoS readers: 100, scanners: 16
         """
         self.tiledb_path = tiledb_path
         self.batch_size = batch_size
@@ -802,15 +1576,120 @@ class TileDBDataLoader:
         )
 
     def __iter__(self):
-        """Iterate through batches of TileDB data."""
+        """
+        Iterate through batches of TileDB data with async prefetching.
+
+        This method provides an iterator over batches of TileDB data, automatically
+        handling background prefetching, epoch transitions, and error recovery.
+        It yields dictionaries containing the batch data and metadata.
+
+        The iterator automatically manages:
+        - Background prefetching for improved throughput
+        - Epoch transitions for multi-epoch training
+        - Error handling and recovery
+        - Performance monitoring and reporting
+
+        Yields:
+            dict: Batch dictionary containing:
+                - X: Polars DataFrame with cell-gene expression data
+                - cell_ids: List of unique cell IDs in the batch
+                - epoch: Current epoch number (when n_epochs > 1)
+
+        Examples:
+            >>> # Basic iteration
+            >>> dataloader = TileDBDataLoader("path/to/experiment")
+            >>> for batch in dataloader:
+            ...     print(f"Batch keys: {list(batch.keys())}")
+            ...     print(f"Cell IDs: {batch['cell_ids']}")
+            ...     break
+            Batch keys: ['X', 'cell_ids']
+            Cell IDs: [0, 1, 2, ..., 29, 30, 31]
+
+            >>> # Multi-epoch training
+            >>> dataloader = TileDBDataLoader("path/to/experiment", n_epochs=3)
+            >>> epochs_seen = set()
+            >>> for batch in dataloader:
+            ...     if 'epoch' in batch:
+            ...         epochs_seen.add(batch['epoch'])
+            ...     if len(epochs_seen) >= 3:
+            ...         break
+            >>> print(f"Epochs completed: {sorted(epochs_seen)}")
+            Epochs completed: [0, 1, 2]
+
+            >>> # Training loop with error handling
+            >>> dataloader = TileDBDataLoader("path/to/experiment")
+            >>> for batch_idx, batch in enumerate(dataloader):
+            ...     try:
+            ...         x = batch["X"]
+            ...         cell_ids = batch["cell_ids"]
+            ...         print(f"Processed batch {batch_idx} with {len(cell_ids)} cells")
+            ...     except Exception as e:
+            ...         print(f"Error in batch {batch_idx}: {e}")
+            ...         continue
+            ...     if batch_idx >= 2:  # Just first few batches
+            ...         break
+            Processed batch 0 with 32 cells
+            Processed batch 1 with 32 cells
+            Processed batch 2 with 32 cells
+        """
         yield from self._dataset
 
     def __len__(self):
-        """Return the number of batches in the dataset."""
+        """
+        Return the number of batches in the dataset.
+
+        Note: Since TileDBDataLoader uses an IterableDataset that streams data,
+        the exact number of batches is not known in advance. This method
+        returns 0 to indicate an unknown length for streaming datasets.
+
+        Returns:
+            int: Always returns 0 to indicate unknown length for streaming datasets.
+
+        Examples:
+            >>> # Check dataset length
+            >>> dataloader = TileDBDataLoader("path/to/experiment")
+            >>> print(f"Dataset length: {len(dataloader)}")
+            Dataset length: 0
+
+            >>> # IterableDataset behavior
+            >>> batch_count = 0
+            >>> for batch in dataloader:
+            ...     batch_count += 1
+            ...     if batch_count >= 5:  # Just count first 5 batches
+            ...         break
+            >>> print(f"Actually processed {batch_count} batches")
+            Actually processed 5 batches
+
+            >>> # Length is consistent
+            >>> print(f"Length check: {len(dataloader)}")
+            Length check: 0
+        """
         return 0  # Indicates unknown length for streaming datasets
 
     def __del__(self):
-        """Cleanup method to stop async prefetching."""
+        """
+        Cleanup method to stop async prefetching.
+
+        This method is called when the DataLoader object is garbage collected.
+        It ensures that the underlying dataset's prefetcher is properly cleaned up
+        to prevent resource leaks.
+
+        Examples:
+            >>> # DataLoader cleanup happens automatically
+            >>> dataloader = TileDBDataLoader("path/to/experiment")
+            >>> print("DataLoader created")
+            DataLoader created
+            >>> # When dataloader goes out of scope, __del__ is called automatically
+            >>> del dataloader
+            >>> print("DataLoader destroyed and cleaned up")
+            DataLoader destroyed and cleaned up
+
+            >>> # Manual cleanup (not usually needed)
+            >>> dataloader = TileDBDataLoader("path/to/experiment")
+            >>> dataloader.__del__()
+            >>> print("Manual cleanup completed")
+            Manual cleanup completed
+        """
         if hasattr(self, "_dataset"):
             # The TileDBIterableDataset doesn't have a stop method,
             # so we just let it finish its current epoch.
