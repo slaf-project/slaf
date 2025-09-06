@@ -280,10 +280,9 @@ class TileDBBatchProcessor:
                         )
 
                         # Convert Arrow table to Polars DataFrame
-                        df = pl.from_arrow(arrow_data)
-                        assert isinstance(df, pl.DataFrame), (
-                            "Expected DataFrame from Arrow table"
-                        )
+                        df = pl.from_arrow(arrow_data)  # type: ignore[assignment]
+                        if not isinstance(df, pl.DataFrame):
+                            raise TypeError("Expected DataFrame from Arrow table")
 
                         # Rename SOMA columns to expected names
                         df = df.rename(
@@ -315,7 +314,7 @@ class TileDBBatchProcessor:
                     continue
 
                 # Combine all batches
-                combined_df = pl.concat(batch_dfs, how="vertical")
+                combined_df_mos = pl.concat(batch_dfs, how="vertical")
             else:
                 # Sequential approach (original implementation)
                 current_position = (
@@ -356,10 +355,9 @@ class TileDBBatchProcessor:
                     )
 
                     # Convert Arrow table to Polars DataFrame
-                    combined_df = pl.from_arrow(arrow_data)
-                    assert isinstance(combined_df, pl.DataFrame), (
-                        "Expected DataFrame from Arrow table"
-                    )
+                    combined_df = pl.from_arrow(arrow_data)  # type: ignore[assignment]
+                    if not isinstance(combined_df, pl.DataFrame):
+                        raise TypeError("Expected DataFrame from Arrow table")
 
                     # Rename SOMA columns to expected names
                     combined_df = combined_df.rename(
@@ -392,11 +390,18 @@ class TileDBBatchProcessor:
             shuffle_start = time.time()
 
             # Apply shuffling with chunking
-            shuffled_chunks = self.shuffle.apply(
-                combined_df,
-                self.seed + self.batch_id + self.current_epoch * 10000,
-                batch_size=self.batch_size,
-            )
+            if self.use_mixture_of_scanners:
+                shuffled_chunks = self.shuffle.apply(
+                    combined_df_mos,  # type: ignore[arg-type]
+                    self.seed + self.batch_id + self.current_epoch * 10000,
+                    batch_size=self.batch_size,
+                )
+            else:
+                shuffled_chunks = self.shuffle.apply(
+                    combined_df,  # type: ignore[arg-type]
+                    self.seed + self.batch_id + self.current_epoch * 10000,
+                    batch_size=self.batch_size,
+                )
 
             shuffle_time = time.time() - shuffle_start
             total_time = time.time() - start_time
