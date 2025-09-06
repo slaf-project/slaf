@@ -9,7 +9,7 @@
 [![Tests](https://img.shields.io/github/actions/workflow/status/slaf-project/slaf/ci.yml?branch=main&label=tests)](https://github.com/slaf-project/slaf/actions)
 [![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/pavanramkumar/33e8b97f85afdc956a71edc623f5c2ba/raw/slaf-coverage.json)](https://github.com/slaf-project/slaf/actions)
 [![Code style](https://img.shields.io/badge/code%20style-ruff-black.svg)](https://github.com/astral-sh/ruff)
-[![PyPI](https://img.shields.io/badge/PyPI-0.2.0-blue.svg)](https://pypi.org/project/slafdb/)
+[![PyPI](https://img.shields.io/badge/PyPI-0.3.0-blue.svg)](https://pypi.org/project/slafdb/)
 [![PyPI Downloads](https://static.pepy.tech/badge/slafdb)](https://pepy.tech/projects/slafdb)
 
 **SLAF** is a high-performance format for single-cell data that combines the power of SQL with lazy evaluation. Built for large-scale single-cell analysis with memory efficiency and production-ready ML capabilities.
