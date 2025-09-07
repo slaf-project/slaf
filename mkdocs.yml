@@ -180,6 +180,7 @@ nav:
   - Blog:
       - Introducing SLAF: blog/introducing-slaf.md
       - Blazing Fast Dataloaders: blog/blazing-fast-dataloaders.md
+      - Mixture of Scanners: blog/blazing-fast-dataloaders-2.md
 
 # Extra
 extra:
