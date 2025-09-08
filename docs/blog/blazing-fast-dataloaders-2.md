@@ -1,6 +1,6 @@
 # Blazing Fast Dataloaders #2: Ignatius takes a trip to the Library of Congress
 
-Remember Ignatius O'Reilly from _A Confederacy of Dunces_? Voracious, impatient, impressionable, perambulatorily challenged? That's modern neural network pretraining on GPUs.
+Remember Ignatius J Reilly from _A Confederacy of Dunces_? Voracious, impatient, impressionable, perambulatorily challenged? That's modern neural network pretraining on GPUs.
 
 Ignatius's traits map perfectly to GPU training challenges:
 
