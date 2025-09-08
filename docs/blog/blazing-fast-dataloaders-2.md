@@ -243,12 +243,12 @@ The beautiful part is that this randomization comes with minimal throughput cost
 | Strategy                  | Throughput (books/sec) | Performance vs Sequential |
 | ------------------------- | ---------------------- | ------------------------- |
 | Sequential (Lazy)         | 23,728                 | 100% (baseline)           |
-| Fragment Hopping          | 26,769                 | 113% (slightly faster)    |
+| Floor Stepping            | 26,769                 | 113% (slightly faster)    |
 | Mixture of Scanners (MoS) | 22,972                 | 97% (nearly identical)    |
 
 !!! success "Speed Without Sacrificing Throughput"
 
-    Our contraption delivers books at **97% the speed of the simple sequential approach** while achieving **88-90% of perfect randomization**. This breaks the traditional speed-vs-randomness tradeoff that has plagued library science for decades.
+    Our contraption delivers books at **97% the speed of the simple sequential approach** while achieving **88-90% of perfect randomization**.
 
 ### Why the Contraption Works So Well
 
