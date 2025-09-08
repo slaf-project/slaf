@@ -109,7 +109,7 @@ Tokenized mode provides pre-tokenized sequences ready for GPU training, demonstr
 
 To ensure models don't converge to local minima due to biased and highly correlated training batches, we want to make training batches as random as possible. However, random reads are more expensive than sequential reads, so we need to balance randomness with performance.
 
-To address this challenge, we developed a novel dataloader strategy called the **Mixture of Scanners (MoS)** approach, which randomly tasks a small randomized group of scanners to populate a queue of training batches by reading from different starting points of the dataset. A deeper dive into our approach to optimize dataloaders is available [here](../blog/blazing-fast-dataloaders.md) and a more detailed write up of the MoS dataloader is in the works.
+To address this challenge, we developed a novel dataloader strategy called the **Mixture of Scanners (MoS)** approach, which randomly tasks a small randomized group of scanners to populate a queue of training batches by reading from different starting points of the dataset. A deeper dive into our approach to optimize dataloaders is available [here](../blog/blazing-fast-dataloaders.md) and a more detailed write up of the MoS dataloader is [here](../blog/blazing-fast-dataloaders-2.md).
 
 To measure entropy without using metadata, we simulate random cell IDs and measure L1 distance between pairs of cell IDs both within and across adjacent training batches for our different dataloaders to show how each dataloader strategy performs relative to a purely sequential (lowerbound) vs a truly random approach (upperbound).
 
