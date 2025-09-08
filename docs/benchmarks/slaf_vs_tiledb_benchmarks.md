@@ -16,7 +16,7 @@ Both SLAF and TileDB represent modern approaches to single-cell data storage, us
 | **Cell-centric Queries**   | **1.1x-1.4x faster**   | synthetic_50k_processed |
 | **Gene-centric Queries**   | **2.5x-3.3x slower**   | synthetic_50k_processed |
 | **Submatrix Queries**      | **2.5x-5.0x slower**   | synthetic_50k_processed |
-| **ML Data Loading**        | **14.4x faster**       | Tahoe-100M              |
+| **ML Data Loading**        | **45.7x faster**       | Tahoe-100M              |
 
 !!! success "Modern Format Advantage"
 
