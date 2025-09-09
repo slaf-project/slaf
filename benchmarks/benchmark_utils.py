@@ -69,6 +69,32 @@ def get_slaf_memory_usage(slaf_obj):
     return total_memory
 
 
+def get_tiledb_memory_usage(experiment, query_result=None):
+    """Get comprehensive memory usage of TileDB SOMA objects
+
+    Args:
+        experiment: TileDB SOMA experiment object
+        query_result: Optional query result (Arrow table or Polars DataFrame) to include
+
+    Returns:
+        Total memory usage in MB
+    """
+    total_memory = 0.0
+
+    # Measure the experiment object itself (minimal overhead)
+    total_memory += get_object_memory_usage(experiment)
+
+    # Measure any query results if provided
+    if query_result is not None:
+        total_memory += get_object_memory_usage(query_result)
+
+    # Note: TileDB SOMA experiments are primarily file-based with minimal in-memory footprint
+    # The actual data is read on-demand and the memory usage is captured in query_result
+    # This is different from h5ad which loads everything into memory
+
+    return total_memory
+
+
 def get_sparse_matrix_size(sparse_matrix):
     """Get the total memory size of a sparse matrix in bytes"""
     total = 0

@@ -8,6 +8,7 @@ from benchmark_utils import (
     clear_caches,
     get_object_memory_usage,
     get_slaf_memory_usage,
+    get_tiledb_memory_usage,
 )
 
 from slaf.core.slaf import SLAFArray
@@ -226,8 +227,8 @@ def _measure_tiledb_cell_filtering(tiledb_path: str, scenario: dict):
     try:
         experiment = tiledbsoma.Experiment.open(tiledb_path)
         tiledb_load_time = time.time() - start
-        # Measure memory footprint of the experiment object
-        tiledb_load_memory = get_object_memory_usage(experiment)
+        # Measure memory footprint of the experiment object (minimal overhead)
+        tiledb_load_memory = get_tiledb_memory_usage(experiment)
     except Exception as e:
         print(f"TileDB loading failed: {e}")
         return {
@@ -241,13 +242,14 @@ def _measure_tiledb_cell_filtering(tiledb_path: str, scenario: dict):
     # Read obs metadata with pushdown filter
     start = time.time()
     obs_df = None
+    obs_table = None
     try:
         # Use pushdown filtering as recommended by TileDB developers
         obs_table = experiment.obs.read(value_filter=scenario["tiledb_filter"]).concat()
         obs_df = pl.from_arrow(obs_table)
         tiledb_query_time = time.time() - start
-        # Measure memory of the filtered result
-        result_memory = get_object_memory_usage(obs_df)
+        # Measure memory of the filtered result (Arrow table + Polars DataFrame)
+        result_memory = get_tiledb_memory_usage(experiment, obs_df)
         tiledb_count = len(obs_df)
     except Exception as e:
         print(f"TileDB pushdown filtering failed: {e}")
@@ -259,6 +261,8 @@ def _measure_tiledb_cell_filtering(tiledb_path: str, scenario: dict):
     del experiment
     if obs_df is not None:
         del obs_df
+    if obs_table is not None:
+        del obs_table
     gc.collect()
 
     return {

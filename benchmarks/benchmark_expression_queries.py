@@ -1,7 +1,11 @@
 import time
 
 import scanpy as sc
-from benchmark_utils import get_object_memory_usage, get_slaf_memory_usage
+from benchmark_utils import (
+    get_object_memory_usage,
+    get_slaf_memory_usage,
+    get_tiledb_memory_usage,
+)
 
 from slaf.core.slaf import SLAFArray
 
@@ -276,8 +280,8 @@ def _measure_tiledb_expression_query(tiledb_path: str, scenario: dict):
     experiment = tiledbsoma.Experiment.open(tiledb_path)
     X = experiment.ms["RNA"].X["data"]
     tiledb_load_time = time.time() - start
-    # Measure memory footprint of the experiment object
-    tiledb_load_memory = get_object_memory_usage(experiment)
+    # Measure memory footprint of the experiment object (minimal overhead)
+    tiledb_load_memory = get_tiledb_memory_usage(experiment)
 
     # Read metadata for ID mapping
     obs_table = experiment.obs.read().concat()
@@ -347,8 +351,8 @@ def _measure_tiledb_expression_query(tiledb_path: str, scenario: dict):
             raise ValueError(f"Unknown scenario type: {scenario['type']}")
 
         tiledb_query_time = time.time() - start
-        # Measure memory of the result
-        tiledb_query_memory = get_object_memory_usage(result)
+        # Measure memory of the result (experiment + result)
+        tiledb_query_memory = get_tiledb_memory_usage(experiment, result)
         result_size = (
             result.shape[0] * result.shape[1] if hasattr(result, "shape") else 0
         )

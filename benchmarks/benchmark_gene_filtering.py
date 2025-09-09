@@ -2,7 +2,12 @@ import time
 
 import polars as pl
 import scanpy as sc
-from benchmark_utils import clear_caches, get_object_memory_usage, get_slaf_memory_usage
+from benchmark_utils import (
+    clear_caches,
+    get_object_memory_usage,
+    get_slaf_memory_usage,
+    get_tiledb_memory_usage,
+)
 
 from slaf.core.slaf import SLAFArray
 
@@ -206,8 +211,8 @@ def _measure_tiledb_gene_filtering(tiledb_path: str, scenario: dict):
     try:
         experiment = tiledbsoma.Experiment.open(tiledb_path)
         tiledb_load_time = time.time() - start
-        # Measure memory footprint of the experiment object
-        tiledb_load_memory = get_object_memory_usage(experiment)
+        # Measure memory footprint of the experiment object (minimal overhead)
+        tiledb_load_memory = get_tiledb_memory_usage(experiment)
     except Exception as e:
         print(f"TileDB loading failed: {e}")
         return {
@@ -221,6 +226,7 @@ def _measure_tiledb_gene_filtering(tiledb_path: str, scenario: dict):
     # Read var metadata with pushdown filter
     start = time.time()
     var_df = None
+    var_table = None
     try:
         # Use pushdown filtering as recommended by TileDB developers
         var_table = (
@@ -230,8 +236,8 @@ def _measure_tiledb_gene_filtering(tiledb_path: str, scenario: dict):
         )
         var_df = pl.from_arrow(var_table)
         tiledb_query_time = time.time() - start
-        # Measure memory of the filtered result
-        result_memory = get_object_memory_usage(var_df)
+        # Measure memory of the filtered result (Arrow table + Polars DataFrame)
+        result_memory = get_tiledb_memory_usage(experiment, var_df)
         tiledb_count = len(var_df)
     except Exception as e:
         print(f"TileDB pushdown filtering failed: {e}")
@@ -243,6 +249,8 @@ def _measure_tiledb_gene_filtering(tiledb_path: str, scenario: dict):
     del experiment
     if var_df is not None:
         del var_df
+    if var_table is not None:
+        del var_table
     gc.collect()
 
     return {
