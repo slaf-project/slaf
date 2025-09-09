@@ -32,32 +32,32 @@ Cell filtering is a fundamental operation in single-cell analysis, used for qual
 
 | Scenario | h5ad Total (ms) | SLAF Total (ms) | TileDB Total (ms) | SLAF vs h5ad | SLAF vs TileDB | Description                                 |
 | -------- | --------------- | --------------- | ----------------- | ------------ | -------------- | ------------------------------------------- |
-| S1       | 343.7           | 9.4             | 43.7              | **36.6x**    | **4.7x**       | Cells with >=500 genes                      |
-| S2       | 189.9           | 2.6             | 16.0              | **72.9x**    | **6.1x**       | High UMI count (total_counts > 2000)        |
-| S3       | 170.1           | 3.9             | 16.5              | **43.8x**    | **4.2x**       | Mitochondrial fraction < 0.1                |
-| S4       | 183.2           | 7.3             | 15.5              | **25.1x**    | **2.1x**       | Complex multi-condition filter              |
-| S5       | 168.1           | 2.6             | 14.3              | **65.0x**    | **5.5x**       | Cell type annotation filter                 |
-| S6       | 171.5           | 1.7             | 12.5              | **102.1x**   | **7.5x**       | Cells from batch_1                          |
-| S7       | 165.5           | 3.8             | 14.5              | **43.9x**    | **3.8x**       | Cells in clusters 0,1 from batch_1          |
-| S8       | 178.9           | 1.9             | 12.6              | **95.9x**    | **6.7x**       | High-quality cells (>=1000 genes, <=10% mt) |
-| S9       | 164.7           | 1.8             | 12.9              | **90.8x**    | **7.1x**       | Cells with 800-2000 total counts            |
-| S10      | 175.1           | 1.6             | 12.7              | **111.8x**   | **8.1x**       | Cells with 200-1500 genes                   |
+| S1       | 530.0           | 2.9             | 20.9              | **183.6x**   | **7.3x**       | Cells with >=500 genes                      |
+| S2       | 169.7           | 2.0             | 21.3              | **83.3x**    | **10.5x**      | High UMI count (total_counts > 2000)        |
+| S3       | 170.7           | 1.9             | 21.3              | **92.2x**    | **11.5x**      | Mitochondrial fraction < 0.1                |
+| S4       | 177.1           | 2.0             | 18.6              | **86.7x**    | **9.1x**       | Complex multi-condition filter              |
+| S5       | 186.6           | 2.8             | 18.1              | **67.2x**    | **6.5x**       | Cell type annotation filter                 |
+| S6       | 171.4           | 2.0             | 20.9              | **86.3x**    | **10.5x**      | Cells from batch_1                          |
+| S7       | 207.0           | 2.3             | 23.8              | **89.4x**    | **10.3x**      | Cells in clusters 0,1 from batch_1          |
+| S8       | 170.9           | 2.1             | 23.0              | **79.6x**    | **10.7x**      | High-quality cells (>=1000 genes, <=10% mt) |
+| S9       | 172.1           | 2.5             | 19.3              | **70.2x**    | **7.9x**       | Cells with 800-2000 total counts            |
+| S10      | 173.5           | 2.1             | 20.8              | **84.6x**    | **10.1x**      | Cells with 200-1500 genes                   |
 
 **Average Performance:**
 
-- **SLAF vs h5ad**: **68.8x faster**
-- **SLAF vs TileDB**: **5.6x faster**
-- **Memory Usage**: SLAF uses 105.5x less memory than h5ad
+- **SLAF vs h5ad**: **92.3x faster**
+- **SLAF vs TileDB**: **9.4x faster**
+- **Memory Usage**: SLAF uses 115.7x less memory than h5ad
 
 ### **Key Insights**
 
 !!! success "Dramatic Performance Advantage"
 
-    SLAF achieves **68.8x average speedup** over h5ad for cell filtering operations, demonstrating the massive performance benefits of modern columnar storage and optimized querying.
+    SLAF achieves **92.3x average speedup** over h5ad for cell filtering operations, demonstrating the massive performance benefits of modern columnar storage and optimized querying.
 
 !!! info "Columnar Format Efficiency"
 
-    Both SLAF and TileDB (Arrow-based formats) significantly outperform h5ad, with SLAF providing an additional 5.6x advantage over TileDB through its optimized streaming architecture.
+    Both SLAF and TileDB (Arrow-interoperable formats) significantly outperform h5ad, with SLAF providing an additional 9.4x advantage over TileDB through its optimized streaming architecture.
 
 ## **Gene Filtering Benchmarks**
 
@@ -67,31 +67,31 @@ Gene filtering operations are essential for feature selection, quality control, 
 
 | Scenario | h5ad Total (ms) | SLAF Total (ms) | TileDB Total (ms) | SLAF vs h5ad | SLAF vs TileDB | Description                                 |
 | -------- | --------------- | --------------- | ----------------- | ------------ | -------------- | ------------------------------------------- |
-| S1       | 43.9            | 2.1             | 22.0              | **20.6x**    | **10.3x**      | Genes expressed in >=10 cells               |
-| S2       | 34.9            | 1.6             | 15.3              | **21.6x**    | **9.4x**       | Genes with >=100 total counts               |
-| S3       | 32.9            | 1.9             | 13.6              | **17.6x**    | **7.3x**       | Genes with mean expression >=0.1            |
-| S4       | 32.6            | 1.7             | 19.2              | **19.3x**    | **11.4x**      | Exclude mitochondrial genes                 |
-| S5       | 33.1            | 1.6             | 13.3              | **20.4x**    | **8.2x**       | Highly variable genes                       |
-| S6       | 33.7            | 1.5             | 13.6              | **22.2x**    | **8.9x**       | Non-highly variable genes                   |
-| S7       | 32.5            | 1.9             | 13.9              | **16.8x**    | **7.2x**       | Genes in >=50 cells with >=500 total counts |
-| S8       | 33.0            | 1.7             | 12.0              | **18.9x**    | **6.8x**       | Genes with 100-10000 total counts           |
-| S9       | 32.4            | 1.7             | 14.1              | **18.9x**    | **8.2x**       | Genes in 5-1000 cells                       |
+| S1       | 43.4            | 3.0             | 22.3              | **14.6x**    | **7.5x**       | Genes expressed in >=10 cells               |
+| S2       | 32.3            | 1.7             | 19.5              | **19.4x**    | **11.7x**      | Genes with >=100 total counts               |
+| S3       | 32.1            | 1.8             | 9.3               | **17.4x**    | **5.0x**       | Genes with mean expression >=0.1            |
+| S4       | 31.1            | 1.6             | 15.8              | **19.9x**    | **10.1x**      | Exclude mitochondrial genes                 |
+| S5       | 32.7            | 1.7             | 16.9              | **19.7x**    | **10.2x**      | Highly variable genes                       |
+| S6       | 31.7            | 2.1             | 15.8              | **15.4x**    | **7.7x**       | Non-highly variable genes                   |
+| S7       | 31.5            | 2.0             | 18.2              | **15.8x**    | **9.1x**       | Genes in >=50 cells with >=500 total counts |
+| S8       | 31.7            | 1.9             | 19.8              | **17.0x**    | **10.6x**      | Genes with 100-10000 total counts           |
+| S9       | 33.2            | 2.0             | 11.3              | **16.4x**    | **5.6x**       | Genes in 5-1000 cells                       |
 
 **Average Performance:**
 
-- **SLAF vs h5ad**: **19.6x faster**
+- **SLAF vs h5ad**: **17.3x faster**
 - **SLAF vs TileDB**: **8.6x faster**
-- **Memory Usage**: SLAF uses 2.1x less memory than h5ad
+- **Memory Usage**: SLAF uses 2.2x less memory than h5ad
 
 ### **Key Insights**
 
 !!! success "Consistent High Performance"
 
-    SLAF maintains consistent 16x+ speedups across all gene filtering scenarios, demonstrating robust optimization of Polars operations and modern storage formats.
+    SLAF maintains consistent 14x+ speedups across all gene filtering scenarios, demonstrating robust optimization of Polars operations and modern storage formats.
 
 !!! info "Memory Efficiency"
 
-    Gene filtering operations show moderate memory efficiency gains, with SLAF using 2.1x less memory than h5ad for equivalent operations.
+    Gene filtering operations show moderate memory efficiency gains, with SLAF using 2.2x less memory than h5ad for equivalent operations.
 
 ## **Expression Queries Benchmarks**
 
@@ -101,37 +101,37 @@ Expression queries retrieve specific expression data for cells or genes, support
 
 | Scenario | h5ad Total (ms) | SLAF Total (ms) | TileDB Total (ms) | SLAF vs h5ad | SLAF vs TileDB | Description                  |
 | -------- | --------------- | --------------- | ----------------- | ------------ | -------------- | ---------------------------- |
-| S1       | 492.1           | 30.6            | 41.7              | **16.1x**    | **1.4x**       | Single cell expression       |
-| S2       | 172.8           | 12.9            | 14.9              | **13.4x**    | **1.1x**       | Another single cell          |
-| S3       | 168.1           | 12.8            | 16.6              | **13.2x**    | **1.3x**       | Two cells                    |
-| S4       | 171.5           | 12.9            | 15.8              | **13.3x**    | **1.2x**       | Three cells                  |
-| S5       | 198.5           | 328.3           | 190.3             | **0.6x**     | **0.6x**       | Single gene across all cells |
-| S6       | 312.4           | 303.8           | 130.4             | **1.0x**     | **0.4x**       | Another single gene          |
-| S7       | 316.4           | 313.2           | 87.6              | **1.0x**     | **0.3x**       | Two genes                    |
-| S8       | 224.3           | 355.0           | 96.3              | **0.6x**     | **0.3x**       | Three genes                  |
-| S9       | 277.5           | 20.2            | 9.4               | **13.7x**    | **0.5x**       | 100x50 submatrix             |
-| S10      | 168.5           | 55.4            | 9.1               | **3.0x**     | **0.2x**       | 500x100 submatrix            |
-| S11      | 174.1           | 51.0            | 11.2              | **3.4x**     | **0.2x**       | 500x500 submatrix            |
+| S1       | 484.5           | 16.1            | 63.8              | **30.1x**    | **4.0x**       | Single cell expression       |
+| S2       | 251.3           | 13.9            | 19.3              | **18.1x**    | **1.4x**       | Another single cell          |
+| S3       | 328.3           | 14.2            | 18.1              | **23.1x**    | **1.3x**       | Two cells                    |
+| S4       | 233.2           | 15.5            | 19.0              | **15.1x**    | **1.2x**       | Three cells                  |
+| S5       | 232.7           | 523.7           | 150.8             | **0.4x**     | **0.3x**       | Single gene across all cells |
+| S6       | 203.4           | 442.6           | 84.2              | **0.5x**     | **0.2x**       | Another single gene          |
+| S7       | 256.1           | 303.0           | 97.7              | **0.8x**     | **0.3x**       | Two genes                    |
+| S8       | 212.0           | 655.9           | 83.3              | **0.3x**     | **0.1x**       | Three genes                  |
+| S9       | 221.4           | 22.5            | 9.9               | **9.9x**     | **0.4x**       | 100x50 submatrix             |
+| S10      | 168.3           | 61.9            | 12.1              | **2.7x**     | **0.2x**       | 500x100 submatrix            |
+| S11      | 212.2           | 63.2            | 10.8              | **3.4x**     | **0.2x**       | 500x500 submatrix            |
 
 **Average Performance:**
 
-- **SLAF vs h5ad**: **6.8x faster**
-- **SLAF vs TileDB**: **1.8x faster**
-- **Memory Usage**: SLAF uses 145x less memory than h5ad
+- **SLAF vs h5ad**: **9.5x faster**
+- **SLAF vs TileDB**: **0.9x faster**
+- **Memory Usage**: SLAF uses 154.6x less memory than h5ad
 
 ### **Key Insights**
 
 !!! success "Query Optimization"
 
-    SLAF's expression query performance demonstrates efficient sparse matrix operations and optimized data access patterns, achieving 6.8x average speedup over h5ad.
+    SLAF's expression query performance demonstrates efficient sparse matrix operations and optimized data access patterns, achieving 9.5x average speedup over h5ad.
 
 !!! info "TileDB's Expression Query Strengths"
 
-    TileDB demonstrates impressive performance for gene expression queries and submatrix operations, often outperforming both SLAF and h5ad. For single gene queries across all cells (S5-S8), TileDB shows 1.7-3.7x speedup over SLAF, highlighting its optimized columnar access patterns for gene-centric operations.
+    TileDB demonstrates impressive performance for gene expression queries and submatrix operations, often outperforming both SLAF and h5ad. For single gene queries across all cells (S5-S8), TileDB shows 2.5-10x speedup over SLAF, highlighting its optimized columnar access patterns for gene-centric operations.
 
 !!! info "SLAF's Cell-Centric Advantages"
 
-    SLAF maintains strong performance for cell-centric queries (S1-S4, S9-S11), achieving 13-16x speedup over h5ad for single cell and submatrix operations, while TileDB shows competitive or superior performance for larger submatrices.
+    SLAF maintains strong performance for cell-centric queries (S1-S4, S9-S11), achieving 15-30x speedup over h5ad for single cell and submatrix operations, while TileDB shows competitive or superior performance for larger submatrices.
 
 !!! info "Mixed Performance Profile"
 

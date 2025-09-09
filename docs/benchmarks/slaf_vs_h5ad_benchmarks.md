@@ -10,14 +10,14 @@ SLAF provides **dramatic performance improvements** over h5ad across all benchma
 
 | Category               | SLAF vs h5ad Speedup | Memory Efficiency      | Dataset                 |
 | ---------------------- | -------------------- | ---------------------- | ----------------------- |
-| **Cell Filtering**     | **68.8x faster**     | **105.5x less memory** | synthetic_50k_processed |
-| **Gene Filtering**     | **19.6x faster**     | **2.1x less memory**   | synthetic_50k_processed |
-| **Expression Queries** | **6.8x faster**      | **145x less memory**   | synthetic_50k_processed |
+| **Cell Filtering**     | **92.3x faster**     | **115.7x less memory** | synthetic_50k_processed |
+| **Gene Filtering**     | **17.3x faster**     | **2.2x less memory**   | synthetic_50k_processed |
+| **Expression Queries** | **9.5x faster**      | **154.6x less memory** | synthetic_50k_processed |
 | **ML Data Loading**    | **55x faster**       | **2.3x less memory**   | Tahoe-100M              |
 
 !!! success "Performance Leadership"
 
-    SLAF consistently outperforms h5ad by **6.8x-68.8x** across all operation types while using **2.3x-145x less memory**.
+    SLAF consistently outperforms h5ad by **9.5x-92.3x** across all operation types while using **2.2x-154.6x less memory**.
 
 ## **Bioinformatics Benchmarks**
 
@@ -29,21 +29,21 @@ Cell filtering operations are fundamental to single-cell analysis workflows, use
 
 | Scenario | h5ad Total (ms) | SLAF Total (ms) | Speedup    | Description                                 |
 | -------- | --------------- | --------------- | ---------- | ------------------------------------------- |
-| S1       | 343.7           | 9.4             | **36.6x**  | Cells with >=500 genes                      |
-| S2       | 189.9           | 2.6             | **72.9x**  | High UMI count (total_counts > 2000)        |
-| S3       | 170.1           | 3.9             | **43.8x**  | Mitochondrial fraction < 0.1                |
-| S4       | 183.2           | 7.3             | **25.1x**  | Complex multi-condition filter              |
-| S5       | 168.1           | 2.6             | **65.0x**  | Cell type annotation filter                 |
-| S6       | 171.5           | 1.7             | **102.1x** | Cells from batch_1                          |
-| S7       | 165.5           | 3.8             | **43.9x**  | Cells in clusters 0,1 from batch_1          |
-| S8       | 178.9           | 1.9             | **95.9x**  | High-quality cells (>=1000 genes, <=10% mt) |
-| S9       | 164.7           | 1.8             | **90.8x**  | Cells with 800-2000 total counts            |
-| S10      | 175.1           | 1.6             | **111.8x** | Cells with 200-1500 genes                   |
+| S1       | 530.0           | 2.9             | **183.6x** | Cells with >=500 genes                      |
+| S2       | 169.7           | 2.0             | **83.3x**  | High UMI count (total_counts > 2000)        |
+| S3       | 170.7           | 1.9             | **92.2x**  | Mitochondrial fraction < 0.1                |
+| S4       | 177.1           | 2.0             | **86.7x**  | Complex multi-condition filter              |
+| S5       | 186.6           | 2.8             | **67.2x**  | Cell type annotation filter                 |
+| S6       | 171.4           | 2.0             | **86.3x**  | Cells from batch_1                          |
+| S7       | 207.0           | 2.3             | **89.4x**  | Cells in clusters 0,1 from batch_1          |
+| S8       | 170.9           | 2.1             | **79.6x**  | High-quality cells (>=1000 genes, <=10% mt) |
+| S9       | 172.1           | 2.5             | **70.2x**  | Cells with 800-2000 total counts            |
+| S10      | 173.5           | 2.1             | **84.6x**  | Cells with 200-1500 genes                   |
 
 **Average Performance:**
 
-- **SLAF vs h5ad**: **68.8x faster**
-- **Memory Usage**: SLAF uses 105.5x less memory than h5ad
+- **SLAF vs h5ad**: **92.3x faster**
+- **Memory Usage**: SLAF uses 115.7x less memory than h5ad
 
 ### **Gene Filtering Performance**
 
@@ -51,20 +51,20 @@ Gene filtering operations are essential for feature selection, quality control, 
 
 | Scenario | h5ad Total (ms) | SLAF Total (ms) | Speedup   | Description                                 |
 | -------- | --------------- | --------------- | --------- | ------------------------------------------- |
-| S1       | 43.9            | 2.1             | **20.6x** | Genes expressed in >=10 cells               |
-| S2       | 34.9            | 1.6             | **21.6x** | Genes with >=100 total counts               |
-| S3       | 32.9            | 1.9             | **17.6x** | Genes with mean expression >=0.1            |
-| S4       | 32.6            | 1.7             | **19.3x** | Exclude mitochondrial genes                 |
-| S5       | 33.1            | 1.6             | **20.4x** | Highly variable genes                       |
-| S6       | 33.7            | 1.5             | **22.2x** | Non-highly variable genes                   |
-| S7       | 32.5            | 1.9             | **16.8x** | Genes in >=50 cells with >=500 total counts |
-| S8       | 33.0            | 1.7             | **18.9x** | Genes with 100-10000 total counts           |
-| S9       | 32.4            | 1.7             | **18.9x** | Genes in 5-1000 cells                       |
+| S1       | 43.4            | 3.0             | **14.6x** | Genes expressed in >=10 cells               |
+| S2       | 32.3            | 1.7             | **19.4x** | Genes with >=100 total counts               |
+| S3       | 32.1            | 1.8             | **17.4x** | Genes with mean expression >=0.1            |
+| S4       | 31.1            | 1.6             | **19.9x** | Exclude mitochondrial genes                 |
+| S5       | 32.7            | 1.7             | **19.7x** | Highly variable genes                       |
+| S6       | 31.7            | 2.1             | **15.4x** | Non-highly variable genes                   |
+| S7       | 31.5            | 2.0             | **15.8x** | Genes in >=50 cells with >=500 total counts |
+| S8       | 31.7            | 1.9             | **17.0x** | Genes with 100-10000 total counts           |
+| S9       | 33.2            | 2.0             | **16.4x** | Genes in 5-1000 cells                       |
 
 **Average Performance:**
 
-- **SLAF vs h5ad**: **19.6x faster**
-- **Memory Usage**: SLAF uses 2.1x less memory than h5ad
+- **SLAF vs h5ad**: **17.3x faster**
+- **Memory Usage**: SLAF uses 2.2x less memory than h5ad
 
 ### **Expression Queries Performance**
 
@@ -72,22 +72,22 @@ Expression queries retrieve specific expression data for cells or genes, support
 
 | Scenario | h5ad Total (ms) | SLAF Total (ms) | Speedup   | Description                  |
 | -------- | --------------- | --------------- | --------- | ---------------------------- |
-| S1       | 492.1           | 30.6            | **16.1x** | Single cell expression       |
-| S2       | 172.8           | 12.9            | **13.4x** | Another single cell          |
-| S3       | 168.1           | 12.8            | **13.2x** | Two cells                    |
-| S4       | 171.5           | 12.9            | **13.3x** | Three cells                  |
-| S5       | 198.5           | 328.3           | **0.6x**  | Single gene across all cells |
-| S6       | 312.4           | 303.8           | **1.0x**  | Another single gene          |
-| S7       | 316.4           | 313.2           | **1.0x**  | Two genes                    |
-| S8       | 224.3           | 355.0           | **0.6x**  | Three genes                  |
-| S9       | 277.5           | 20.2            | **13.7x** | 100x50 submatrix             |
-| S10      | 168.5           | 55.4            | **3.0x**  | 500x100 submatrix            |
-| S11      | 174.1           | 51.0            | **3.4x**  | 500x500 submatrix            |
+| S1       | 484.5           | 16.1            | **30.1x** | Single cell expression       |
+| S2       | 251.3           | 13.9            | **18.1x** | Another single cell          |
+| S3       | 328.3           | 14.2            | **23.1x** | Two cells                    |
+| S4       | 233.2           | 15.5            | **15.1x** | Three cells                  |
+| S5       | 232.7           | 523.7           | **0.4x**  | Single gene across all cells |
+| S6       | 203.4           | 442.6           | **0.5x**  | Another single gene          |
+| S7       | 256.1           | 303.0           | **0.8x**  | Two genes                    |
+| S8       | 212.0           | 655.9           | **0.3x**  | Three genes                  |
+| S9       | 221.4           | 22.5            | **9.9x**  | 100x50 submatrix             |
+| S10      | 168.3           | 61.9            | **2.7x**  | 500x100 submatrix            |
+| S11      | 212.2           | 63.2            | **3.4x**  | 500x500 submatrix            |
 
 **Average Performance:**
 
-- **SLAF vs h5ad**: **6.8x faster**
-- **Memory Usage**: SLAF uses 145x less memory than h5ad
+- **SLAF vs h5ad**: **9.5x faster**
+- **Memory Usage**: SLAF uses 154.6x less memory than h5ad
 
 ## **Machine Learning Benchmarks**
 
