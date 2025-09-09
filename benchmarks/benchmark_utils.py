@@ -424,35 +424,125 @@ def warm_up_slaf_database(slaf_instance, verbose=False):
         "SELECT COUNT(*) FROM genes",
         "SELECT COUNT(*) FROM expression",
         # Common filtering patterns
-        "SELECT cell_id FROM cells LIMIT 10",
-        "SELECT gene_id FROM genes LIMIT 10",
+        "SELECT cell_integer_id FROM cells LIMIT 10",
+        "SELECT gene_integer_id FROM genes LIMIT 10",
         # Expression queries
-        "SELECT cell_id, gene_id, value FROM expression WHERE cell_integer_id = 0 LIMIT 10",
-        "SELECT cell_id, gene_id, value FROM expression WHERE gene_integer_id = 0 LIMIT 10",
+        "SELECT cell_integer_id, gene_integer_id, value FROM expression WHERE cell_integer_id = 0 LIMIT 10",
+        "SELECT cell_integer_id, gene_integer_id, value FROM expression WHERE gene_integer_id = 0 LIMIT 10",
         # Aggregation queries
-        "SELECT MIN(value), MAX(value) FROM expression",
+        "SELECT MIN(value) AS min_value, MAX(value) AS max_value FROM expression",
         "SELECT COUNT(*) FROM expression WHERE value > 0",
-        # Window function queries (for tokenizer scenarios)
-        "SELECT cell_id, gene_id, value, ROW_NUMBER() OVER (PARTITION BY cell_id ORDER BY value DESC) as rank FROM expression WHERE cell_integer_id < 10",
-        # Complex queries with joins
-        "SELECT c.cell_id, g.gene_id, e.value FROM expression e JOIN cells c ON e.cell_id = c.cell_id JOIN genes g ON e.gene_id = g.gene_id LIMIT 10",
+        # Window function queries (for tokenizer scenarios) - simplified without ROW_NUMBER
+        "SELECT cell_integer_id, gene_integer_id, value FROM expression WHERE cell_integer_id < 10 ORDER BY value DESC LIMIT 10",
+        # Complex queries with joins - simplified to avoid column name conflicts
+        "SELECT e.cell_integer_id, e.gene_integer_id, e.value FROM expression e LIMIT 10",
     ]
 
-    try:
-        for i, query in enumerate(warmup_queries):
-            if verbose and i % 3 == 0:  # Print progress every 3 queries
-                console.print(f"    Warming up query {i + 1}/{len(warmup_queries)}...")
+    failed_queries = []
+    for i, query in enumerate(warmup_queries):
+        if verbose and i % 3 == 0:  # Print progress every 3 queries
+            console.print(f"    Warming up query {i + 1}/{len(warmup_queries)}...")
 
+        try:
             # Execute warm-up query (discard results)
             _ = slaf_instance.query(query)
+        except Exception as e:
+            failed_queries.append((i + 1, str(e)))
+            if verbose:
+                console.print(f"    ❌ Query {i + 1} failed: {e}")
 
-    except Exception as e:
-        if verbose:
-            console.print(f"    Warning: Some warm-up queries failed: {e}")
+    if failed_queries and verbose:
+        console.print(f"    ⚠️  {len(failed_queries)} warm-up queries failed:")
+        for query_num, error in failed_queries:
+            console.print(f"      Query {query_num}: {error}")
         # Continue anyway - partial warm-up is better than none
 
     if verbose:
         console.print("  ✅ SLAF database warm-up completed")
+
+
+def warm_up_tiledb_database(experiment, verbose=False):
+    """Comprehensive warm-up for TileDB database to eliminate cold start effects
+
+    This function performs equivalent warm-up operations to SLAF:
+    1. Clears all caches
+    2. Runs equivalent queries to prime the database
+    3. Warms up common query patterns
+
+    Args:
+        experiment: TileDB SOMA experiment to warm up
+        verbose: Whether to print warm-up status
+    """
+    if verbose:
+        console = Console()
+        console.print("  🔥 Warming up TileDB database...")
+
+    # Clear all caches first
+    clear_caches()
+
+    # Define equivalent warm-up operations for TileDB
+    # Use correct SOMA API structure based on documentation and tiledb_dataloaders.py
+    warmup_operations = [
+        # Basic metadata queries (equivalent to SLAF COUNT queries)
+        lambda: experiment.obs.read().concat(),
+        lambda: experiment.ms["RNA"]["var"].read().concat(),
+        lambda: experiment.ms["RNA"]["X"]["data"]
+        .read((slice(0, 10),))
+        .tables()
+        .concat(),
+        # Common filtering patterns (equivalent to SLAF LIMIT queries)
+        lambda: experiment.obs.read().concat(),
+        lambda: experiment.ms["RNA"]["var"].read().concat(),
+        # Expression queries (equivalent to SLAF WHERE queries)
+        lambda: experiment.ms["RNA"]["X"]["data"]
+        .read((slice(0, 1),))
+        .tables()
+        .concat(),
+        lambda: experiment.ms["RNA"]["X"]["data"]
+        .read((slice(None), slice(0, 1)))
+        .tables()
+        .concat(),
+        # Aggregation queries (equivalent to SLAF MIN/MAX/COUNT queries)
+        lambda: experiment.ms["RNA"]["X"]["data"]
+        .read((slice(0, 100),))
+        .tables()
+        .concat(),
+        lambda: experiment.ms["RNA"]["X"]["data"]
+        .read((slice(0, 50),))
+        .tables()
+        .concat(),
+        # Simple filtering (equivalent to SLAF WHERE value > 0)
+        lambda: experiment.ms["RNA"]["X"]["data"]
+        .read((slice(0, 20),))
+        .tables()
+        .concat(),
+        # Metadata reading (equivalent to SLAF JOIN queries)
+        lambda: experiment.obs.read().concat(),
+    ]
+
+    failed_operations = []
+    for i, operation in enumerate(warmup_operations):
+        if verbose and i % 3 == 0:  # Print progress every 3 operations
+            console.print(
+                f"    Warming up operation {i + 1}/{len(warmup_operations)}..."
+            )
+
+        try:
+            # Execute warm-up operation (discard results)
+            _ = operation()
+        except Exception as e:
+            failed_operations.append((i + 1, str(e)))
+            if verbose:
+                console.print(f"    ❌ Operation {i + 1} failed: {e}")
+
+    if failed_operations and verbose:
+        console.print(f"    ⚠️  {len(failed_operations)} warm-up operations failed:")
+        for op_num, error in failed_operations:
+            console.print(f"      Operation {op_num}: {error}")
+        # Continue anyway - partial warm-up is better than none
+
+    if verbose:
+        console.print("  ✅ TileDB database warm-up completed")
 
 
 def burn_in_first_scenario(slaf_instance=None, verbose=False):

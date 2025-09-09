@@ -30,23 +30,21 @@ def demo_realistic_cell_queries():
             "description": "Cells with >=500 genes",
             "h5ad_code": lambda adata: adata.obs[adata.obs.n_genes_by_counts >= 500],
             "slaf_code": lambda slaf: slaf.filter_cells(n_genes_by_counts=">=500"),
-            "tiledb_code": lambda obs_df: obs_df.filter(
-                pl.col("n_genes_by_counts") >= 500
-            ),
+            "tiledb_filter": "n_genes_by_counts>=500",
         },
         {
             "name": "max_pct_mt_15",
             "description": "Cells with <=15% mitochondrial genes",
             "h5ad_code": lambda adata: adata.obs[adata.obs.pct_counts_mt <= 15],
             "slaf_code": lambda slaf: slaf.filter_cells(pct_counts_mt="<=15"),
-            "tiledb_code": lambda obs_df: obs_df.filter(pl.col("pct_counts_mt") <= 15),
+            "tiledb_filter": "pct_counts_mt<=15",
         },
         {
             "name": "low_mito",
             "description": "Cells with low mitochondrial content",
             "h5ad_code": lambda adata: adata.obs[~adata.obs.high_mito],
             "slaf_code": lambda slaf: slaf.filter_cells(high_mito=False),
-            "tiledb_code": lambda obs_df: obs_df.filter(~pl.col("high_mito")),
+            "tiledb_filter": "high_mito==False",
         },
         # Cluster-based filtering (common after clustering)
         {
@@ -56,16 +54,14 @@ def demo_realistic_cell_queries():
                 adata.obs.leiden.isin(["0", "1", "2"])
             ],
             "slaf_code": lambda slaf: slaf.filter_cells(leiden=["0", "1", "2"]),
-            "tiledb_code": lambda obs_df: obs_df.filter(
-                pl.col("leiden").is_in(["0", "1", "2"])
-            ),
+            "tiledb_filter": "leiden in ['0', '1', '2']",
         },
         {
             "name": "cluster_0",
             "description": "Cells in largest cluster (0)",
             "h5ad_code": lambda adata: adata.obs[adata.obs.leiden == "0"],
             "slaf_code": lambda slaf: slaf.filter_cells(leiden="0"),
-            "tiledb_code": lambda obs_df: obs_df.filter(pl.col("leiden") == "0"),
+            "tiledb_filter": "leiden=='0'",
         },
         # Batch filtering (very common)
         {
@@ -73,7 +69,7 @@ def demo_realistic_cell_queries():
             "description": "Cells from batch_1",
             "h5ad_code": lambda adata: adata.obs[adata.obs.batch == "batch_1"],
             "slaf_code": lambda slaf: slaf.filter_cells(batch="batch_1"),
-            "tiledb_code": lambda obs_df: obs_df.filter(pl.col("batch") == "batch_1"),
+            "tiledb_filter": "batch=='batch_1'",
         },
         # Combined filtering (most realistic)
         {
@@ -85,9 +81,7 @@ def demo_realistic_cell_queries():
             "slaf_code": lambda slaf: slaf.filter_cells(
                 leiden=["0", "1"], batch="batch_1"
             ),
-            "tiledb_code": lambda obs_df: obs_df.filter(
-                (pl.col("leiden").is_in(["0", "1"])) & (pl.col("batch") == "batch_1")
-            ),
+            "tiledb_filter": "leiden in ['0', '1'] and batch=='batch_1'",
         },
         {
             "name": "high_quality",
@@ -98,9 +92,7 @@ def demo_realistic_cell_queries():
             "slaf_code": lambda slaf: slaf.filter_cells(
                 n_genes_by_counts=">=1000", pct_counts_mt="<=10"
             ),
-            "tiledb_code": lambda obs_df: obs_df.filter(
-                (pl.col("n_genes_by_counts") >= 1000) & (pl.col("pct_counts_mt") <= 10)
-            ),
+            "tiledb_filter": "n_genes_by_counts>=1000 and pct_counts_mt<=10",
         },
         # Additional range queries with new operators
         {
@@ -112,9 +104,7 @@ def demo_realistic_cell_queries():
             "slaf_code": lambda slaf: slaf.filter_cells(total_counts=">=800").filter(
                 pl.col("total_counts") <= 2000
             ),
-            "tiledb_code": lambda obs_df: obs_df.filter(
-                (pl.col("total_counts") >= 800) & (pl.col("total_counts") <= 2000)
-            ),
+            "tiledb_filter": "total_counts>=800 and total_counts<=2000",
         },
         {
             "name": "genes_200_1500",
@@ -126,10 +116,7 @@ def demo_realistic_cell_queries():
             "slaf_code": lambda slaf: slaf.filter_cells(
                 n_genes_by_counts=">=200"
             ).filter(pl.col("n_genes_by_counts") <= 1500),
-            "tiledb_code": lambda obs_df: obs_df.filter(
-                (pl.col("n_genes_by_counts") >= 200)
-                & (pl.col("n_genes_by_counts") <= 1500)
-            ),
+            "tiledb_filter": "n_genes_by_counts>=200 and n_genes_by_counts<=1500",
         },
     ]
     return scenarios
@@ -220,7 +207,7 @@ def _measure_slaf_cell_filtering(slaf_path: str, scenario: dict):
 
 
 def _measure_tiledb_cell_filtering(tiledb_path: str, scenario: dict):
-    """Measure TileDB cell filtering performance"""
+    """Measure TileDB cell filtering performance using pushdown filters"""
     import gc
 
     if not TILEDB_AVAILABLE:
@@ -251,54 +238,34 @@ def _measure_tiledb_cell_filtering(tiledb_path: str, scenario: dict):
             "tiledb_count": 0,
         }
 
-    # Read obs metadata as Arrow Table
+    # Read obs metadata with pushdown filter
     start = time.time()
+    obs_df = None
     try:
-        obs_table = experiment.obs.read().concat()
+        # Use pushdown filtering as recommended by TileDB developers
+        obs_table = experiment.obs.read(value_filter=scenario["tiledb_filter"]).concat()
         obs_df = pl.from_arrow(obs_table)
         tiledb_query_time = time.time() - start
-        # Measure memory of the obs DataFrame
-        obs_memory = get_object_memory_usage(obs_df)
+        # Measure memory of the filtered result
+        result_memory = get_object_memory_usage(obs_df)
+        tiledb_count = len(obs_df)
     except Exception as e:
-        print(f"TileDB obs reading failed: {e}")
+        print(f"TileDB pushdown filtering failed: {e}")
         tiledb_query_time = 0
-        obs_memory = 0
-        obs_df = None
-
-    # Execute the filtering operation
-    start = time.time()
-    try:
-        if obs_df is not None:
-            result = scenario["tiledb_code"](obs_df)
-            tiledb_filter_time = time.time() - start
-            tiledb_count = len(result)
-            # Measure memory of the result
-            result_memory = get_object_memory_usage(result)
-        else:
-            tiledb_filter_time = 0
-            tiledb_count = 0
-            result_memory = 0
-    except Exception as e:
-        print(f"TileDB filtering failed: {e}")
-        tiledb_filter_time = 0
-        tiledb_count = 0
         result_memory = 0
-
-    # Total query time includes reading + filtering
-    total_query_time = tiledb_query_time + tiledb_filter_time
-
-    # Total query memory includes obs reading + result
-    total_query_memory = obs_memory + result_memory
+        tiledb_count = 0
 
     # Clean up
-    del experiment, obs_df
+    del experiment
+    if obs_df is not None:
+        del obs_df
     gc.collect()
 
     return {
         "tiledb_load_time": tiledb_load_time,
-        "tiledb_query_time": total_query_time,
+        "tiledb_query_time": tiledb_query_time,
         "tiledb_load_memory": float(tiledb_load_memory),
-        "tiledb_query_memory": float(total_query_memory),
+        "tiledb_query_memory": float(result_memory),
         "tiledb_count": int(tiledb_count),
     }
 
@@ -396,18 +363,29 @@ def benchmark_cell_filtering(
             if verbose:
                 print("  Running burn-in for first scenario...")
 
-            # Create a temporary SLAF instance for burn-in
+            # Create temporary instances for burn-in
             temp_slaf = SLAFArray(slaf_path)
 
-            # Use centralized warm-up system
-            from benchmark_utils import warm_up_slaf_database
+            # Warm up both SLAF and TileDB for fair comparison
+            from benchmark_utils import warm_up_slaf_database, warm_up_tiledb_database
 
+            # Warm up SLAF
             warm_up_slaf_database(temp_slaf, verbose=verbose)
+
+            # Warm up TileDB if available
+            if TILEDB_AVAILABLE:
+                try:
+                    temp_experiment = tiledbsoma.Experiment.open(tiledb_path)
+                    warm_up_tiledb_database(temp_experiment, verbose=verbose)
+                    temp_experiment.close()
+                except Exception as e:
+                    if verbose:
+                        print(f"    Warning: TileDB warm-up failed: {e}")
 
             # Clear caches again after burn-in
             clear_caches()
 
-            # Clean up temporary instance
+            # Clean up temporary instances
             del temp_slaf
 
         try:

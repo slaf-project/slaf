@@ -24,30 +24,28 @@ def demo_realistic_gene_queries():
             "description": "Genes expressed in >=10 cells",
             "h5ad_code": lambda adata: adata.var[adata.var.n_cells_by_counts >= 10],
             "slaf_code": lambda slaf: slaf.filter_genes(n_cells_by_counts=">=10"),
-            "tiledb_code": lambda var_df: var_df.filter(
-                pl.col("n_cells_by_counts") >= 10
-            ),
+            "tiledb_filter": "n_cells_by_counts>=10",
         },
         {
             "name": "min_total_counts_100",
             "description": "Genes with >=100 total counts",
             "h5ad_code": lambda adata: adata.var[adata.var.total_counts >= 100],
             "slaf_code": lambda slaf: slaf.filter_genes(total_counts=">=100"),
-            "tiledb_code": lambda var_df: var_df.filter(pl.col("total_counts") >= 100),
+            "tiledb_filter": "total_counts>=100",
         },
         {
             "name": "min_mean_counts_0.1",
             "description": "Genes with mean expression >=0.1",
             "h5ad_code": lambda adata: adata.var[adata.var.mean_counts >= 0.1],
             "slaf_code": lambda slaf: slaf.filter_genes(mean_counts=">=0.1"),
-            "tiledb_code": lambda var_df: var_df.filter(pl.col("mean_counts") >= 0.1),
+            "tiledb_filter": "mean_counts>=0.1",
         },
         {
             "name": "exclude_mt",
             "description": "Exclude mitochondrial genes",
             "h5ad_code": lambda adata: adata.var[~adata.var.mt],
             "slaf_code": lambda slaf: slaf.filter_genes(mt=False),
-            "tiledb_code": lambda var_df: var_df.filter(~pl.col("mt")),
+            "tiledb_filter": "mt==False",
         },
         # Highly variable gene filtering (post-analysis)
         {
@@ -55,14 +53,14 @@ def demo_realistic_gene_queries():
             "description": "Highly variable genes",
             "h5ad_code": lambda adata: adata.var[adata.var.highly_variable],
             "slaf_code": lambda slaf: slaf.filter_genes(highly_variable=True),
-            "tiledb_code": lambda var_df: var_df.filter(pl.col("highly_variable")),
+            "tiledb_filter": "highly_variable==True",
         },
         {
             "name": "non_highly_variable",
             "description": "Non-highly variable genes",
             "h5ad_code": lambda adata: adata.var[~adata.var.highly_variable],
             "slaf_code": lambda slaf: slaf.filter_genes(highly_variable=False),
-            "tiledb_code": lambda var_df: var_df.filter(~pl.col("highly_variable")),
+            "tiledb_filter": "highly_variable==False",
         },
         # Combined filtering (most realistic)
         {
@@ -74,9 +72,7 @@ def demo_realistic_gene_queries():
             "slaf_code": lambda slaf: slaf.filter_genes(
                 n_cells_by_counts=">=50", total_counts=">=500"
             ),
-            "tiledb_code": lambda var_df: var_df.filter(
-                (pl.col("n_cells_by_counts") >= 50) & (pl.col("total_counts") >= 500)
-            ),
+            "tiledb_filter": "n_cells_by_counts>=50 and total_counts>=500",
         },
         # Range queries
         {
@@ -88,9 +84,7 @@ def demo_realistic_gene_queries():
             "slaf_code": lambda slaf: slaf.filter_genes(total_counts=">=100").filter(
                 pl.col("total_counts") <= 10000
             ),
-            "tiledb_code": lambda var_df: var_df.filter(
-                (pl.col("total_counts") >= 100) & (pl.col("total_counts") <= 10000)
-            ),
+            "tiledb_filter": "total_counts>=100 and total_counts<=10000",
         },
         {
             "name": "cells_5_1000",
@@ -102,10 +96,7 @@ def demo_realistic_gene_queries():
             "slaf_code": lambda slaf: slaf.filter_genes(n_cells_by_counts=">=5").filter(
                 pl.col("n_cells_by_counts") <= 1000
             ),
-            "tiledb_code": lambda var_df: var_df.filter(
-                (pl.col("n_cells_by_counts") >= 5)
-                & (pl.col("n_cells_by_counts") <= 1000)
-            ),
+            "tiledb_filter": "n_cells_by_counts>=5 and n_cells_by_counts<=1000",
         },
     ]
     return scenarios
@@ -196,7 +187,7 @@ def _measure_slaf_gene_filtering(slaf_path: str, scenario: dict):
 
 
 def _measure_tiledb_gene_filtering(tiledb_path: str, scenario: dict):
-    """Measure TileDB gene filtering performance"""
+    """Measure TileDB gene filtering performance using pushdown filters"""
     import gc
 
     if not TILEDB_AVAILABLE:
@@ -227,54 +218,38 @@ def _measure_tiledb_gene_filtering(tiledb_path: str, scenario: dict):
             "tiledb_count": 0,
         }
 
-    # Read var metadata as Arrow Table
+    # Read var metadata with pushdown filter
     start = time.time()
+    var_df = None
     try:
-        var_table = experiment.ms["RNA"].var.read().concat()
+        # Use pushdown filtering as recommended by TileDB developers
+        var_table = (
+            experiment.ms["RNA"]
+            .var.read(value_filter=scenario["tiledb_filter"])
+            .concat()
+        )
         var_df = pl.from_arrow(var_table)
         tiledb_query_time = time.time() - start
-        # Measure memory of the var DataFrame
-        var_memory = get_object_memory_usage(var_df)
+        # Measure memory of the filtered result
+        result_memory = get_object_memory_usage(var_df)
+        tiledb_count = len(var_df)
     except Exception as e:
-        print(f"TileDB var reading failed: {e}")
+        print(f"TileDB pushdown filtering failed: {e}")
         tiledb_query_time = 0
-        var_memory = 0
-        var_df = None
-
-    # Execute the filtering operation
-    start = time.time()
-    try:
-        if var_df is not None:
-            result = scenario["tiledb_code"](var_df)
-            tiledb_filter_time = time.time() - start
-            tiledb_count = len(result)
-            # Measure memory of the result
-            result_memory = get_object_memory_usage(result)
-        else:
-            tiledb_filter_time = 0
-            tiledb_count = 0
-            result_memory = 0
-    except Exception as e:
-        print(f"TileDB filtering failed: {e}")
-        tiledb_filter_time = 0
-        tiledb_count = 0
         result_memory = 0
-
-    # Total query time includes reading + filtering
-    total_query_time = tiledb_query_time + tiledb_filter_time
-
-    # Total query memory includes var reading + result
-    total_query_memory = var_memory + result_memory
+        tiledb_count = 0
 
     # Clean up
-    del experiment, var_df
+    del experiment
+    if var_df is not None:
+        del var_df
     gc.collect()
 
     return {
         "tiledb_load_time": tiledb_load_time,
-        "tiledb_query_time": total_query_time,
+        "tiledb_query_time": tiledb_query_time,
         "tiledb_load_memory": float(tiledb_load_memory),
-        "tiledb_query_memory": float(total_query_memory),
+        "tiledb_query_memory": float(result_memory),
         "tiledb_count": int(tiledb_count),
     }
 
@@ -372,18 +347,29 @@ def benchmark_gene_filtering(
             if verbose:
                 print("  Running burn-in for first scenario...")
 
-            # Create a temporary SLAF instance for burn-in
+            # Create temporary instances for burn-in
             temp_slaf = SLAFArray(slaf_path)
 
-            # Use centralized warm-up system
-            from benchmark_utils import warm_up_slaf_database
+            # Warm up both SLAF and TileDB for fair comparison
+            from benchmark_utils import warm_up_slaf_database, warm_up_tiledb_database
 
+            # Warm up SLAF
             warm_up_slaf_database(temp_slaf, verbose=verbose)
+
+            # Warm up TileDB if available
+            if TILEDB_AVAILABLE:
+                try:
+                    temp_experiment = tiledbsoma.Experiment.open(tiledb_path)
+                    warm_up_tiledb_database(temp_experiment, verbose=verbose)
+                    temp_experiment.close()
+                except Exception as e:
+                    if verbose:
+                        print(f"    Warning: TileDB warm-up failed: {e}")
 
             # Clear caches again after burn-in
             clear_caches()
 
-            # Clean up temporary instance
+            # Clean up temporary instances
             del temp_slaf
 
         try:

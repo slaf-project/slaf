@@ -282,7 +282,7 @@ def _measure_tiledb_expression_query(tiledb_path: str, scenario: dict):
     # Read metadata for ID mapping
     obs_table = experiment.obs.read().concat()
     obs_df = pl.from_arrow(obs_table)
-    var_table = experiment.ms["RNA"].var.read().concat()
+    var_table = experiment.ms["RNA"]["var"].read().concat()
     var_df = pl.from_arrow(var_table)
 
     # Execute the query based on scenario type
@@ -513,18 +513,29 @@ def benchmark_expression_queries(
             if verbose:
                 print("  Running burn-in for first scenario...")
 
-            # Create a temporary SLAF instance for burn-in
+            # Create temporary instances for burn-in
             temp_slaf = SLAFArray(slaf_path)
 
-            # Use centralized warm-up system
-            from benchmark_utils import warm_up_slaf_database
+            # Warm up both SLAF and TileDB for fair comparison
+            from benchmark_utils import warm_up_slaf_database, warm_up_tiledb_database
 
+            # Warm up SLAF
             warm_up_slaf_database(temp_slaf, verbose=verbose)
+
+            # Warm up TileDB if available
+            if TILEDB_AVAILABLE and tiledb_path:
+                try:
+                    temp_experiment = tiledbsoma.Experiment.open(tiledb_path)
+                    warm_up_tiledb_database(temp_experiment, verbose=verbose)
+                    temp_experiment.close()
+                except Exception as e:
+                    if verbose:
+                        print(f"    Warning: TileDB warm-up failed: {e}")
 
             # Clear caches again after burn-in
             clear_caches()
 
-            # Clean up temporary instance
+            # Clean up temporary instances
             del temp_slaf
 
         try:
