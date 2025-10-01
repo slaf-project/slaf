@@ -1,6 +1,6 @@
 # ML Benchmarks: SLAF vs State-of-the-Art Dataloaders
 
-SLAF provides state-of-the-art (SOTA) performance in data loading throughput for machine learning workflows, reaching **2.3x speedups** relative to current SOTA, particularly for training transformer-based single-cell foundation models. What follows are comprehensive benchmarks comparing SLAF against state-of-the-art dataloaders including scDataset, AnnDataLoader, AnnLoader, and TileDB DataLoader.
+SLAF provides state-of-the-art (SOTA) performance in data loading throughput for machine learning workflows, reaching **2.6x speedups** relative to current SOTA, particularly for training transformer-based single-cell foundation models. What follows are comprehensive benchmarks comparing SLAF against state-of-the-art dataloaders including scDataset, BioNeMo SCDL, AnnDataLoader, AnnLoader, and TileDB DataLoader.
 
 ## **Motivation**
 
@@ -169,16 +169,13 @@ We ran a test on 10,000 batches with a batch_size of 32 from a 5.4M cell dataset
 
 ### **Alternate Dataloaders**
 
-We compared SLAF against four state-of-the-art dataloaders:
+We compared SLAF against five state-of-the-art dataloaders:
 
 1. **[AnnLoader](https://anndata.readthedocs.io/en/latest/generated/anndata.experimental.AnnLoader.html)** - Experimental PyTorch DataLoader for AnnData objects from `anndata.experimental`
 2. **[AnnDataLoader](https://docs.scvi-tools.org/en/stable/api/reference/scvi.dataloaders.AnnDataLoader.html)** - From [scvi-tools](https://docs.scvi-tools.org/en/stable/index.html), designed for training variational autoencoder (VAE)-style models
 3. **[scDataset](https://github.com/Kidara/scDataset/tree/main)** - Recently released high-performance dataloader with multiprocessing support
 4. **[TileDB DataLoader](https://tiledbsoma.readthedocs.io/)** - An internal custom PyTorch DataLoader for TileDB SOMA experiments
-
-!!! question "Help"
-
-    At the time of writing, we couldn't find a submodule called scdl from NVIDIA BioNeMo's PyPI package that implements [the scdl dataloader](https://docs.nvidia.com/bionemo-framework/2.0/user-guide/developer-guide/bionemo-scdl/bionemo-scdl-Overview/); it seems to have been deprecated.
+5. **[BioNeMo SCDL](https://docs.nvidia.com/bionemo-framework/2.0/user-guide/developer-guide/bionemo-scdl/bionemo-scdl-Overview/)** - NVIDIA's single-cell data loading framework for scalable training of foundation models
 
 ### **Methodology**
 
@@ -188,8 +185,8 @@ To match the benchmarks from the [scDataset paper](https://arxiv.org/pdf/2506.01
 
 - **Initial Warmup**: 15 batches to initialize each dataloader
 - **Extended Warmup**: 10 seconds to allow all systems to reach steady state
-- **Measurement Period**: 40 seconds of pure performance measurement (excluding warmup time)
-- **Total Runtime**: 50 seconds per benchmark (10s warmup + 40s measurement)
+- **Measurement Period**: 30 seconds of pure performance measurement (excluding warmup time)
+- **Total Runtime**: 40 seconds per benchmark (10s warmup + 30s measurement)
 
 This ensures fair and consistent performance comparisons across all dataloader systems.
 
@@ -199,21 +196,32 @@ Raw data loading performance measures the base throughput of each system without
 
 | System            | Throughput (cells/sec) |
 | ----------------- | ---------------------- |
-| **SLAF**          | **25,244**             |
-| scDataset         | 9,411                  |
-| TileDB DataLoader | 552                    |
-| AnnDataLoader     | 413                    |
-| AnnLoader         | 250                    |
+| **SLAF**          | **24,587**             |
+| scDataset         | 9,550                  |
+| BioNeMo SCDL      | 3,101                  |
+| TileDB DataLoader | 518                    |
+| AnnDataLoader     | 422                    |
+| AnnLoader         | 239                    |
 
 !!! success "SOTA Performance"
 
-    SLAF achieves **2.7x higher throughput** than scDataset, **45.7x higher throughput** than TileDB DataLoader, **61.1x higher throughput** than AnnDataLoader, and **101x higher throughput** than AnnLoader in raw data loading.
+    SLAF achieves **2.6x higher throughput** than scDataset, **7.9x higher throughput** than BioNeMo SCDL, **47.5x higher throughput** than TileDB DataLoader, **58.3x higher throughput** than AnnDataLoader, and **102.9x higher throughput** than AnnLoader in raw data loading.
 
 !!! info "scDataset Performance Analysis"
 
-    Our comprehensive benchmarks reveal that scDataset can achieve excellent performance with proper parameter tuning. We observed **9,411 cells/sec** with optimized parameters, which is **4.7x higher** than the paper's reported ~2,000 cells/sec, even without using multiprocessing. Note that these are completely different systems though (M1 Max vs NVIDIA DGX CPU).
+    Our comprehensive benchmarks reveal that scDataset can achieve excellent performance with proper parameter tuning. We observed **9,550 cells/sec** with optimized parameters, which is **4.8x higher** than the paper's reported ~2,000 cells/sec, even without using multiprocessing. Note that these are completely different systems though (M1 Max vs NVIDIA DGX CPU).
 
     However, we found significant limitations with multiprocessing due to pickling issues with h5py-backed AnnData objects. See our [detailed scDataset benchmarks](scdataset_benchmarks.md) for complete analysis including parameter scaling and multiprocessing limitations.
+
+!!! info "BioNeMo SCDL Performance Analysis"
+
+    BioNeMo SCDL demonstrates solid performance with **3,101 cells/sec** on the Tahoe100M dataset. While this is lower than SLAF and scDataset, it represents a significant improvement over traditional h5ad-based loaders. SCDL's memory-mapped approach provides good performance for large datasets, though it doesn't match SLAF's optimized streaming architecture.
+
+    **Key SCDL Characteristics:**
+    - **Memory-mapped storage**: Uses memory-mapped arrays for efficient access to datasets larger than RAM
+    - **PyTorch compatibility**: Implements PyTorch Dataset interface with sparse matrix collation
+    - **NVIDIA optimization**: Designed specifically for foundation model training workflows
+    - **Conversion overhead**: Requires one-time conversion from h5ad to SCDL format (took ~11.5 minutes for Tahoe100M)
 
 !!! info "Parameter Scaling Validation"
 
@@ -233,7 +241,7 @@ Even though SLAF's tokenizing dataloaders do more work (tokenization), we find t
 
 | System   | Throughput (cells/sec) | Throughput (tokens/sec) |
 | -------- | ---------------------- | ----------------------- |
-| **SLAF** | **7,465**              | **15,288,876**          |
+| **SLAF** | **7,487**              | **15,332,896**          |
 
 !!! success "GPU-Ready Cell Sentences"
 
@@ -251,7 +259,7 @@ Even though SLAF's tokenizing dataloaders do more work (tokenization), we find t
 
 !!! info "In-memory formats matter"
 
-    The performance difference between AnnDataLoader (413 cells/sec) and scDataset (9,411 cells/sec) is dramatic. While scDataset is smarter at batching and randomization, since our benchmark tests them on loading from h5ad, it's important to compare apples to apples dataloader outputs. AnnDataLoader and AnnLoader return `torch.sparse_csr` tensors whereas scDataset returns `scipy.sparse.csr_matrix`, and these format inter-conversions represent non-zero overhead.
+    The performance difference between AnnDataLoader (422 cells/sec) and scDataset (9,550 cells/sec) is dramatic. While scDataset is smarter at batching and randomization, since our benchmark tests them on loading from h5ad, it's important to compare apples to apples dataloader outputs. AnnDataLoader and AnnLoader return `torch.sparse_csr` tensors whereas scDataset returns `scipy.sparse.csr_matrix`, and these format inter-conversions represent non-zero overhead.
 
     In our work, we noticed different overheads for conversion from polars dataframe (SLAF's preferred format for raw data) to torch and scipy sparse formats, and ultimately decided to keep raw outputs in polars. The performance of AnnLoader and AnnDataLoader relative to scDataset is almost certainly due to the overhead of conversion from scipy sparse arrays to torch arrays and worth benchmarking more carefully to identify low-hanging fruit for optimizations in both AnnLoader and AnnDataLoader.
 

@@ -52,9 +52,17 @@ class ExternalBenchmarkResult:
 class ExternalDataloaderBenchmark:
     """Benchmark SLAF against external dataloaders."""
 
-    def __init__(self, slaf_path: str, h5ad_path: str):
+    def __init__(
+        self,
+        slaf_path: str,
+        h5ad_path: str,
+        tiledb_path: str = None,
+        scdl_path: str = None,
+    ):
         self.slaf_path = slaf_path
         self.h5ad_path = h5ad_path
+        self.tiledb_path = tiledb_path
+        self.scdl_path = scdl_path
         self.console = Console()
 
         # Load SLAF array
@@ -87,15 +95,6 @@ class ExternalDataloaderBenchmark:
                 "processes": 0,  # Multiprocessing with anndata-loaded objects
                 "claimed_performance": 4000,  # cells/sec from paper
             },
-            "BioNeMo SCDL": {
-                "tier1": {"raw_mode": True, "batch_size": self.batch_size},
-                "tier2": {
-                    "raw_mode": True,
-                    "batch_size": self.batch_size,
-                },  # No tokenization
-                "processes": 2,
-                "estimated_performance": 2000,  # cells/sec estimate
-            },
             "AnnDataLoader": {
                 "tier1": {"raw_mode": True, "batch_size": self.batch_size},
                 "tier2": {
@@ -122,6 +121,15 @@ class ExternalDataloaderBenchmark:
                 },  # No tokenization
                 "processes": 1,
                 "estimated_performance": 800,  # cells/sec estimate
+            },
+            "BioNeMo SCDL": {
+                "tier1": {"raw_mode": True, "batch_size": self.batch_size},
+                "tier2": {
+                    "raw_mode": True,
+                    "batch_size": self.batch_size,
+                },  # No tokenization
+                "processes": 1,
+                "estimated_performance": 2000,  # cells/sec estimate from NVIDIA docs
             },
         }
 
@@ -774,10 +782,14 @@ class ExternalDataloaderBenchmark:
 
         # Setup TileDB DataLoader with MoS enabled
         try:
-            tiledb_path = "../slaf-datasets/synthetic_50k_processed.tiledb"
+            if not self.tiledb_path:
+                self.console.print(
+                    "[yellow]Warning: TileDB path not provided, skipping TileDB benchmark[/yellow]"
+                )
+                return None
 
             dataloader = TileDBDataLoader(
-                tiledb_path=tiledb_path,
+                tiledb_path=self.tiledb_path,
                 batch_size=self.batch_size,
                 prefetch_batch_size=100,  # Updated for 50k cell dataset
                 seed=42,
@@ -840,6 +852,111 @@ class ExternalDataloaderBenchmark:
         """Benchmark TileDB DataLoader in Tier 2 (GPU-ready output)."""
 
         # TileDB DataLoader only provides raw data, not GPU-ready output
+        # So we don't report it in tier 2
+        return None
+
+    def benchmark_scdl_tier1(self) -> ExternalBenchmarkResult | None:
+        """Benchmark BioNeMo SCDL in Tier 1 (raw data loading)."""
+
+        try:
+            from bionemo.scdl.io.single_cell_memmap_dataset import (
+                SingleCellMemMapDataset,
+            )
+            from bionemo.scdl.util.torch_dataloader_utils import (
+                collate_sparse_matrix_batch,
+            )
+            from torch.utils.data import DataLoader
+        except ImportError:
+            self.console.print(
+                "[yellow]Warning: BioNeMo SCDL not available, skipping SCDL benchmark[/yellow]"
+            )
+            return None
+
+        self.console.print(
+            "\n[bold blue]Benchmarking BioNeMo SCDL - Tier 1 (Raw Data Loading)[/bold blue]"
+        )
+
+        # Setup SCDL DataLoader
+        try:
+            if not self.scdl_path:
+                self.console.print(
+                    "[yellow]Warning: SCDL path not provided, skipping SCDL benchmark[/yellow]"
+                )
+                return None
+
+            # Load SCDL dataset
+            scdl_dataset = SingleCellMemMapDataset(self.scdl_path)
+
+            # Create DataLoader with collation function for sparse matrices
+            # Note: SCDL doesn't support infinite epochs, so we'll create a wrapper
+            dataloader = DataLoader(
+                scdl_dataset,
+                batch_size=self.batch_size,
+                shuffle=True,
+                collate_fn=collate_sparse_matrix_batch,
+                num_workers=0,  # Single worker for fair comparison
+            )
+        except Exception as e:
+            self.console.print(f"[red]Error setting up BioNeMo SCDL: {e}[/red]")
+            return None
+
+        # Create a wrapper to make SCDL dataloader run continuously
+        def infinite_scdl_dataloader(dl):
+            """Create an infinite iterator over SCDL dataloader."""
+            while True:
+                yield from dl
+
+        # Warm up (increased for fair comparison)
+        self.console.print("Warming up...")
+        warmup_batches = 15  # Increased from 3 for fair comparison
+        infinite_dataloader = infinite_scdl_dataloader(dataloader)
+        for i, _batch in enumerate(infinite_dataloader):
+            if i >= warmup_batches:
+                break
+
+        # Benchmark with peak memory tracking
+        self.console.print("Running benchmark...")
+        warmup_duration = 10  # Skip first 10 seconds for fair comparison
+        measurement_duration = 30  # Then measure for 30 seconds
+
+        total_cells, batch_count, elapsed_time, peak_memory = (
+            self.benchmark_with_memory_tracking(
+                infinite_dataloader,
+                warmup_duration + measurement_duration,
+                "BioNeMo SCDL",
+            )
+        )
+
+        # Clean up the dataloader to stop background processing
+        del dataloader
+        gc.collect()
+
+        # Calculate metrics (using only measurement time, not warmup)
+        measurement_time = elapsed_time - warmup_duration
+        throughput_cells_per_sec = (
+            total_cells / measurement_time if measurement_time > 0 else 0
+        )
+
+        # Debug output
+        self.console.print(
+            f"  Debug: {total_cells} cells, {measurement_time:.2f}s measurement, {throughput_cells_per_sec:.0f} cells/sec"
+        )
+
+        return ExternalBenchmarkResult(
+            system_name="BioNeMo SCDL",
+            tier="tier1",
+            throughput_cells_per_sec=throughput_cells_per_sec,
+            memory_usage_gb=peak_memory,
+            output_type="raw",
+            processes=1,  # Single worker
+            measurement_time=measurement_time,
+            total_cells=total_cells,
+        )
+
+    def benchmark_scdl_tier2(self) -> ExternalBenchmarkResult | None:
+        """Benchmark BioNeMo SCDL in Tier 2 (GPU-ready output)."""
+
+        # BioNeMo SCDL only provides raw data, not GPU-ready output
         # So we don't report it in tier 2
         return None
 
@@ -916,6 +1033,18 @@ class ExternalDataloaderBenchmark:
                 results.append(tiledbloader_tier2)
         except Exception as e:
             self.console.print(f"[red]Error benchmarking TileDB DataLoader: {e}[/red]")
+
+        # Run BioNeMo SCDL benchmarks
+        try:
+            scdl_tier1 = self.benchmark_scdl_tier1()
+            if scdl_tier1:
+                results.append(scdl_tier1)
+
+            scdl_tier2 = self.benchmark_scdl_tier2()
+            if scdl_tier2:
+                results.append(scdl_tier2)
+        except Exception as e:
+            self.console.print(f"[red]Error benchmarking BioNeMo SCDL: {e}[/red]")
 
         return results
 
@@ -1025,11 +1154,15 @@ class ExternalDataloaderBenchmark:
 def main():
     """Run the external dataloader benchmarks."""
 
-    # Use a smaller dataset for development
+    # Centralized dataset paths
     slaf_path = "../slaf-datasets/plate1_Tahoe100M_v21.slaf"
     h5ad_path = "../slaf-datasets/plate1_Tahoe100M.h5ad"
+    tiledb_path = "../slaf-datasets/synthetic_50k_processed.tiledb"
+    scdl_path = "../slaf-datasets/plate1_Tahoe100M.scdl"
 
-    benchmark = ExternalDataloaderBenchmark(slaf_path, h5ad_path)
+    benchmark = ExternalDataloaderBenchmark(
+        slaf_path, h5ad_path, tiledb_path, scdl_path
+    )
     results = benchmark.run_benchmarks()
     benchmark.print_results(results)
 

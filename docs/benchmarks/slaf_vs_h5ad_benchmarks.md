@@ -99,14 +99,14 @@ Raw data loading measures the base throughput for machine learning workflows wit
 
 | System               | Throughput (cells/sec) | Memory Usage (GB) | Notes                |
 | -------------------- | ---------------------- | ----------------- | -------------------- |
-| **SLAF**             | **25,244**             | 2.1               | Optimized streaming  |
-| h5ad (AnnDataLoader) | 413                    | 4.8               | Traditional approach |
-| h5ad (AnnLoader)     | 250                    | 5.2               | Experimental loader  |
+| **SLAF**             | **24,587**             | 2.1               | Optimized streaming  |
+| h5ad (AnnDataLoader) | 422                    | 4.8               | Traditional approach |
+| h5ad (AnnLoader)     | 239                    | 5.2               | Experimental loader  |
 
 **Performance Comparison:**
 
-- **SLAF vs AnnDataLoader**: **61.1x faster**
-- **SLAF vs AnnLoader**: **101x faster**
+- **SLAF vs AnnDataLoader**: **58.3x faster**
+- **SLAF vs AnnLoader**: **102.9x faster**
 - **Memory Efficiency**: SLAF uses 2.3x less memory
 
 ### **GPU-Ready Output Performance**
@@ -115,7 +115,7 @@ SLAF provides pre-tokenized sequences ready for GPU training, while h5ad-based l
 
 | System       | Throughput (cells/sec) | Throughput (tokens/sec) | Output Type             |
 | ------------ | ---------------------- | ----------------------- | ----------------------- |
-| **SLAF**     | **7,465**              | **15,288,876**          | Pre-tokenized sequences |
+| **SLAF**     | **7,487**              | **15,332,896**          | Pre-tokenized sequences |
 | h5ad loaders | N/A                    | N/A                     | Raw data only           |
 
 !!! success "GPU Training Advantage"
