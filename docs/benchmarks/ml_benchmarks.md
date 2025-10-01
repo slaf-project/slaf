@@ -213,16 +213,6 @@ Raw data loading performance measures the base throughput of each system without
 
     However, we found significant limitations with multiprocessing due to pickling issues with h5py-backed AnnData objects. See our [detailed scDataset benchmarks](scdataset_benchmarks.md) for complete analysis including parameter scaling and multiprocessing limitations.
 
-!!! info "BioNeMo SCDL Performance Analysis"
-
-    BioNeMo SCDL demonstrates solid performance with **3,101 cells/sec** on the Tahoe100M dataset. While this is lower than SLAF and scDataset, it represents a significant improvement over traditional h5ad-based loaders. SCDL's memory-mapped approach provides good performance for large datasets, though it doesn't match SLAF's optimized streaming architecture.
-
-    **Key SCDL Characteristics:**
-    - **Memory-mapped storage**: Uses memory-mapped arrays for efficient access to datasets larger than RAM
-    - **PyTorch compatibility**: Implements PyTorch Dataset interface with sparse matrix collation
-    - **NVIDIA optimization**: Designed specifically for foundation model training workflows
-    - **Conversion overhead**: Requires one-time conversion from h5ad to SCDL format (took ~11.5 minutes for Tahoe100M)
-
 !!! info "Parameter Scaling Validation"
 
     Our parameter sweeps confirm scDataset's strong scaling behavior: **23.1x improvement** from worst to best configuration. The `fetch_factor` parameter shows the strongest scaling (20x+ improvement), while `block_size` shows more moderate effects. This validates the design approach described in their paper, though optimal parameters may vary by hardware.
