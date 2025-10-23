@@ -394,9 +394,9 @@ class TestCLI:
                 assert result.exit_code == 0
                 assert "Converting" in result.stdout
                 # Verify auto-detection was used (no explicit format)
-                mock_converter_instance.convert.assert_called_once_with(
-                    "input.h5ad", "output_dir"
-                )
+        mock_converter_instance.convert.assert_called_once_with(
+            "input.h5ad", "output_dir", skip_validation=False
+        )
 
     @patch("slaf.cli.check_dependencies")
     def test_convert_explicit_format_h5ad(self, mock_check_deps, runner):
@@ -417,9 +417,9 @@ class TestCLI:
                 assert result.exit_code == 0
                 assert "Converting" in result.stdout
                 # Verify explicit format was used
-                mock_converter_instance.convert.assert_called_once_with(
-                    "input.h5ad", "output_dir", input_format="h5ad"
-                )
+        mock_converter_instance.convert.assert_called_once_with(
+            "input.h5ad", "output_dir", input_format="h5ad", skip_validation=False
+        )
 
     @patch("slaf.cli.check_dependencies")
     def test_convert_explicit_format_10x_mtx(self, mock_check_deps, runner):
@@ -440,9 +440,9 @@ class TestCLI:
                 assert result.exit_code == 0
                 assert "Converting" in result.stdout
                 # Verify explicit format was used
-                mock_converter_instance.convert.assert_called_once_with(
-                    "mtx_dir", "output_dir", input_format="10x_mtx"
-                )
+        mock_converter_instance.convert.assert_called_once_with(
+            "mtx_dir", "output_dir", input_format="10x_mtx", skip_validation=False
+        )
 
     @patch("slaf.cli.check_dependencies")
     def test_convert_explicit_format_10x_h5(self, mock_check_deps, runner):
@@ -463,9 +463,9 @@ class TestCLI:
                 assert result.exit_code == 0
                 assert "Converting" in result.stdout
                 # Verify explicit format was used
-                mock_converter_instance.convert.assert_called_once_with(
-                    "data.h5", "output_dir", input_format="10x_h5"
-                )
+        mock_converter_instance.convert.assert_called_once_with(
+            "data.h5", "output_dir", input_format="10x_h5", skip_validation=False
+        )
 
     @patch("slaf.cli.check_dependencies")
     def test_convert_format_mapping_anndata(self, mock_check_deps, runner):
@@ -486,9 +486,9 @@ class TestCLI:
                 assert result.exit_code == 0
                 assert "Converting" in result.stdout
                 # Verify format mapping was applied
-                mock_converter_instance.convert.assert_called_once_with(
-                    "input.h5ad", "output_dir", input_format="h5ad"
-                )
+        mock_converter_instance.convert.assert_called_once_with(
+            "input.h5ad", "output_dir", input_format="h5ad", skip_validation=False
+        )
 
     @patch("slaf.cli.check_dependencies")
     def test_convert_format_mapping_hdf5(self, mock_check_deps, runner):
@@ -509,9 +509,9 @@ class TestCLI:
                 assert result.exit_code == 0
                 assert "Converting" in result.stdout
                 # Verify format mapping was applied
-                mock_converter_instance.convert.assert_called_once_with(
-                    "data.h5", "output_dir", input_format="10x_h5"
-                )
+        mock_converter_instance.convert.assert_called_once_with(
+            "data.h5", "output_dir", input_format="10x_h5", skip_validation=False
+        )
 
     @patch("slaf.cli.check_dependencies")
     def test_convert_chunked_processing(self, mock_check_deps, runner):
@@ -1212,19 +1212,19 @@ class TestCLI:
                 assert result.exit_code == 0
                 assert "Converting" in result.stdout
                 # Verify both format and chunked processing were used
-                mock_converter_instance.convert.assert_called_once_with(
-                    "input.h5ad", "output_dir", input_format="h5ad"
-                )
-                mock_converter.assert_called_once_with(
-                    chunked=True,
-                    chunk_size=5000,
-                    create_indices=False,
-                    optimize_storage=True,
-                    use_optimized_dtypes=True,
-                    enable_v2_manifest=True,
-                    compact_after_write=False,
-                    tiledb_collection_name="RNA",
-                )
+        mock_converter_instance.convert.assert_called_once_with(
+            "input.h5ad", "output_dir", input_format="h5ad", skip_validation=False
+        )
+        mock_converter.assert_called_once_with(
+            chunked=True,
+            chunk_size=5000,
+            create_indices=False,
+            optimize_storage=True,
+            use_optimized_dtypes=True,
+            enable_v2_manifest=True,
+            compact_after_write=False,
+            tiledb_collection_name="RNA",
+        )
 
     def test_convert_help_text_contains_chunked_info(self, runner):
         """Test that convert help text contains chunked processing information."""

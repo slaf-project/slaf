@@ -336,7 +336,7 @@ class TestMultiFileConversion:
 
         error_message = str(exc_info.value)
         assert "Schema compatibility validation failed" in error_message
-        assert "missing genes" in error_message or "extra genes" in error_message
+        assert "Missing genes" in error_message or "Extra genes" in error_message
 
     def test_chunk_size_affects_fragments(self, synthetic_data_dir, tmp_path):
         """Test that chunk size affects fragment structure."""
