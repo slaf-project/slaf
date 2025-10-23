@@ -42,13 +42,13 @@ Add new data to an existing SLAF dataset:
 
 ```bash
 # Append a single file
-slaf append existing.slaf new_data.h5ad
+slaf append new_data.h5ad existing.slaf
 
 # Append multiple files from a directory
-slaf append existing.slaf new_data_folder/
+slaf append new_data_folder/ existing.slaf
 
 # Skip validation if already validated (faster)
-slaf append existing.slaf new_data.h5ad --skip-validation
+slaf append new_data.h5ad existing.slaf --skip-validation
 ```
 
 Perfect for:
@@ -211,7 +211,7 @@ slaf convert data_folder/ output.slaf
 
 # Skip validation (faster, but less safe)
 slaf convert data_folder/ output.slaf --skip-validation
-slaf append existing.slaf new_data.h5ad --skip-validation
+slaf append new_data.h5ad existing.slaf --skip-validation
 ```
 
 ## Advanced Options
@@ -236,7 +236,7 @@ slaf convert data.h5ad output.slaf --verbose
 
 # Skip validation (if already validated)
 slaf convert data_folder/ output.slaf --skip-validation
-slaf append existing.slaf new_data.h5ad --skip-validation
+slaf append new_data.h5ad existing.slaf --skip-validation
 
 # TileDB-specific options
 slaf convert data.tiledb output.slaf --tiledb-collection RNA
@@ -313,8 +313,8 @@ slaf validate-input-files batch1/ batch2/ batch3/
 slaf convert batch1/ initial.slaf
 
 # 3. Append additional batches
-slaf append initial.slaf batch2/
-slaf append initial.slaf batch3/
+slaf append batch2/ initial.slaf
+slaf append batch3/ initial.slaf
 
 # 4. Explore the combined dataset
 slaf info initial.slaf
@@ -327,9 +327,9 @@ slaf info initial.slaf
 slaf convert batch_001/ dataset.slaf
 
 # Add new batches as they arrive
-slaf append dataset.slaf batch_002/
-slaf append dataset.slaf batch_003/
-slaf append dataset.slaf batch_004/
+slaf append batch_002/ dataset.slaf
+slaf append batch_003/ dataset.slaf
+slaf append batch_004/ dataset.slaf
 
 # Each append maintains data integrity and source tracking
 ```
