@@ -90,18 +90,27 @@ def discover_input_files(input_path: str, max_depth: int = 2) -> tuple[list[str]
         discovered_files = []
         detected_formats = set()
 
-        # Search for files with supported extensions
-        supported_extensions = {".h5ad", ".h5", ".tiledb"}
+        # For directories, check if it's a known format directory structure
+        # rather than looking for specific file extensions
+        try:
+            # Try to detect the directory format first
+            directory_format = detect_format(input_path)
+            # If it's a known format directory, treat it as a single "file"
+            discovered_files = [input_path]
+            detected_formats = {directory_format}
+        except ValueError:
+            # Fall back to searching for files with supported extensions
+            supported_extensions = {".h5ad", ".h5", ".tiledb"}
 
-        for file_path in path.rglob("*"):
-            if file_path.is_file() and file_path.suffix in supported_extensions:
-                try:
-                    file_format = detect_format(str(file_path))
-                    discovered_files.append(str(file_path))
-                    detected_formats.add(file_format)
-                except ValueError:
-                    # Skip files that can't be detected
-                    continue
+            for file_path in path.rglob("*"):
+                if file_path.is_file() and file_path.suffix in supported_extensions:
+                    try:
+                        file_format = detect_format(str(file_path))
+                        discovered_files.append(str(file_path))
+                        detected_formats.add(file_format)
+                    except ValueError:
+                        # Skip files that can't be detected
+                        continue
 
         if not discovered_files:
             raise ValueError(f"No supported files found in directory: {input_path}")

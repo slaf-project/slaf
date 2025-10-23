@@ -712,6 +712,7 @@ class SLAFConverter:
                         lance.write_dataset(
                             updated_cells_table,
                             str(existing_slaf_obj / "cells.lance"),
+                            mode="overwrite",
                             enable_v2_manifest_paths=self.enable_v2_manifest,
                             data_storage_version="2.1",
                         )
