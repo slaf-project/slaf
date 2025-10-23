@@ -191,6 +191,64 @@ def examples(
 
 
 @app.command()
+def validate_input_files(
+    input_path: str = typer.Argument(
+        ..., help="Input file or directory path to validate"
+    ),
+    format: str | None = typer.Option(
+        None,
+        "--format",
+        "-f",
+        help="Input format: h5ad, 10x_mtx, 10x_h5, tiledb (auto-detected if not specified)",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+):
+    """Validate input files for multi-file conversion compatibility."""
+    try:
+        from slaf.data.utils import discover_input_files, validate_input_files
+    except ImportError as e:
+        typer.echo("❌ SLAF not installed or not in PYTHONPATH")
+        raise typer.Exit(1) from e
+
+    input_file = Path(input_path)
+    if not input_file.exists():
+        typer.echo(f"❌ Input path not found: {input_path}")
+        raise typer.Exit(1) from None
+
+    typer.echo(f"🔍 Validating input files: {input_path}")
+
+    try:
+        # Discover input files
+        input_files, detected_format = discover_input_files(input_path)
+
+        # Use detected format if auto, otherwise use specified format
+        if format is None:
+            format = detected_format
+
+        typer.echo(f"📁 Found {len(input_files)} {format} files")
+
+        if verbose:
+            for i, file_path in enumerate(input_files, 1):
+                typer.echo(f"  {i}. {file_path}")
+
+        # Validate compatibility
+        validate_input_files(input_files, format)
+
+        typer.echo("✅ All files are compatible for conversion")
+
+        if len(input_files) > 1:
+            typer.echo(
+                f"📊 Summary: {len(input_files)} files ready for multi-file conversion"
+            )
+        else:
+            typer.echo("📊 Summary: Single file ready for conversion")
+
+    except Exception as e:
+        typer.echo(f"❌ Validation failed: {e}")
+        raise typer.Exit(1) from e
+
+
+@app.command()
 def convert(
     input_path: str = typer.Argument(..., help="Input file or directory path"),
     output_path: str = typer.Argument(..., help="Output SLAF directory path"),
@@ -238,6 +296,11 @@ def convert(
         "RNA",
         "--tiledb-collection",
         help="Name of the measurement collection for TileDB format (default: RNA)",
+    ),
+    skip_validation: bool = typer.Option(
+        False,
+        "--skip-validation",
+        help="Skip validation if already validated (for performance)",
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ):
@@ -289,10 +352,15 @@ def convert(
                 "tiledb": "tiledb",
             }
             input_format = format_mapping.get(format, format)
-            converter.convert(input_path, output_path, input_format=input_format)
+            converter.convert(
+                input_path,
+                output_path,
+                input_format=input_format,
+                skip_validation=skip_validation,
+            )
         else:
             # Use auto-detection
-            converter.convert(input_path, output_path)
+            converter.convert(input_path, output_path, skip_validation=skip_validation)
 
         typer.echo(f"✅ Successfully converted to {output_path}")
 
@@ -310,6 +378,106 @@ def convert(
 
     except Exception as e:
         typer.echo(f"❌ Conversion failed: {e}")
+        raise typer.Exit(1) from e
+
+
+@app.command()
+def append(
+    input_path: str = typer.Argument(
+        ..., help="Input file or directory path to append"
+    ),
+    existing_slaf_path: str = typer.Argument(..., help="Path to existing SLAF dataset"),
+    format: str | None = typer.Option(
+        None,
+        "--format",
+        "-f",
+        help="Input format: h5ad, 10x_mtx, 10x_h5, tiledb (auto-detected if not specified)",
+    ),
+    skip_validation: bool = typer.Option(
+        False,
+        "--skip-validation",
+        help="Skip validation if already validated (for performance)",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+):
+    """Append new data to an existing SLAF dataset."""
+    try:
+        from slaf.data.utils import discover_input_files, validate_input_files
+    except ImportError as e:
+        typer.echo("❌ SLAF not installed or not in PYTHONPATH")
+        raise typer.Exit(1) from e
+
+    existing_slaf = Path(existing_slaf_path)
+    if not existing_slaf.exists():
+        typer.echo(f"❌ Existing SLAF dataset not found: {existing_slaf_path}")
+        raise typer.Exit(1) from None
+
+    input_file = Path(input_path)
+    if not input_file.exists():
+        typer.echo(f"❌ Input path not found: {input_path}")
+        raise typer.Exit(1) from None
+
+    typer.echo(f"🔄 Appending data to existing SLAF dataset: {existing_slaf_path}")
+
+    try:
+        from slaf.data import SLAFConverter
+    except ImportError as e:
+        typer.echo("❌ SLAF not installed or not in PYTHONPATH")
+        raise typer.Exit(1) from e
+
+    typer.echo(f"🔄 Appending data from {input_path} to {existing_slaf_path}...")
+
+    try:
+        # Create converter instance
+        converter = SLAFConverter(
+            chunked=True,
+            chunk_size=5000,  # Use default chunk size
+            create_indices=False,  # Don't create indices during append
+            optimize_storage=True,
+            use_optimized_dtypes=True,
+            enable_v2_manifest=True,
+            compact_after_write=False,  # Don't compact during append
+        )
+
+        # Use detected format if auto, otherwise use specified format
+        if format is None:
+            # Discover input files to get format
+            input_files, detected_format = discover_input_files(input_path)
+            format = detected_format
+
+        typer.echo(f"📁 Found {len(input_files)} {format} files to append")
+
+        if verbose:
+            for i, file_path in enumerate(input_files, 1):
+                typer.echo(f"  {i}. {file_path}")
+
+        # Validate compatibility if not skipped
+        if not skip_validation:
+            typer.echo("🔍 Validating compatibility with existing dataset...")
+            validate_input_files(input_files, format)
+            typer.echo("✅ Files are compatible for appending")
+        else:
+            typer.echo("⏭️  Skipping validation (--skip-validation)")
+
+        # Perform append operation
+        converter.append(input_path, existing_slaf_path, input_format=format)
+
+        typer.echo(f"✅ Successfully appended data to {existing_slaf_path}")
+
+        if verbose:
+            # Show some info about the updated dataset
+            from slaf import SLAFArray
+
+            slaf_array = SLAFArray(existing_slaf_path)
+            typer.echo("📊 Updated dataset info:")
+            typer.echo(
+                f"  Shape: {slaf_array.shape[0]:,} cells × {slaf_array.shape[1]:,} genes"
+            )
+            typer.echo(f"  Cell metadata columns: {len(slaf_array.obs.columns)}")
+            typer.echo(f"  Gene metadata columns: {len(slaf_array.var.columns)}")
+
+    except Exception as e:
+        typer.echo(f"❌ Append failed: {e}")
         raise typer.Exit(1) from e
 
 

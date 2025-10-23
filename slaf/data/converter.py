@@ -20,7 +20,7 @@ except ImportError:
     logger.warning("Scanpy not available. Install with: pip install scanpy")
 
 from .chunked_reader import create_chunked_reader
-from .utils import detect_format
+from .utils import discover_input_files, validate_input_files
 
 
 class SLAFConverter:
@@ -133,7 +133,13 @@ class SLAFConverter:
         self.compact_after_write = compact_after_write
         self.tiledb_collection_name = tiledb_collection_name
 
-    def convert(self, input_path: str, output_path: str, input_format: str = "auto"):
+    def convert(
+        self,
+        input_path: str,
+        output_path: str,
+        input_format: str = "auto",
+        skip_validation: bool = False,
+    ):
         """
         Convert single-cell data to SLAF format with optimized storage.
 
@@ -219,24 +225,38 @@ class SLAFConverter:
             ...     print(f"Error: {e}")
             Error: Cannot detect format for: unknown_file.txt
         """
-        if input_format == "auto":
-            input_format = detect_format(input_path)
+        # Discover input files (handles both single files and directories)
+        input_files, detected_format = discover_input_files(input_path)
 
-        if input_format == "h5ad":
-            if not SCANPY_AVAILABLE:
-                raise ImportError(
-                    "Scanpy is required for h5ad conversion. "
-                    "Install with: pip install scanpy"
-                )
-            self._convert_h5ad(input_path, output_path)
-        elif input_format == "10x_mtx":
-            self._convert_10x_mtx(input_path, output_path)
-        elif input_format == "10x_h5":
-            self._convert_10x_h5(input_path, output_path)
-        elif input_format == "tiledb":
-            self._convert_tiledb(input_path, output_path)
+        # Use detected format if auto, otherwise use specified format
+        if input_format == "auto":
+            input_format = detected_format
+
+        # Validate multi-file compatibility if multiple files (unless skipped)
+        if not skip_validation:
+            validate_input_files(input_files, input_format)
+
+        # Handle multiple files vs single file
+        if len(input_files) > 1:
+            self._convert_multiple_files(input_files, output_path, input_format)
         else:
-            raise ValueError(f"Unsupported format: {input_format}")
+            # Single file - use existing logic
+            single_file = input_files[0]
+            if input_format == "h5ad":
+                if not SCANPY_AVAILABLE:
+                    raise ImportError(
+                        "Scanpy is required for h5ad conversion. "
+                        "Install with: pip install scanpy"
+                    )
+                self._convert_h5ad(single_file, output_path)
+            elif input_format == "10x_mtx":
+                self._convert_10x_mtx(single_file, output_path)
+            elif input_format == "10x_h5":
+                self._convert_10x_h5(single_file, output_path)
+            elif input_format == "tiledb":
+                self._convert_tiledb(single_file, output_path)
+            else:
+                raise ValueError(f"Unsupported format: {input_format}")
 
     def convert_anndata(self, adata, output_path: str):
         """Convert AnnData object to SLAF format with COO-style expression table"""
@@ -373,6 +393,659 @@ class SLAFConverter:
                 "Non-chunked conversion not supported for TileDB format. "
                 "Use chunked=True (default) for TileDB conversion."
             )
+
+    def _convert_multiple_files(
+        self, input_files: list[str], output_path: str, input_format: str
+    ):
+        """
+        Convert multiple files to a single SLAF dataset with auto-incrementing IDs.
+
+        This method processes files sequentially and adds fragments to the same
+        SLAF dataset, avoiding the overhead of creating separate SLAF files.
+
+        Args:
+            input_files: List of input file paths
+            output_path: Output SLAF directory path
+            input_format: Format of input files
+        """
+        logger.info(
+            f"Converting {len(input_files)} {input_format} files to SLAF format..."
+        )
+
+        # Create output directory
+        output_path_obj = Path(output_path)
+        output_path_obj.mkdir(exist_ok=True)
+
+        # Track source file information
+        source_file_info = []
+        global_cell_offset = 0
+        total_genes = 0
+        total_cells = 0
+
+        # Process each file and add fragments to the same SLAF dataset
+        for i, file_path in enumerate(input_files):
+            logger.info(
+                f"Processing file {i + 1}/{len(input_files)}: {Path(file_path).name}"
+            )
+
+            try:
+                # Use chunked reader to process file directly
+                with create_chunked_reader(
+                    file_path,
+                    chunk_size=self.chunk_size,
+                    collection_name=self.tiledb_collection_name,
+                ) as reader:
+                    logger.info(
+                        f"Loaded: {reader.n_obs:,} cells × {reader.n_vars:,} genes"
+                    )
+
+                    # Get metadata from reader
+                    obs_df = reader.get_obs_metadata()
+                    var_df = reader.get_var_metadata()
+
+                    # Ensure cell_id and gene_id columns exist
+                    if "cell_id" not in obs_df.columns:
+                        obs_df["cell_id"] = reader.obs_names
+                    if "gene_id" not in var_df.columns:
+                        var_df["gene_id"] = reader.var_names
+
+                    # Add integer IDs with global offset
+                    obs_df["cell_integer_id"] = range(
+                        global_cell_offset, global_cell_offset + len(obs_df)
+                    )
+                    var_df["gene_integer_id"] = range(len(var_df))
+
+                    # Add source file information to cell metadata
+                    source_file = Path(file_path).name
+                    obs_df["source_file"] = source_file
+
+                    # Precompute cell start indices
+                    obs_df["cell_start_index"] = self._compute_cell_start_indices(
+                        reader, obs_df
+                    )
+
+                    # Convert metadata to Lance tables
+                    cell_metadata_table = self._create_metadata_table(
+                        obs_df, "cell_id", integer_mapping=None
+                    )
+                    gene_metadata_table = self._create_metadata_table(
+                        var_df, "gene_id", integer_mapping=None
+                    )
+
+                    # Process expression data in chunks and write directly
+                    expression_path = output_path_obj / "expression.lance"
+                    cells_path = output_path_obj / "cells.lance"
+                    genes_path = output_path_obj / "genes.lance"
+
+                    # Write metadata tables (overwrite for first file, append for subsequent)
+                    if i == 0:
+                        # First file - create new datasets
+                        lance.write_dataset(
+                            cell_metadata_table,
+                            str(cells_path),
+                            mode="overwrite",
+                            enable_v2_manifest_paths=self.enable_v2_manifest,
+                            data_storage_version="2.1",
+                        )
+                        lance.write_dataset(
+                            gene_metadata_table,
+                            str(genes_path),
+                            mode="overwrite",
+                            enable_v2_manifest_paths=self.enable_v2_manifest,
+                            data_storage_version="2.1",
+                        )
+                        total_genes = len(var_df)
+                    else:
+                        # Subsequent files - append to existing datasets
+                        lance.write_dataset(
+                            cell_metadata_table,
+                            str(cells_path),
+                            mode="append",
+                            enable_v2_manifest_paths=self.enable_v2_manifest,
+                            data_storage_version="2.1",
+                        )
+
+                    # Process expression data in chunks and write directly
+                    for chunk_idx, (chunk_table, _obs_slice) in enumerate(
+                        reader.iter_chunks(chunk_size=self.chunk_size)
+                    ):
+                        # Adjust cell integer IDs with global offset
+                        cell_integer_ids = (
+                            chunk_table.column("cell_integer_id").to_numpy()
+                            + global_cell_offset
+                        )
+
+                        # Create adjusted chunk table
+                        if self.optimize_storage:
+                            # Only store integer IDs for maximum storage efficiency
+                            adjusted_chunk = pa.table(
+                                {
+                                    "cell_integer_id": pa.array(cell_integer_ids),
+                                    "gene_integer_id": chunk_table.column(
+                                        "gene_integer_id"
+                                    ),
+                                    "value": chunk_table.column("value"),
+                                }
+                            )
+                        else:
+                            # Store both string and integer IDs for compatibility
+                            adjusted_chunk = pa.table(
+                                {
+                                    "cell_id": chunk_table.column("cell_id"),
+                                    "gene_id": chunk_table.column("gene_id"),
+                                    "cell_integer_id": pa.array(cell_integer_ids),
+                                    "gene_integer_id": chunk_table.column(
+                                        "gene_integer_id"
+                                    ),
+                                    "value": chunk_table.column("value"),
+                                }
+                            )
+
+                        # Write chunk directly to expression dataset
+                        if i == 0 and chunk_idx == 0:
+                            # First chunk of first file - create new dataset
+                            lance.write_dataset(
+                                adjusted_chunk,
+                                str(expression_path),
+                                mode="overwrite",
+                                max_rows_per_file=10000000,
+                                enable_v2_manifest_paths=self.enable_v2_manifest,
+                                data_storage_version="2.1",
+                            )
+                        else:
+                            # Append to existing dataset
+                            lance.write_dataset(
+                                adjusted_chunk,
+                                str(expression_path),
+                                mode="append",
+                                max_rows_per_file=10000000,
+                                enable_v2_manifest_paths=self.enable_v2_manifest,
+                                data_storage_version="2.1",
+                            )
+
+                    # Track source file information
+                    source_file_info.append(
+                        {
+                            "file_path": file_path,
+                            "file_name": source_file,
+                            "n_cells": len(obs_df),
+                            "cell_offset": global_cell_offset,
+                        }
+                    )
+
+                    # Update global cell offset
+                    global_cell_offset += len(obs_df)
+                    total_cells += len(obs_df)
+
+            except Exception as e:
+                logger.error(f"Failed to process file {file_path}: {e}")
+                # Continue with other files
+                continue
+
+        if not source_file_info:
+            raise RuntimeError("No files were successfully processed")
+
+        # Create indices if enabled
+        if self.create_indices:
+            self._create_indices(output_path_obj)
+
+        # Compact dataset if enabled
+        if self.compact_after_write:
+            self._compact_dataset(output_path_obj)
+
+        # Save config with multi-file information
+        self._save_multi_file_config(
+            output_path_obj,
+            source_file_info,
+            None,  # We don't need to pass tables since they're already written
+            None,
+            None,
+        )
+
+        logger.info(
+            f"Multi-file conversion complete! Processed {len(source_file_info)} files"
+        )
+        logger.info(f"Total cells: {total_cells}, Total genes: {total_genes}")
+
+    def append(
+        self, input_path: str, existing_slaf_path: str, input_format: str = "auto"
+    ):
+        """
+        Append new data to an existing SLAF dataset.
+
+        This method adds new data to an existing SLAF dataset by:
+        1. Validating compatibility with existing dataset
+        2. Reading existing dataset metadata
+        3. Appending new data with auto-incrementing IDs
+        4. Updating configuration with new source file info
+
+        Args:
+            input_path: Path to new input file or directory
+            existing_slaf_path: Path to existing SLAF dataset
+            input_format: Format of input data (auto-detected if not specified)
+        """
+        logger.info(
+            f"Appending data from {input_path} to existing SLAF dataset {existing_slaf_path}"
+        )
+
+        # Check if existing SLAF dataset exists
+        existing_slaf_obj = Path(existing_slaf_path)
+        if not existing_slaf_obj.exists():
+            raise FileNotFoundError(
+                f"Existing SLAF dataset not found: {existing_slaf_path}"
+            )
+
+        # Discover input files
+        input_files, detected_format = discover_input_files(input_path)
+        if input_format == "auto":
+            input_format = detected_format
+
+        # Validate compatibility with existing dataset
+        self._validate_append_compatibility(
+            input_files, input_format, existing_slaf_path
+        )
+
+        # Read existing dataset metadata
+        existing_cells_dataset = lance.dataset(str(existing_slaf_obj / "cells.lance"))
+        existing_cells_table = existing_cells_dataset.to_table()
+        current_cell_count = len(existing_cells_table)
+
+        # Track source file information
+        source_file_info = []
+        global_cell_offset = current_cell_count
+        total_new_cells = 0
+
+        # Process each new file and append to existing dataset
+        for i, file_path in enumerate(input_files):
+            logger.info(
+                f"Processing file {i + 1}/{len(input_files)}: {Path(file_path).name}"
+            )
+
+            try:
+                # Use chunked reader to process file directly
+                with create_chunked_reader(
+                    file_path,
+                    chunk_size=self.chunk_size,
+                    collection_name=self.tiledb_collection_name,
+                ) as reader:
+                    logger.info(
+                        f"Loaded: {reader.n_obs:,} cells × {reader.n_vars:,} genes"
+                    )
+
+                    # Get metadata from reader
+                    obs_df = reader.get_obs_metadata()
+                    var_df = reader.get_var_metadata()
+
+                    # Ensure cell_id and gene_id columns exist
+                    if "cell_id" not in obs_df.columns:
+                        obs_df["cell_id"] = reader.obs_names
+                    if "gene_id" not in var_df.columns:
+                        var_df["gene_id"] = reader.var_names
+
+                    # Add integer IDs with global offset
+                    obs_df["cell_integer_id"] = range(
+                        global_cell_offset, global_cell_offset + len(obs_df)
+                    )
+
+                    # Add source file information to cell metadata
+                    source_file = Path(file_path).name
+                    obs_df["source_file"] = source_file
+
+                    # Check if existing dataset has source_file column
+                    existing_cells_dataset = lance.dataset(
+                        str(existing_slaf_obj / "cells.lance")
+                    )
+                    existing_cells_table = existing_cells_dataset.to_table()
+                    existing_columns = set(existing_cells_table.column_names)
+
+                    # If existing dataset doesn't have source_file column, add it to existing data
+                    if "source_file" not in existing_columns:
+                        logger.info("Adding source_file column to existing dataset...")
+                        # Read existing cells data
+                        existing_cells_df = existing_cells_table.to_pandas()
+                        existing_cells_df["source_file"] = (
+                            "original_data"  # Default source for existing data
+                        )
+
+                        # Recreate the cells dataset with source_file column
+                        updated_cells_table = pa.table(existing_cells_df)
+                        lance.write_dataset(
+                            updated_cells_table,
+                            str(existing_slaf_obj / "cells.lance"),
+                            enable_v2_manifest_paths=self.enable_v2_manifest,
+                            data_storage_version="2.1",
+                        )
+                        logger.info("✓ Added source_file column to existing dataset")
+
+                    # Precompute cell start indices
+                    obs_df["cell_start_index"] = self._compute_cell_start_indices(
+                        reader, obs_df
+                    )
+
+                    # Convert metadata to Lance tables
+                    cell_metadata_table = self._create_metadata_table(
+                        obs_df, "cell_id", integer_mapping=None
+                    )
+
+                    # Append to existing cells dataset
+                    cells_path = existing_slaf_obj / "cells.lance"
+                    lance.write_dataset(
+                        cell_metadata_table,
+                        str(cells_path),
+                        mode="append",
+                        enable_v2_manifest_paths=self.enable_v2_manifest,
+                        data_storage_version="2.1",
+                    )
+
+                    # Process expression data in chunks and append
+                    expression_path = existing_slaf_obj / "expression.lance"
+                    for chunk_table, _obs_slice in reader.iter_chunks(
+                        chunk_size=self.chunk_size
+                    ):
+                        # Adjust cell integer IDs with global offset
+                        cell_integer_ids = (
+                            chunk_table.column("cell_integer_id").to_numpy()
+                            + global_cell_offset
+                        )
+
+                        # Create adjusted chunk table
+                        if self.optimize_storage:
+                            # Only store integer IDs for maximum storage efficiency
+                            adjusted_chunk = pa.table(
+                                {
+                                    "cell_integer_id": pa.array(cell_integer_ids),
+                                    "gene_integer_id": chunk_table.column(
+                                        "gene_integer_id"
+                                    ),
+                                    "value": chunk_table.column("value"),
+                                }
+                            )
+                        else:
+                            # Store both string and integer IDs for compatibility
+                            adjusted_chunk = pa.table(
+                                {
+                                    "cell_id": chunk_table.column("cell_id"),
+                                    "gene_id": chunk_table.column("gene_id"),
+                                    "cell_integer_id": pa.array(cell_integer_ids),
+                                    "gene_integer_id": chunk_table.column(
+                                        "gene_integer_id"
+                                    ),
+                                    "value": chunk_table.column("value"),
+                                }
+                            )
+
+                        # Append chunk to existing expression dataset
+                        lance.write_dataset(
+                            adjusted_chunk,
+                            str(expression_path),
+                            mode="append",
+                            max_rows_per_file=10000000,
+                            enable_v2_manifest_paths=self.enable_v2_manifest,
+                            data_storage_version="2.1",
+                        )
+
+                    # Track source file information
+                    source_file_info.append(
+                        {
+                            "file_path": file_path,
+                            "file_name": source_file,
+                            "n_cells": len(obs_df),
+                            "cell_offset": global_cell_offset,
+                        }
+                    )
+
+                    # Update global cell offset
+                    global_cell_offset += len(obs_df)
+                    total_new_cells += len(obs_df)
+
+            except Exception as e:
+                logger.error(f"Failed to process file {file_path}: {e}")
+                # Continue with other files
+                continue
+
+        if not source_file_info:
+            raise RuntimeError("No files were successfully processed")
+
+        # Update configuration with new source file information
+        self._update_config_with_append(
+            existing_slaf_path, source_file_info, total_new_cells
+        )
+
+        logger.info(
+            f"Append complete! Added {total_new_cells} cells from {len(source_file_info)} files"
+        )
+        logger.info(f"Total cells in dataset: {current_cell_count + total_new_cells}")
+
+    def _validate_append_compatibility(
+        self, input_files: list[str], input_format: str, existing_slaf_path: str
+    ):
+        """Validate that new files are compatible with existing SLAF dataset."""
+        logger.info("Validating compatibility with existing SLAF dataset...")
+
+        # Load existing dataset metadata
+        existing_cells_dataset = lance.dataset(
+            str(Path(existing_slaf_path) / "cells.lance")
+        )
+        existing_cells_table = existing_cells_dataset.to_table()
+        existing_genes_dataset = lance.dataset(
+            str(Path(existing_slaf_path) / "genes.lance")
+        )
+        existing_genes_table = existing_genes_dataset.to_table()
+
+        # Get existing gene set and cell metadata schema
+        existing_genes = set(existing_genes_table.column("gene_id").to_numpy())
+        existing_cell_columns = set(existing_cells_table.column_names)
+
+        # Validate new files against existing dataset
+        for file_path in input_files:
+            try:
+                # Extract schema from new file
+                genes, cells, value_type = self._extract_schema_info(
+                    file_path, input_format
+                )
+
+                # Check gene compatibility
+                if genes != existing_genes:
+                    missing_genes = existing_genes - genes
+                    extra_genes = genes - existing_genes
+                    error_msg = f"File {Path(file_path).name} is incompatible with existing dataset:"
+                    if missing_genes:
+                        error_msg += f"\n  Missing genes: {sorted(missing_genes)[:5]}{'...' if len(missing_genes) > 5 else ''}"
+                    if extra_genes:
+                        error_msg += f"\n  Extra genes: {sorted(extra_genes)[:5]}{'...' if len(extra_genes) > 5 else ''}"
+                    raise ValueError(error_msg)
+
+                # Check cell metadata schema compatibility
+                # Exclude columns that are added during SLAF conversion
+                slaF_added_columns = {
+                    "cell_id",
+                    "cell_integer_id",
+                    "cell_start_index",
+                    "source_file",
+                }
+                new_cell_columns = cells - slaF_added_columns
+                existing_cell_columns_no_slaf = (
+                    existing_cell_columns - slaF_added_columns
+                )
+
+                if new_cell_columns != existing_cell_columns_no_slaf:
+                    missing_cols = existing_cell_columns_no_slaf - new_cell_columns
+                    extra_cols = new_cell_columns - existing_cell_columns_no_slaf
+                    error_msg = f"File {Path(file_path).name} has incompatible cell metadata schema:"
+                    if missing_cols:
+                        error_msg += f"\n  Missing columns: {sorted(missing_cols)}"
+                    if extra_cols:
+                        error_msg += f"\n  Extra columns: {sorted(extra_cols)}"
+                    raise ValueError(error_msg)
+
+            except Exception as e:
+                raise ValueError(
+                    f"Validation failed for {Path(file_path).name}: {e}"
+                ) from e
+
+        logger.info("✓ All files are compatible with existing dataset")
+
+    def _load_existing_config(self, existing_slaf_path: str) -> dict:
+        """Load existing SLAF configuration."""
+        config_path = Path(existing_slaf_path) / "config.json"
+        if not config_path.exists():
+            raise FileNotFoundError(f"Config file not found: {config_path}")
+
+        with open(config_path) as f:
+            return json.load(f)
+
+    def _update_config_with_append(
+        self, existing_slaf_path: str, source_file_info: list, total_new_cells: int
+    ):
+        """Update configuration with new source file information."""
+        config_path = Path(existing_slaf_path) / "config.json"
+        config = self._load_existing_config(existing_slaf_path)
+
+        # Update cell count
+        config["n_cells"] += total_new_cells
+        config["array_shape"][0] = config["n_cells"]
+
+        # Update multi_file information
+        if "multi_file" not in config:
+            config["multi_file"] = {
+                "source_files": [],
+                "total_files": 0,
+                "total_cells_from_files": 0,
+            }
+
+        # Add new source files
+        config["multi_file"]["source_files"].extend(source_file_info)
+        config["multi_file"]["total_files"] = len(config["multi_file"]["source_files"])
+        config["multi_file"]["total_cells_from_files"] = sum(
+            info["n_cells"] for info in config["multi_file"]["source_files"]
+        )
+
+        # Update created_at timestamp
+        config["last_updated"] = pd.Timestamp.now().isoformat()
+
+        # Save updated config
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=2)
+
+        logger.info(
+            f"Updated configuration with {len(source_file_info)} new source files"
+        )
+
+    def _extract_schema_info(
+        self, file_path: str, format_type: str
+    ) -> tuple[set[str], set[str], str]:
+        """Extract schema information from a file for compatibility checking."""
+        if format_type == "h5ad":
+            return self._extract_h5ad_schema(file_path)
+        elif format_type == "10x_mtx":
+            return self._extract_10x_mtx_schema(file_path)
+        elif format_type == "10x_h5":
+            return self._extract_10x_h5_schema(file_path)
+        elif format_type == "tiledb":
+            return self._extract_tiledb_schema(file_path)
+        else:
+            raise ValueError(f"Unsupported format: {format_type}")
+
+    def _extract_h5ad_schema(self, file_path: str) -> tuple[set[str], set[str], str]:
+        """Extract schema information from h5ad file."""
+        import scanpy as sc
+
+        # Read in backed mode for efficiency
+        adata = sc.read_h5ad(file_path, backed="r")
+
+        # Get gene IDs
+        gene_ids = set(adata.var_names)
+
+        # Get cell metadata columns
+        cell_columns = set(adata.obs.columns)
+
+        # Determine value type from expression data
+        if hasattr(adata.X, "data"):
+            sample_data = adata.X.data[:1000]  # Sample first 1000 values
+        else:
+            # For backed mode, try to get a sample
+            try:
+                sample_data = (
+                    adata.X[:100, :100].data
+                    if hasattr(adata.X, "data")
+                    else adata.X[:100, :100].toarray().flatten()
+                )
+            except Exception:
+                sample_data = np.array([0])  # Fallback
+
+        # Determine value type
+        if np.issubdtype(sample_data.dtype, np.integer):
+            value_type = "uint16"
+        else:
+            value_type = "float32"
+
+        adata.file.close()
+        return gene_ids, cell_columns, value_type
+
+    def _extract_10x_mtx_schema(self, file_path: str) -> tuple[set[str], set[str], str]:
+        """Extract schema information from 10x MTX directory."""
+        import scanpy as sc
+
+        # Read MTX files
+        adata = sc.read_10x_mtx(file_path)
+
+        # Get gene IDs
+        gene_ids = set(adata.var_names)
+
+        # Get cell metadata columns
+        cell_columns = set(adata.obs.columns)
+
+        # 10x MTX typically has integer counts
+        value_type = "uint16"
+
+        return gene_ids, cell_columns, value_type
+
+    def _extract_10x_h5_schema(self, file_path: str) -> tuple[set[str], set[str], str]:
+        """Extract schema information from 10x H5 file."""
+        import scanpy as sc
+
+        try:
+            # Try to read as 10x H5 first
+            adata = sc.read_10x_h5(file_path, genome="X")
+        except Exception:
+            # Fall back to regular h5ad
+            adata = sc.read_h5ad(file_path, backed="r")
+
+        # Get gene IDs
+        gene_ids = set(adata.var_names)
+
+        # Get cell metadata columns
+        cell_columns = set(adata.obs.columns)
+
+        # 10x H5 typically has integer counts
+        value_type = "uint16"
+
+        if hasattr(adata, "file"):
+            adata.file.close()
+
+        return gene_ids, cell_columns, value_type
+
+    def _extract_tiledb_schema(self, file_path: str) -> tuple[set[str], set[str], str]:
+        """Extract schema information from TileDB SOMA file."""
+        import tiledbsoma as soma
+
+        # Open TileDB SOMA experiment
+        with soma.open(file_path) as exp:
+            # Get measurement collection
+            ms = exp.ms[self.tiledb_collection_name]
+
+            # Get gene IDs from var
+            var_df = ms.var.read().concat().to_pandas()
+            gene_ids = set(var_df.index)
+
+            # Get cell metadata columns from obs
+            obs_df = ms.obs.read().concat().to_pandas()
+            cell_columns = set(obs_df.columns)
+
+            # TileDB SOMA typically has float32 values
+            value_type = "float32"
+
+            return gene_ids, cell_columns, value_type
 
     def _convert_anndata(self, adata, output_path: str):
         """Internal method to convert AnnData object to SLAF format"""
@@ -1650,6 +2323,80 @@ class SLAFConverter:
                 "density": float(1 - sparsity),
                 "total_possible_elements": int(total_possible_elements),
                 "expression_stats": expression_stats,
+            },
+            "created_at": pd.Timestamp.now().isoformat(),
+        }
+
+        config_path = output_path_obj / "config.json"
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=2)
+
+    def _save_multi_file_config(
+        self,
+        output_path_obj: Path,
+        source_file_info: list,
+        combined_expression: pa.Table | None = None,
+        combined_cells: pa.Table | None = None,
+        combined_genes: pa.Table | None = None,
+    ):
+        """Save SLAF configuration for multi-file conversion with source file tracking"""
+
+        # If tables are not provided, load them from the Lance datasets
+        if combined_cells is None or combined_genes is None:
+            cells_dataset = lance.dataset(str(output_path_obj / "cells.lance"))
+            genes_dataset = lance.dataset(str(output_path_obj / "genes.lance"))
+            n_cells = len(cells_dataset.to_table())
+            n_genes = len(genes_dataset.to_table())
+        else:
+            n_cells = len(combined_cells) if combined_cells is not None else 0
+            n_genes = len(combined_genes) if combined_genes is not None else 0
+
+        # Compute additional metadata for faster info() method
+        logger.info("Computing multi-file dataset statistics...")
+
+        # Reference Lance dataset
+        expression = lance.dataset(str(output_path_obj / "expression.lance"))
+
+        # Compute basic statistics and count from expression data
+        expression_stats, expression_count = self._compute_expression_statistics(
+            expression
+        )
+
+        total_possible_elements = n_cells * n_genes
+        sparsity = (
+            1 - (expression_count / total_possible_elements)
+            if total_possible_elements > 0
+            else 1.0
+        )
+
+        # Calculate total cells and genes from source files
+        total_cells_from_files = sum(info["n_cells"] for info in source_file_info)
+
+        config = {
+            "format_version": "0.3",
+            "array_shape": [n_cells, n_genes],
+            "n_cells": n_cells,
+            "n_genes": n_genes,
+            "tables": {
+                "expression": "expression.lance",
+                "cells": "cells.lance",
+                "genes": "genes.lance",
+            },
+            "optimizations": {
+                "use_integer_keys": self.use_integer_keys,
+                "optimize_storage": self.optimize_storage,
+            },
+            "metadata": {
+                "expression_count": int(expression_count),
+                "sparsity": float(sparsity),
+                "density": float(1 - sparsity),
+                "total_possible_elements": int(total_possible_elements),
+                "expression_stats": expression_stats,
+            },
+            "multi_file": {
+                "source_files": source_file_info,
+                "total_files": len(source_file_info),
+                "total_cells_from_files": total_cells_from_files,
             },
             "created_at": pd.Timestamp.now().isoformat(),
         }
