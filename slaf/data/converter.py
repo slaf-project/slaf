@@ -10,6 +10,15 @@ import pyarrow as pa
 from loguru import logger
 from scipy import sparse
 
+# Import smart-open for cloud storage compatibility
+try:
+    from smart_open import open as smart_open
+
+    SMART_OPEN_AVAILABLE = True
+except ImportError:
+    SMART_OPEN_AVAILABLE = False
+    logger.warning("smart-open not available. Install with: pip install smart-open[s3]")
+
 # Optional imports for data conversion
 try:
     import scanpy as sc
@@ -132,6 +141,43 @@ class SLAFConverter:
         self.enable_v2_manifest = enable_v2_manifest
         self.compact_after_write = compact_after_write
         self.tiledb_collection_name = tiledb_collection_name
+
+    def _is_cloud_path(self, path: str) -> bool:
+        """Check if path is a cloud storage path."""
+        return path.startswith(("s3://", "gs://", "azure://", "r2://"))
+
+    def _path_exists(self, path: str) -> bool:
+        """Check if path exists, works with both local and cloud paths."""
+        if self._is_cloud_path(path):
+            if not SMART_OPEN_AVAILABLE:
+                logger.warning(
+                    "smart-open not available, cannot check cloud path existence"
+                )
+                return False
+            try:
+                # For cloud paths, try to access the file directly
+                with smart_open(path, "r") as f:
+                    f.read(1)  # Try to read 1 byte
+                return True
+            except Exception:
+                return False
+        else:
+            return os.path.exists(path)
+
+    def _ensure_directory_exists(self, path: str):
+        """Ensure directory exists, works with both local and cloud paths."""
+        if not self._is_cloud_path(path):
+            os.makedirs(path, exist_ok=True)
+        # For cloud paths, directories are created implicitly
+
+    def _open_file(self, path: str, mode: str = "r"):
+        """Open file with cloud storage compatibility."""
+        if self._is_cloud_path(path):
+            if not SMART_OPEN_AVAILABLE:
+                raise ImportError("smart-open required for cloud storage operations")
+            return smart_open(path, mode)
+        else:
+            return open(path, mode)
 
     def convert(
         self,
@@ -413,8 +459,7 @@ class SLAFConverter:
         )
 
         # Create output directory (only for local paths)
-        if not output_path.startswith(("s3://", "gs://", "azure://", "r2://")):
-            os.makedirs(output_path, exist_ok=True)
+        self._ensure_directory_exists(output_path)
 
         # Track source file information
         source_file_info = []
@@ -629,7 +674,7 @@ class SLAFConverter:
         )
 
         # Check if existing SLAF dataset exists
-        if not os.path.exists(existing_slaf_path):
+        if not self._path_exists(existing_slaf_path):
             raise FileNotFoundError(
                 f"Existing SLAF dataset not found: {existing_slaf_path}"
             )
@@ -888,10 +933,10 @@ class SLAFConverter:
     def _load_existing_config(self, existing_slaf_path: str) -> dict:
         """Load existing SLAF configuration."""
         config_path = f"{existing_slaf_path}/config.json"
-        if not os.path.exists(config_path):
+        if not self._path_exists(config_path):
             raise FileNotFoundError(f"Config file not found: {config_path}")
 
-        with open(config_path) as f:
+        with self._open_file(config_path) as f:
             return json.load(f)
 
     def _update_config_with_append(
@@ -924,7 +969,7 @@ class SLAFConverter:
         config["last_updated"] = pd.Timestamp.now().isoformat()
 
         # Save updated config
-        with open(config_path, "w") as f:
+        with self._open_file(config_path, "w") as f:
             json.dump(config, f, indent=2)
 
         logger.info(
@@ -1050,8 +1095,7 @@ class SLAFConverter:
     def _convert_anndata(self, adata, output_path: str):
         """Internal method to convert AnnData object to SLAF format"""
         # Create output directory (only for local paths)
-        if not output_path.startswith(("s3://", "gs://", "azure://", "r2://")):
-            os.makedirs(output_path, exist_ok=True)
+        self._ensure_directory_exists(output_path)
 
         # Validate optimized data types and determine value type
         validation_result, value_type = self._validate_optimized_dtypes_anndata(adata)
@@ -1140,8 +1184,7 @@ class SLAFConverter:
             logger.info(f"Loaded: {reader.n_obs:,} cells × {reader.n_vars:,} genes")
 
             # Create output directory (only for local paths)
-            if not output_path.startswith(("s3://", "gs://", "azure://", "r2://")):
-                os.makedirs(output_path, exist_ok=True)
+            self._ensure_directory_exists(output_path)
 
             # Write metadata tables efficiently (without loading everything into memory)
             self._write_metadata_efficiently(reader, output_path)
@@ -1663,7 +1706,7 @@ class SLAFConverter:
         try:
             # Compact expression table
             expression_path = f"{output_path}/expression.lance"
-            if os.path.exists(expression_path):
+            if self._path_exists(expression_path):
                 logger.info("  Compacting expression table...")
                 dataset = lance.dataset(expression_path)
                 dataset.optimize.compact_files(
@@ -1676,7 +1719,7 @@ class SLAFConverter:
             # Compact metadata tables
             for table_name in ["cells", "genes"]:
                 table_path = f"{output_path}/{table_name}.lance"
-                if os.path.exists(table_path):
+                if self._path_exists(table_path):
                     logger.info(f"  Compacting {table_name} table...")
                     dataset = lance.dataset(table_path)
                     dataset.optimize.compact_files(
@@ -2059,7 +2102,7 @@ class SLAFConverter:
         # Create indices for each table
         for table_name, desired_columns in table_indices.items():
             table_path = f"{output_path}/{table_name}.lance"
-            if os.path.exists(table_path):
+            if self._path_exists(table_path):
                 dataset = lance.dataset(table_path)
                 schema = dataset.schema
 
@@ -2328,7 +2371,7 @@ class SLAFConverter:
         }
 
         config_path = f"{output_path}/config.json"
-        with open(config_path, "w") as f:
+        with self._open_file(config_path, "w") as f:
             json.dump(config, f, indent=2)
 
     def _save_multi_file_config(
@@ -2402,5 +2445,5 @@ class SLAFConverter:
         }
 
         config_path = f"{output_path}/config.json"
-        with open(config_path, "w") as f:
+        with self._open_file(config_path, "w") as f:
             json.dump(config, f, indent=2)
