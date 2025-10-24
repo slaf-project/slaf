@@ -225,6 +225,51 @@ class SLAFConverter:
             logger.warning(f"Could not load checkpoint: {e}")
             return None
 
+    def _load_checkpoint_smart(self, output_path: str) -> dict | None:
+        """Load checkpoint with fragment-based resume logic to avoid duplication"""
+        checkpoint = self._load_checkpoint(output_path)
+        if not checkpoint:
+            return None
+
+        # Get actual progress from Lance dataset using fragment count
+        expression_path = f"{output_path}/expression.lance"
+        if self._path_exists(expression_path):
+            try:
+                expression_dataset = lance.dataset(expression_path)
+                fragment_count = len(expression_dataset.get_fragments())
+
+                # Calculate exact resume chunk using fragment count
+                last_checkpoint_boundary = checkpoint.get("last_completed_chunk", 0)
+                checkpoint_interval = (
+                    10  # Should match the interval used in checkpointing
+                )
+                chunks_since_checkpoint = fragment_count % checkpoint_interval
+
+                # Resume from the next chunk after what was actually written
+                # But don't exceed the total chunks
+                total_chunks = checkpoint.get("total_chunks", fragment_count)
+                actual_resume_chunk = min(
+                    last_checkpoint_boundary + chunks_since_checkpoint + 1, total_chunks
+                )
+
+                # Update checkpoint with actual resume position
+                checkpoint["last_completed_chunk"] = actual_resume_chunk - 1
+                checkpoint["fragment_count"] = fragment_count
+                checkpoint["chunks_since_checkpoint"] = chunks_since_checkpoint
+
+                logger.info(
+                    f"Fragment-based resume: {fragment_count} fragments written, "
+                    f"chunks since checkpoint: {chunks_since_checkpoint}, "
+                    f"resuming from chunk {actual_resume_chunk}"
+                )
+
+            except Exception as e:
+                logger.warning(f"Could not determine fragment count: {e}")
+                # Fall back to regular checkpoint logic
+                pass
+
+        return checkpoint
+
     def _clear_checkpoint(self, output_path: str):
         """Clear checkpoint data from config.json"""
         if not self.enable_checkpointing:
@@ -530,8 +575,8 @@ class SLAFConverter:
             f"Converting {len(input_files)} {input_format} files to SLAF format..."
         )
 
-        # Check for existing checkpoint
-        checkpoint = self._load_checkpoint(output_path)
+        # Check for existing checkpoint with smart resume logic
+        checkpoint = self._load_checkpoint_smart(output_path)
         if checkpoint:
             logger.info(f"Found checkpoint: {checkpoint}")
             if checkpoint.get("status") == "completed":
@@ -558,7 +603,12 @@ class SLAFConverter:
         start_chunk_idx = 0
         if checkpoint and checkpoint.get("status") == "in_progress":
             start_file_idx = checkpoint.get("last_completed_file", -1) + 1
-            start_chunk_idx = checkpoint.get("last_completed_chunk", 0)
+            last_completed_chunk = checkpoint.get("last_completed_chunk", -1)
+            # If last_completed_chunk is -1, it means the file was fully completed
+            # so we should start from chunk 0 of the next file
+            start_chunk_idx = (
+                0 if last_completed_chunk == -1 else last_completed_chunk + 1
+            )
             global_cell_offset = checkpoint.get("global_cell_offset", 0)
             logger.info(
                 f"Resuming from file {start_file_idx}, chunk {start_chunk_idx} (last completed file: {checkpoint.get('last_completed_file', -1)}, chunk: {checkpoint.get('last_completed_chunk', -1)})"
@@ -1227,8 +1277,8 @@ class SLAFConverter:
         """Convert h5ad file using chunked processing with checkpointing support"""
         logger.info(f"Processing in chunks of {self.chunk_size} cells...")
 
-        # Check for existing checkpoint
-        checkpoint = self._load_checkpoint(output_path)
+        # Check for existing checkpoint with smart resume logic
+        checkpoint = self._load_checkpoint_smart(output_path)
         if checkpoint:
             logger.info(f"Found checkpoint: {checkpoint}")
             if checkpoint.get("status") == "completed":
@@ -1697,6 +1747,23 @@ class SLAFConverter:
                         }
                     )
 
+                # Save checkpoint BEFORE writing chunk to avoid duplication
+                if self.enable_checkpointing:
+                    should_save_checkpoint = (
+                        chunk_idx % 10 == 0  # Every 10 chunks
+                        or chunk_idx == total_chunks - 1  # Last chunk
+                    )
+
+                    if should_save_checkpoint:
+                        checkpoint_data = {
+                            "status": "in_progress",
+                            "last_completed_chunk": chunk_idx,
+                            "total_chunks": total_chunks,
+                            "chunk_size": self.chunk_size,
+                            "timestamp": pd.Timestamp.now().isoformat(),
+                        }
+                        self._save_checkpoint(output_path, checkpoint_data)
+
                 # Write chunk to Lance dataset (using max_rows_per_file for large fragments)
                 lance.write_dataset(
                     chunk_table,
@@ -1706,17 +1773,6 @@ class SLAFConverter:
                     enable_v2_manifest_paths=self.enable_v2_manifest,
                     data_storage_version="2.1",
                 )
-
-                # Save checkpoint after each chunk
-                if self.enable_checkpointing:
-                    checkpoint_data = {
-                        "status": "in_progress",
-                        "last_completed_chunk": chunk_idx,
-                        "total_chunks": total_chunks,
-                        "chunk_size": self.chunk_size,
-                        "timestamp": pd.Timestamp.now().isoformat(),
-                    }
-                    self._save_checkpoint(output_path, checkpoint_data)
 
             except StopIteration:
                 logger.warning(f"Chunk iterator ended at chunk {chunk_idx}")
@@ -1820,6 +1876,24 @@ class SLAFConverter:
                         }
                     )
 
+                # Save checkpoint BEFORE writing chunk to avoid duplication
+                # This ensures we know exactly what was written if a failure occurs
+                if self.enable_checkpointing:
+                    should_save_checkpoint = (
+                        chunk_idx % 10 == 0  # Every 10 chunks
+                        or chunk_idx == total_chunks - 1  # Last chunk of file
+                    )
+
+                    if should_save_checkpoint:
+                        checkpoint_data = {
+                            "status": "in_progress",
+                            "last_completed_file": file_idx,
+                            "last_completed_chunk": chunk_idx,
+                            "global_cell_offset": global_cell_offset,
+                            "timestamp": pd.Timestamp.now().isoformat(),
+                        }
+                        self._save_checkpoint(output_path, checkpoint_data)
+
                 # Write chunk directly to expression dataset
                 # Check if this is the first chunk of the first file in a new dataset
                 is_first_chunk_of_new_dataset = file_idx == 0 and chunk_idx == 0
@@ -1846,17 +1920,6 @@ class SLAFConverter:
                         enable_v2_manifest_paths=self.enable_v2_manifest,
                         data_storage_version="2.1",
                     )
-
-                # Save checkpoint after each chunk
-                if self.enable_checkpointing:
-                    checkpoint_data = {
-                        "status": "in_progress",
-                        "last_completed_file": file_idx,
-                        "last_completed_chunk": chunk_idx,
-                        "global_cell_offset": global_cell_offset,
-                        "timestamp": pd.Timestamp.now().isoformat(),
-                    }
-                    self._save_checkpoint(output_path, checkpoint_data)
 
             except StopIteration:
                 logger.warning(f"Chunk iterator ended at chunk {chunk_idx}")
