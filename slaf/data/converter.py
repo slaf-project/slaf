@@ -414,7 +414,7 @@ class SLAFConverter:
 
         # Create output directory (only for local paths)
         output_path_obj = Path(output_path)
-        if not str(output_path).startswith(("s3://", "gs://", "azure://", "r2://")):
+        if not str(output_path).startswith(("s3:/", "gs:/", "azure:/", "r2:/")):
             output_path_obj.mkdir(exist_ok=True)
 
         # Track source file information
@@ -1053,7 +1053,7 @@ class SLAFConverter:
         """Internal method to convert AnnData object to SLAF format"""
         # Create output directory (only for local paths)
         output_path_obj = Path(output_path)
-        if not str(output_path).startswith(("s3://", "gs://", "azure://", "r2://")):
+        if not str(output_path).startswith(("s3:/", "gs:/", "azure:/", "r2:/")):
             output_path_obj.mkdir(exist_ok=True)
 
         # Validate optimized data types and determine value type
@@ -1144,7 +1144,7 @@ class SLAFConverter:
 
             # Create output directory (only for local paths)
             output_path_obj = Path(output_path)
-            if not str(output_path).startswith(("s3://", "gs://", "azure://", "r2://")):
+            if not str(output_path).startswith(("s3:/", "gs:/", "azure:/", "r2:/")):
                 output_path_obj.mkdir(exist_ok=True)
 
             # Write metadata tables efficiently (without loading everything into memory)
