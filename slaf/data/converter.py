@@ -413,9 +413,11 @@ class SLAFConverter:
         )
 
         # Create output directory (only for local paths)
-        output_path_obj = Path(output_path)
         if not str(output_path).startswith(("s3:/", "gs:/", "azure:/", "r2:/")):
+            output_path_obj = Path(output_path)
             output_path_obj.mkdir(exist_ok=True)
+        else:
+            output_path_obj = Path(output_path)
 
         # Track source file information
         source_file_info = []
@@ -1052,9 +1054,11 @@ class SLAFConverter:
     def _convert_anndata(self, adata, output_path: str):
         """Internal method to convert AnnData object to SLAF format"""
         # Create output directory (only for local paths)
-        output_path_obj = Path(output_path)
-        if not str(output_path).startswith(("s3:/", "gs:/", "azure:/", "r2:/")):
+        if not str(output_path).startswith(("s3://", "gs://", "azure://", "r2://")):
+            output_path_obj = Path(output_path)
             output_path_obj.mkdir(exist_ok=True)
+        else:
+            output_path_obj = Path(output_path)
 
         # Validate optimized data types and determine value type
         validation_result, value_type = self._validate_optimized_dtypes_anndata(adata)
@@ -1143,9 +1147,11 @@ class SLAFConverter:
             logger.info(f"Loaded: {reader.n_obs:,} cells × {reader.n_vars:,} genes")
 
             # Create output directory (only for local paths)
-            output_path_obj = Path(output_path)
-            if not str(output_path).startswith(("s3:/", "gs:/", "azure:/", "r2:/")):
+            if not str(output_path).startswith(("s3://", "gs://", "azure://", "r2://")):
+                output_path_obj = Path(output_path)
                 output_path_obj.mkdir(exist_ok=True)
+            else:
+                output_path_obj = Path(output_path)
 
             # Write metadata tables efficiently (without loading everything into memory)
             self._write_metadata_efficiently(reader, output_path_obj)
