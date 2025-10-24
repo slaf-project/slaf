@@ -6,7 +6,9 @@ This module tests the append functionality for existing SLAF datasets,
 including compatibility validation, fragment management, and data integrity.
 """
 
+import glob
 import json
+import os
 
 import lance
 import numpy as np
@@ -25,8 +27,8 @@ class TestAppendFunctionality:
     def synthetic_data_dir(self, tmp_path):
         """Create synthetic test data for append testing."""
         # Create compatible files
-        compatible_dir = tmp_path / "compatible"
-        compatible_dir.mkdir()
+        compatible_dir = os.path.join(tmp_path, "compatible")
+        os.makedirs(compatible_dir, exist_ok=True)
 
         # Create 3 compatible h5ad files
         for i in range(3):
@@ -64,12 +66,12 @@ class TestAppendFunctionality:
             adata = sc.AnnData(X=X_sparse, obs=obs_df, var=var_df)
 
             # Save as h5ad
-            output_file = compatible_dir / f"synthetic_data_{i:02d}.h5ad"
+            output_file = os.path.join(compatible_dir, f"synthetic_data_{i:02d}.h5ad")
             adata.write_h5ad(output_file)
 
         # Create incompatible files
-        incompatible_dir = tmp_path / "incompatible"
-        incompatible_dir.mkdir()
+        incompatible_dir = os.path.join(tmp_path, "incompatible")
+        os.makedirs(incompatible_dir, exist_ok=True)
 
         # File with different genes
         np.random.seed(999)
@@ -102,21 +104,25 @@ class TestAppendFunctionality:
         adata_incompatible = sc.AnnData(
             X=X_incompatible_sparse, obs=obs_incompatible, var=var_incompatible
         )
-        incompatible_file = incompatible_dir / "incompatible_genes.h5ad"
+        incompatible_file = os.path.join(incompatible_dir, "incompatible_genes.h5ad")
         adata_incompatible.write_h5ad(incompatible_file)
 
         return {
             "compatible_dir": compatible_dir,
             "incompatible_dir": incompatible_dir,
-            "compatible_files": sorted(compatible_dir.glob("*.h5ad")),
-            "incompatible_files": sorted(incompatible_dir.glob("*.h5ad")),
+            "compatible_files": sorted(
+                glob.glob(os.path.join(compatible_dir, "*.h5ad"))
+            ),
+            "incompatible_files": sorted(
+                glob.glob(os.path.join(incompatible_dir, "*.h5ad"))
+            ),
         }
 
     def test_append_single_file(self, synthetic_data_dir, tmp_path):
         """Test appending a single file to existing SLAF dataset."""
         # Create initial SLAF from first file
         first_file = synthetic_data_dir["compatible_files"][0]
-        initial_slaf_path = tmp_path / "initial.slaf"
+        initial_slaf_path = os.path.join(tmp_path, "initial.slaf")
 
         converter = SLAFConverter(
             chunked=True,
@@ -130,7 +136,9 @@ class TestAppendFunctionality:
         converter.convert(str(first_file), str(initial_slaf_path))
 
         # Verify initial dataset
-        initial_cells_dataset = lance.dataset(str(initial_slaf_path / "cells.lance"))
+        initial_cells_dataset = lance.dataset(
+            os.path.join(initial_slaf_path, "cells.lance")
+        )
         initial_cell_count = len(initial_cells_dataset.to_table())
         assert initial_cell_count == 50
 
@@ -139,7 +147,9 @@ class TestAppendFunctionality:
         converter.append(str(second_file), str(initial_slaf_path))
 
         # Verify final dataset
-        final_cells_dataset = lance.dataset(str(initial_slaf_path / "cells.lance"))
+        final_cells_dataset = lance.dataset(
+            os.path.join(initial_slaf_path, "cells.lance")
+        )
         final_cell_count = len(final_cells_dataset.to_table())
         assert final_cell_count == 100
 
@@ -160,7 +170,7 @@ class TestAppendFunctionality:
         """Test appending multiple files to existing SLAF dataset."""
         # Create initial SLAF from first file
         first_file = synthetic_data_dir["compatible_files"][0]
-        initial_slaf_path = tmp_path / "initial.slaf"
+        initial_slaf_path = os.path.join(tmp_path, "initial.slaf")
 
         converter = SLAFConverter(
             chunked=True,
@@ -175,20 +185,24 @@ class TestAppendFunctionality:
 
         # Append remaining files
         remaining_files = synthetic_data_dir["compatible_files"][1:]
-        remaining_dir = tmp_path / "remaining"
-        remaining_dir.mkdir()
+        remaining_dir = os.path.join(tmp_path, "remaining")
+        os.makedirs(remaining_dir, exist_ok=True)
 
         # Copy remaining files to a directory for appending
         for i, file_path in enumerate(remaining_files):
             import shutil
 
-            shutil.copy(file_path, remaining_dir / f"remaining_{i:02d}.h5ad")
+            shutil.copy(
+                file_path, os.path.join(remaining_dir, f"remaining_{i:02d}.h5ad")
+            )
 
         # Append remaining files
         converter.append(str(remaining_dir), str(initial_slaf_path))
 
         # Verify final dataset
-        final_cells_dataset = lance.dataset(str(initial_slaf_path / "cells.lance"))
+        final_cells_dataset = lance.dataset(
+            os.path.join(initial_slaf_path, "cells.lance")
+        )
         final_cell_count = len(final_cells_dataset.to_table())
         assert final_cell_count == 150  # 3 files × 50 cells each
 
@@ -213,7 +227,7 @@ class TestAppendFunctionality:
         """Test that append creates correct fragment structure."""
         # Create initial SLAF from first file
         first_file = synthetic_data_dir["compatible_files"][0]
-        initial_slaf_path = tmp_path / "initial.slaf"
+        initial_slaf_path = os.path.join(tmp_path, "initial.slaf")
 
         converter = SLAFConverter(
             chunked=True,
@@ -228,20 +242,24 @@ class TestAppendFunctionality:
 
         # Append remaining files
         remaining_files = synthetic_data_dir["compatible_files"][1:]
-        remaining_dir = tmp_path / "remaining"
-        remaining_dir.mkdir()
+        remaining_dir = os.path.join(tmp_path, "remaining")
+        os.makedirs(remaining_dir, exist_ok=True)
 
         for i, file_path in enumerate(remaining_files):
             import shutil
 
-            shutil.copy(file_path, remaining_dir / f"remaining_{i:02d}.h5ad")
+            shutil.copy(
+                file_path, os.path.join(remaining_dir, f"remaining_{i:02d}.h5ad")
+            )
 
         converter.append(str(remaining_dir), str(initial_slaf_path))
 
         # Check fragment structure
-        expression_dataset = lance.dataset(str(initial_slaf_path / "expression.lance"))
-        cells_dataset = lance.dataset(str(initial_slaf_path / "cells.lance"))
-        genes_dataset = lance.dataset(str(initial_slaf_path / "genes.lance"))
+        expression_dataset = lance.dataset(
+            os.path.join(initial_slaf_path, "expression.lance")
+        )
+        cells_dataset = lance.dataset(os.path.join(initial_slaf_path, "cells.lance"))
+        genes_dataset = lance.dataset(os.path.join(initial_slaf_path, "genes.lance"))
 
         expression_fragments = expression_dataset.get_fragments()
         cells_fragments = cells_dataset.get_fragments()
@@ -258,7 +276,7 @@ class TestAppendFunctionality:
         """Test that append updates config metadata correctly."""
         # Create initial SLAF from first file
         first_file = synthetic_data_dir["compatible_files"][0]
-        initial_slaf_path = tmp_path / "initial.slaf"
+        initial_slaf_path = os.path.join(tmp_path, "initial.slaf")
 
         converter = SLAFConverter(
             chunked=True,
@@ -273,18 +291,20 @@ class TestAppendFunctionality:
 
         # Append remaining files
         remaining_files = synthetic_data_dir["compatible_files"][1:]
-        remaining_dir = tmp_path / "remaining"
-        remaining_dir.mkdir()
+        remaining_dir = os.path.join(tmp_path, "remaining")
+        os.makedirs(remaining_dir, exist_ok=True)
 
         for i, file_path in enumerate(remaining_files):
             import shutil
 
-            shutil.copy(file_path, remaining_dir / f"remaining_{i:02d}.h5ad")
+            shutil.copy(
+                file_path, os.path.join(remaining_dir, f"remaining_{i:02d}.h5ad")
+            )
 
         converter.append(str(remaining_dir), str(initial_slaf_path))
 
         # Check config file
-        config_path = initial_slaf_path / "config.json"
+        config_path = os.path.join(initial_slaf_path, "config.json")
         with open(config_path) as f:
             config = json.load(f)
 
@@ -304,7 +324,7 @@ class TestAppendFunctionality:
         """Test that append validates compatibility correctly."""
         # Create initial SLAF from first file
         first_file = synthetic_data_dir["compatible_files"][0]
-        initial_slaf_path = tmp_path / "initial.slaf"
+        initial_slaf_path = os.path.join(tmp_path, "initial.slaf")
 
         converter = SLAFConverter(
             chunked=True,
@@ -334,7 +354,7 @@ class TestAppendFunctionality:
         )
 
         first_file = synthetic_data_dir["compatible_files"][0]
-        nonexistent_slaf = tmp_path / "nonexistent.slaf"
+        nonexistent_slaf = os.path.join(tmp_path, "nonexistent.slaf")
 
         with pytest.raises(FileNotFoundError, match="Existing SLAF dataset not found"):
             converter.append(str(first_file), str(nonexistent_slaf))
@@ -343,7 +363,7 @@ class TestAppendFunctionality:
         """Test that append fails gracefully with empty directory."""
         # Create initial SLAF from first file
         first_file = synthetic_data_dir["compatible_files"][0]
-        initial_slaf_path = tmp_path / "initial.slaf"
+        initial_slaf_path = os.path.join(tmp_path, "initial.slaf")
 
         converter = SLAFConverter(
             chunked=True,
@@ -357,8 +377,8 @@ class TestAppendFunctionality:
         converter.convert(str(first_file), str(initial_slaf_path))
 
         # Create empty directory
-        empty_dir = tmp_path / "empty"
-        empty_dir.mkdir()
+        empty_dir = os.path.join(tmp_path, "empty")
+        os.makedirs(empty_dir, exist_ok=True)
 
         with pytest.raises(ValueError, match="No supported files found in directory"):
             converter.append(str(empty_dir), str(initial_slaf_path))
@@ -367,7 +387,7 @@ class TestAppendFunctionality:
         """Test that append handles source_file column correctly."""
         # Create initial SLAF from first file
         first_file = synthetic_data_dir["compatible_files"][0]
-        initial_slaf_path = tmp_path / "initial.slaf"
+        initial_slaf_path = os.path.join(tmp_path, "initial.slaf")
 
         converter = SLAFConverter(
             chunked=True,
@@ -381,7 +401,9 @@ class TestAppendFunctionality:
         converter.convert(str(first_file), str(initial_slaf_path))
 
         # Check that initial dataset doesn't have source_file column
-        initial_cells_dataset = lance.dataset(str(initial_slaf_path / "cells.lance"))
+        initial_cells_dataset = lance.dataset(
+            os.path.join(initial_slaf_path, "cells.lance")
+        )
         initial_cells_table = initial_cells_dataset.to_table()
         initial_columns = set(initial_cells_table.column_names)
         assert "source_file" not in initial_columns
@@ -391,7 +413,9 @@ class TestAppendFunctionality:
         converter.append(str(second_file), str(initial_slaf_path))
 
         # Check that final dataset has source_file column
-        final_cells_dataset = lance.dataset(str(initial_slaf_path / "cells.lance"))
+        final_cells_dataset = lance.dataset(
+            os.path.join(initial_slaf_path, "cells.lance")
+        )
         final_cells_table = final_cells_dataset.to_table()
         final_columns = set(final_cells_table.column_names)
         assert "source_file" in final_columns
@@ -406,7 +430,7 @@ class TestAppendFunctionality:
         """Test that different chunk sizes result in different fragment counts."""
         # Create initial SLAF from first file
         first_file = synthetic_data_dir["compatible_files"][0]
-        initial_slaf_path = tmp_path / "initial.slaf"
+        initial_slaf_path = os.path.join(tmp_path, "initial.slaf")
 
         # Test with small chunk size
         converter_small = SLAFConverter(
@@ -421,18 +445,22 @@ class TestAppendFunctionality:
 
         # Append remaining files
         remaining_files = synthetic_data_dir["compatible_files"][1:]
-        remaining_dir = tmp_path / "remaining"
-        remaining_dir.mkdir()
+        remaining_dir = os.path.join(tmp_path, "remaining")
+        os.makedirs(remaining_dir, exist_ok=True)
 
         for i, file_path in enumerate(remaining_files):
             import shutil
 
-            shutil.copy(file_path, remaining_dir / f"remaining_{i:02d}.h5ad")
+            shutil.copy(
+                file_path, os.path.join(remaining_dir, f"remaining_{i:02d}.h5ad")
+            )
 
         converter_small.append(str(remaining_dir), str(initial_slaf_path))
 
         # Check fragment count with small chunks
-        expression_dataset = lance.dataset(str(initial_slaf_path / "expression.lance"))
+        expression_dataset = lance.dataset(
+            os.path.join(initial_slaf_path, "expression.lance")
+        )
         expression_fragments_small = expression_dataset.get_fragments()
 
         # Expected: 3 files × (50 cells / 10 chunk_size) = 15 fragments
@@ -442,7 +470,7 @@ class TestAppendFunctionality:
         """Test that append is memory efficient with small chunks."""
         # Create initial SLAF from first file
         first_file = synthetic_data_dir["compatible_files"][0]
-        initial_slaf_path = tmp_path / "initial.slaf"
+        initial_slaf_path = os.path.join(tmp_path, "initial.slaf")
 
         converter = SLAFConverter(
             chunked=True,
@@ -457,19 +485,23 @@ class TestAppendFunctionality:
 
         # Append remaining files
         remaining_files = synthetic_data_dir["compatible_files"][1:]
-        remaining_dir = tmp_path / "remaining"
-        remaining_dir.mkdir()
+        remaining_dir = os.path.join(tmp_path, "remaining")
+        os.makedirs(remaining_dir, exist_ok=True)
 
         for i, file_path in enumerate(remaining_files):
             import shutil
 
-            shutil.copy(file_path, remaining_dir / f"remaining_{i:02d}.h5ad")
+            shutil.copy(
+                file_path, os.path.join(remaining_dir, f"remaining_{i:02d}.h5ad")
+            )
 
         # This should not cause memory issues
         converter.append(str(remaining_dir), str(initial_slaf_path))
 
         # Verify output is correct
-        final_cells_dataset = lance.dataset(str(initial_slaf_path / "cells.lance"))
+        final_cells_dataset = lance.dataset(
+            os.path.join(initial_slaf_path, "cells.lance")
+        )
         final_cell_count = len(final_cells_dataset.to_table())
         assert final_cell_count == 150
 
@@ -477,7 +509,7 @@ class TestAppendFunctionality:
         """Test that append preserves existing data integrity."""
         # Create initial SLAF from first file
         first_file = synthetic_data_dir["compatible_files"][0]
-        initial_slaf_path = tmp_path / "initial.slaf"
+        initial_slaf_path = os.path.join(tmp_path, "initial.slaf")
 
         converter = SLAFConverter(
             chunked=True,
@@ -491,7 +523,9 @@ class TestAppendFunctionality:
         converter.convert(str(first_file), str(initial_slaf_path))
 
         # Get initial data for comparison
-        initial_cells_dataset = lance.dataset(str(initial_slaf_path / "cells.lance"))
+        initial_cells_dataset = lance.dataset(
+            os.path.join(initial_slaf_path, "cells.lance")
+        )
         initial_cells_table = initial_cells_dataset.to_table()
         initial_cell_ids = set(initial_cells_table.column("cell_id").to_numpy())
 
@@ -500,7 +534,9 @@ class TestAppendFunctionality:
         converter.append(str(second_file), str(initial_slaf_path))
 
         # Check that initial data is preserved
-        final_cells_dataset = lance.dataset(str(initial_slaf_path / "cells.lance"))
+        final_cells_dataset = lance.dataset(
+            os.path.join(initial_slaf_path, "cells.lance")
+        )
         final_cells_table = final_cells_dataset.to_table()
         final_cell_ids = set(final_cells_table.column("cell_id").to_numpy())
 
@@ -514,7 +550,7 @@ class TestAppendFunctionality:
         """Test that append handles errors gracefully."""
         # Create initial SLAF from first file
         first_file = synthetic_data_dir["compatible_files"][0]
-        initial_slaf_path = tmp_path / "initial.slaf"
+        initial_slaf_path = os.path.join(tmp_path, "initial.slaf")
 
         converter = SLAFConverter(
             chunked=True,
@@ -528,8 +564,9 @@ class TestAppendFunctionality:
         converter.convert(str(first_file), str(initial_slaf_path))
 
         # Try to append to a file that doesn't exist
-        nonexistent_file = tmp_path / "nonexistent.h5ad"
-        nonexistent_file.write_text("not a valid h5ad file")
+        nonexistent_file = os.path.join(tmp_path, "nonexistent.h5ad")
+        with open(nonexistent_file, "w") as f:
+            f.write("not a valid h5ad file")
 
         with pytest.raises(ValueError, match="Validation failed for nonexistent.h5ad"):
             converter.append(str(nonexistent_file), str(initial_slaf_path))
@@ -538,7 +575,7 @@ class TestAppendFunctionality:
         """Test that append works with skip_validation flag."""
         # Create initial SLAF from first file
         first_file = synthetic_data_dir["compatible_files"][0]
-        initial_slaf_path = tmp_path / "initial.slaf"
+        initial_slaf_path = os.path.join(tmp_path, "initial.slaf")
 
         converter = SLAFConverter(
             chunked=True,
@@ -556,7 +593,9 @@ class TestAppendFunctionality:
         converter.append(str(second_file), str(initial_slaf_path))
 
         # Verify final dataset
-        final_cells_dataset = lance.dataset(str(initial_slaf_path / "cells.lance"))
+        final_cells_dataset = lance.dataset(
+            os.path.join(initial_slaf_path, "cells.lance")
+        )
         final_cell_count = len(final_cells_dataset.to_table())
         assert final_cell_count == 100
 
@@ -564,7 +603,7 @@ class TestAppendFunctionality:
         """Test that append auto-detects file format correctly."""
         # Create initial SLAF from first file
         first_file = synthetic_data_dir["compatible_files"][0]
-        initial_slaf_path = tmp_path / "initial.slaf"
+        initial_slaf_path = os.path.join(tmp_path, "initial.slaf")
 
         converter = SLAFConverter(
             chunked=True,
@@ -582,7 +621,9 @@ class TestAppendFunctionality:
         converter.append(str(second_file), str(initial_slaf_path), input_format="auto")
 
         # Verify final dataset
-        final_cells_dataset = lance.dataset(str(initial_slaf_path / "cells.lance"))
+        final_cells_dataset = lance.dataset(
+            os.path.join(initial_slaf_path, "cells.lance")
+        )
         final_cell_count = len(final_cells_dataset.to_table())
         assert final_cell_count == 100
 
@@ -590,7 +631,7 @@ class TestAppendFunctionality:
         """Test that append works with explicit format specification."""
         # Create initial SLAF from first file
         first_file = synthetic_data_dir["compatible_files"][0]
-        initial_slaf_path = tmp_path / "initial.slaf"
+        initial_slaf_path = os.path.join(tmp_path, "initial.slaf")
 
         converter = SLAFConverter(
             chunked=True,
@@ -608,6 +649,8 @@ class TestAppendFunctionality:
         converter.append(str(second_file), str(initial_slaf_path), input_format="h5ad")
 
         # Verify final dataset
-        final_cells_dataset = lance.dataset(str(initial_slaf_path / "cells.lance"))
+        final_cells_dataset = lance.dataset(
+            os.path.join(initial_slaf_path, "cells.lance")
+        )
         final_cell_count = len(final_cells_dataset.to_table())
         assert final_cell_count == 100

@@ -2,7 +2,7 @@
 
 import subprocess
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, mock_open, patch
 
 import pytest
 import typer
@@ -26,7 +26,7 @@ class TestCLI:
         assert "SLAF version" in result.stdout
 
     @patch("slaf.cli.check_dependencies")
-    @patch("slaf.cli.Path.exists")
+    @patch("slaf.cli.os.path.exists")
     @patch("slaf.cli.subprocess.run")
     def test_docs_build(self, mock_run, mock_exists, mock_check_deps, runner):
         """Test docs build command."""
@@ -39,7 +39,7 @@ class TestCLI:
         mock_run.assert_called_once()
 
     @patch("slaf.cli.check_dependencies")
-    @patch("slaf.cli.Path.exists")
+    @patch("slaf.cli.os.path.exists")
     def test_docs_no_mkdocs_yml(self, mock_exists, mock_check_deps, runner):
         """Test docs command when mkdocs.yml is missing."""
         mock_exists.return_value = False
@@ -49,7 +49,7 @@ class TestCLI:
         assert "mkdocs.yml not found" in result.stdout
 
     @patch("slaf.cli.check_dependencies")
-    @patch("slaf.cli.Path.exists")
+    @patch("slaf.cli.os.path.exists")
     @patch("slaf.cli.subprocess.run")
     def test_docs_serve(self, mock_run, mock_exists, mock_check_deps, runner):
         """Test docs serve command."""
@@ -61,26 +61,24 @@ class TestCLI:
         assert "Starting documentation server" in result.stdout
 
     @patch("slaf.cli.check_dependencies")
-    @patch("slaf.cli.Path.exists")
+    @patch("slaf.cli.os.path.exists")
     def test_examples_list(self, mock_exists, mock_check_deps, runner):
         """Test examples list command."""
         mock_exists.return_value = True
 
         # Mock examples directory with some files
-        with patch("slaf.cli.Path") as mock_path:
-            mock_examples_dir = Mock()
-            mock_examples_dir.glob.return_value = [
-                Path("examples/01-getting-started.py"),
-                Path("examples/02-lazy-processing.py"),
+        with patch("slaf.cli.os.listdir") as mock_listdir:
+            mock_listdir.return_value = [
+                "01-getting-started.py",
+                "02-lazy-processing.py",
             ]
-            mock_path.return_value = mock_examples_dir
 
             result = runner.invoke(app, ["examples", "--list"])
             assert result.exit_code == 0
             assert "Available examples" in result.stdout
 
     @patch("slaf.cli.check_dependencies")
-    @patch("slaf.cli.Path.exists")
+    @patch("slaf.cli.os.path.exists")
     def test_examples_no_directory(self, mock_exists, mock_check_deps, runner):
         """Test examples command when directory doesn't exist."""
         mock_exists.return_value = False
@@ -98,7 +96,7 @@ class TestCLI:
         def exists_side_effect(self):
             return str(self).endswith("input.h5ad")
 
-        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+        with patch("slaf.cli.os.path.exists", new=exists_side_effect):
             with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
                 mock_converter_instance = Mock()
                 mock_converter.return_value = mock_converter_instance
@@ -109,7 +107,7 @@ class TestCLI:
     @patch("slaf.cli.check_dependencies")
     def test_convert_input_not_found(self, mock_check_deps, runner):
         """Test convert command when input file doesn't exist."""
-        with patch("slaf.cli.Path.exists", return_value=False):
+        with patch("slaf.cli.os.path.exists", return_value=False):
             result = runner.invoke(app, ["convert", "nonexistent.h5ad", "output_dir"])
             assert result.exit_code == 1
             assert "Input file not found" in result.stdout
@@ -117,10 +115,7 @@ class TestCLI:
     @patch("slaf.cli.check_dependencies")
     def test_info_command(self, mock_check_deps, runner):
         """Test info command."""
-        with patch("slaf.cli.Path") as mock_path:
-            mock_path_instance = Mock()
-            mock_path_instance.exists.return_value = True
-            mock_path.return_value = mock_path_instance
+        with patch("slaf.cli.os.path.exists", return_value=True):
             with patch("slaf.SLAFArray", create=True) as mock_slaf:
                 mock_dataset = Mock()
                 mock_slaf.return_value = mock_dataset
@@ -130,7 +125,7 @@ class TestCLI:
     @patch("slaf.cli.check_dependencies")
     def test_info_dataset_not_found(self, mock_check_deps, runner):
         """Test info command when dataset doesn't exist."""
-        with patch("slaf.cli.Path.exists", return_value=False):
+        with patch("slaf.cli.os.path.exists", return_value=False):
             result = runner.invoke(app, ["info", "nonexistent_dataset"])
             assert result.exit_code == 1
             assert "Dataset not found" in result.stdout
@@ -138,10 +133,7 @@ class TestCLI:
     @patch("slaf.cli.check_dependencies")
     def test_query_command(self, mock_check_deps, runner):
         """Test query command."""
-        with patch("slaf.cli.Path") as mock_path:
-            mock_path_instance = Mock()
-            mock_path_instance.exists.return_value = True
-            mock_path.return_value = mock_path_instance
+        with patch("slaf.cli.os.path.exists", return_value=True):
             with patch("slaf.SLAFArray", create=True) as mock_slaf:
                 mock_dataset = Mock()
                 mock_dataset.query.return_value = Mock()
@@ -152,7 +144,7 @@ class TestCLI:
                 assert result.exit_code == 0
 
     @patch("slaf.cli.check_dependencies")
-    @patch("slaf.cli.Path.exists")
+    @patch("slaf.cli.os.path.exists")
     def test_query_dataset_not_found(self, mock_exists, mock_check_deps, runner):
         """Test query command when dataset doesn't exist."""
         mock_exists.return_value = False
@@ -164,7 +156,7 @@ class TestCLI:
         assert "Dataset not found" in result.stdout
 
     @patch("slaf.cli.check_dependencies")
-    @patch("slaf.cli.Path.exists")
+    @patch("slaf.cli.os.path.exists")
     @patch("slaf.cli.subprocess.run")
     def test_release_build(self, mock_run, mock_exists, mock_check_deps, runner):
         """Test release build command."""
@@ -176,7 +168,7 @@ class TestCLI:
         assert "Building package" in result.stdout
 
     @patch("slaf.cli.check_dependencies")
-    @patch("slaf.cli.Path.exists")
+    @patch("slaf.cli.os.path.exists")
     @patch("slaf.cli.subprocess.run")
     def test_release_test(self, mock_run, mock_exists, mock_check_deps, runner):
         """Test release test command."""
@@ -188,7 +180,7 @@ class TestCLI:
         assert "Running tests" in result.stdout
 
     @patch("slaf.cli.check_dependencies")
-    @patch("slaf.cli.Path.exists")
+    @patch("slaf.cli.os.path.exists")
     @patch("slaf.cli.subprocess.run")
     def test_release_check(self, mock_run, mock_exists, mock_check_deps, runner):
         """Test release check command."""
@@ -200,7 +192,7 @@ class TestCLI:
         assert "Checking package" in result.stdout
 
     @patch("slaf.cli.check_dependencies")
-    @patch("slaf.cli.Path.exists")
+    @patch("slaf.cli.os.path.exists")
     @patch("slaf.cli.subprocess.run")
     def test_release_publish(self, mock_run, mock_exists, mock_check_deps, runner):
         """Test release publish command."""
@@ -220,7 +212,7 @@ class TestCLI:
                             assert "Publishing version" in result.stdout
 
     @patch("slaf.cli.check_dependencies")
-    @patch("slaf.cli.Path.exists")
+    @patch("slaf.cli.os.path.exists")
     @patch("slaf.cli.subprocess.run")
     def test_release_prepare(self, mock_run, mock_exists, mock_check_deps, runner):
         """Test release prepare command."""
@@ -238,7 +230,7 @@ class TestCLI:
                     assert "Preparing release" in result.stdout
 
     @patch("slaf.cli.check_dependencies")
-    @patch("slaf.cli.Path.exists")
+    @patch("slaf.cli.os.path.exists")
     @patch("slaf.cli.subprocess.run")
     def test_release_prepare_with_version(
         self, mock_run, mock_exists, mock_check_deps, runner
@@ -257,7 +249,7 @@ class TestCLI:
                 assert "Preparing release" in result.stdout
 
     @patch("slaf.cli.check_dependencies")
-    @patch("slaf.cli.Path.exists")
+    @patch("slaf.cli.os.path.exists")
     @patch("slaf.cli.subprocess.run")
     def test_release_patch(self, mock_run, mock_exists, mock_check_deps, runner):
         """Test release patch command."""
@@ -277,7 +269,7 @@ class TestCLI:
                     assert "Preparing release" in result.stdout
 
     @patch("slaf.cli.check_dependencies")
-    @patch("slaf.cli.Path.exists")
+    @patch("slaf.cli.os.path.exists")
     @patch("slaf.cli.subprocess.run")
     def test_release_minor(self, mock_run, mock_exists, mock_check_deps, runner):
         """Test release minor command."""
@@ -297,7 +289,7 @@ class TestCLI:
                     assert "Preparing release" in result.stdout
 
     @patch("slaf.cli.check_dependencies")
-    @patch("slaf.cli.Path.exists")
+    @patch("slaf.cli.os.path.exists")
     @patch("slaf.cli.subprocess.run")
     def test_release_major(self, mock_run, mock_exists, mock_check_deps, runner):
         """Test release major command."""
@@ -384,7 +376,7 @@ class TestCLI:
         def exists_side_effect(self):
             return str(self).endswith("input.h5ad")
 
-        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+        with patch("slaf.cli.os.path.exists", new=exists_side_effect):
             with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
                 mock_converter_instance = Mock()
                 mock_converter.return_value = mock_converter_instance
@@ -405,7 +397,7 @@ class TestCLI:
         def exists_side_effect(self):
             return str(self).endswith("input.h5ad")
 
-        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+        with patch("slaf.cli.os.path.exists", new=exists_side_effect):
             with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
                 mock_converter_instance = Mock()
                 mock_converter.return_value = mock_converter_instance
@@ -428,7 +420,7 @@ class TestCLI:
         def exists_side_effect(self):
             return str(self).endswith("mtx_dir")
 
-        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+        with patch("slaf.cli.os.path.exists", new=exists_side_effect):
             with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
                 mock_converter_instance = Mock()
                 mock_converter.return_value = mock_converter_instance
@@ -451,7 +443,7 @@ class TestCLI:
         def exists_side_effect(self):
             return str(self).endswith("data.h5")
 
-        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+        with patch("slaf.cli.os.path.exists", new=exists_side_effect):
             with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
                 mock_converter_instance = Mock()
                 mock_converter.return_value = mock_converter_instance
@@ -474,7 +466,7 @@ class TestCLI:
         def exists_side_effect(self):
             return str(self).endswith("input.h5ad")
 
-        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+        with patch("slaf.cli.os.path.exists", new=exists_side_effect):
             with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
                 mock_converter_instance = Mock()
                 mock_converter.return_value = mock_converter_instance
@@ -497,7 +489,7 @@ class TestCLI:
         def exists_side_effect(self):
             return str(self).endswith("data.h5")
 
-        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+        with patch("slaf.cli.os.path.exists", new=exists_side_effect):
             with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
                 mock_converter_instance = Mock()
                 mock_converter.return_value = mock_converter_instance
@@ -520,7 +512,7 @@ class TestCLI:
         def exists_side_effect(self):
             return str(self).endswith("input.h5ad")
 
-        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+        with patch("slaf.cli.os.path.exists", new=exists_side_effect):
             with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
                 mock_converter_instance = Mock()
                 mock_converter.return_value = mock_converter_instance
@@ -559,7 +551,7 @@ class TestCLI:
         def exists_side_effect(self):
             return str(self).endswith("input.h5ad")
 
-        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+        with patch("slaf.cli.os.path.exists", new=exists_side_effect):
             with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
                 mock_converter_instance = Mock()
                 mock_converter.return_value = mock_converter_instance
@@ -589,7 +581,7 @@ class TestCLI:
         def exists_side_effect(self):
             return str(self).endswith("input.h5ad") or str(self).endswith("output_dir")
 
-        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+        with patch("slaf.cli.os.path.exists", new=exists_side_effect):
             result = runner.invoke(app, ["convert", "input.h5ad", "output_dir"])
             assert result.exit_code == 1
             assert "Output directory already exists" in result.stdout
@@ -601,7 +593,7 @@ class TestCLI:
         def exists_side_effect(self):
             return str(self).endswith("input.h5ad")
 
-        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+        with patch("slaf.cli.os.path.exists", new=exists_side_effect):
             with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
                 mock_converter_instance = Mock()
                 mock_converter_instance.convert.side_effect = ValueError(
@@ -656,18 +648,11 @@ class TestCLI:
     @patch("slaf.cli.check_dependencies")
     def test_benchmark_run_action(self, mock_check_deps, runner):
         """Test benchmark run action."""
-        with patch("slaf.cli.Path") as mock_path:
-            mock_path_instance = Mock()
-            mock_path_instance.exists.return_value = True
-            mock_path_instance.glob.return_value = [Path("data/pbmc3k_processed.h5ad")]
-            mock_path.return_value = mock_path_instance
-
-            # Mock benchmark functions
+        with patch("slaf.cli.os.path.exists", return_value=True):
             with patch(
-                "slaf.cli.run_benchmark_suite", create=True
-            ) as mock_run_benchmark:
-                mock_run_benchmark.return_value = {"test": "results"}
-
+                "slaf.cli.os.path.glob",
+                return_value=[Path("data/pbmc3k_processed.h5ad")],
+            ):
                 result = runner.invoke(
                     app, ["benchmark", "run", "--datasets", "pbmc3k"]
                 )
@@ -680,7 +665,7 @@ class TestCLI:
     @patch("slaf.cli.check_dependencies")
     def test_benchmark_summary_action(self, mock_check_deps, runner):
         """Test benchmark summary action."""
-        with patch("slaf.cli.Path.exists", return_value=True):
+        with patch("slaf.cli.os.path.exists", return_value=True):
             with patch(
                 "slaf.cli.generate_benchmark_summary", create=True
             ) as mock_summary:
@@ -695,7 +680,7 @@ class TestCLI:
     @patch("slaf.cli.check_dependencies")
     def test_benchmark_docs_action(self, mock_check_deps, runner):
         """Test benchmark docs action."""
-        with patch("slaf.cli.Path.exists", return_value=True):
+        with patch("slaf.cli.os.path.exists", return_value=True):
             with patch("slaf.cli.update_performance_docs", create=True) as mock_docs:
                 result = runner.invoke(app, ["benchmark", "docs"])
                 assert result.exit_code == 0
@@ -732,7 +717,7 @@ class TestCLI:
     @patch("slaf.cli.check_dependencies")
     def test_benchmark_missing_results_file(self, mock_check_deps, runner):
         """Test benchmark summary with missing results file."""
-        with patch("slaf.cli.Path.exists", return_value=False):
+        with patch("slaf.cli.os.path.exists", return_value=False):
             result = runner.invoke(app, ["benchmark", "summary"])
             assert result.exit_code == 1
             assert "Results file not found" in result.stdout
@@ -743,7 +728,7 @@ class TestCLI:
     @patch("slaf.cli.check_dependencies")
     def test_benchmark_missing_summary_file(self, mock_check_deps, runner):
         """Test benchmark docs with missing summary file."""
-        with patch("slaf.cli.Path.exists", side_effect=[True, False]):
+        with patch("slaf.cli.os.path.exists", side_effect=[True, False]):
             result = runner.invoke(app, ["benchmark", "docs"])
             assert result.exit_code == 1
             assert "Summary file not found" in result.stdout
@@ -754,7 +739,7 @@ class TestCLI:
     @patch("slaf.cli.check_dependencies")
     def test_benchmark_missing_docs_file(self, mock_check_deps, runner):
         """Test benchmark docs with missing docs file."""
-        with patch("slaf.cli.Path.exists", side_effect=[True, True, False]):
+        with patch("slaf.cli.os.path.exists", side_effect=[True, True, False]):
             result = runner.invoke(app, ["benchmark", "docs"])
             assert result.exit_code == 1
             assert "Docs file not found" in result.stdout
@@ -766,7 +751,7 @@ class TestCLI:
         def exists_side_effect(self):
             return str(self).endswith("input.h5ad")
 
-        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+        with patch("slaf.cli.os.path.exists", new=exists_side_effect):
             with patch(
                 "slaf.data.SLAFConverter", side_effect=ImportError("SLAF not found")
             ):
@@ -777,7 +762,7 @@ class TestCLI:
     @patch("slaf.cli.check_dependencies")
     def test_info_with_slaf_import_error(self, mock_check_deps, runner):
         """Test info command when SLAF import fails."""
-        with patch("slaf.cli.Path.exists", return_value=True):
+        with patch("slaf.cli.os.path.exists", return_value=True):
             with patch("slaf.SLAFArray", side_effect=ImportError("SLAF not found")):
                 result = runner.invoke(app, ["info", "test_dataset"])
                 assert result.exit_code == 1
@@ -786,7 +771,7 @@ class TestCLI:
     @patch("slaf.cli.check_dependencies")
     def test_query_with_slaf_import_error(self, mock_check_deps, runner):
         """Test query command when SLAF import fails."""
-        with patch("slaf.cli.Path.exists", return_value=True):
+        with patch("slaf.cli.os.path.exists", return_value=True):
             with patch("slaf.SLAFArray", side_effect=ImportError("SLAF not found")):
                 result = runner.invoke(
                     app, ["query", "test_dataset", "SELECT * FROM expression"]
@@ -797,10 +782,7 @@ class TestCLI:
     @patch("slaf.cli.check_dependencies")
     def test_query_with_output_file(self, mock_check_deps, runner):
         """Test query command with output file."""
-        with patch("slaf.cli.Path") as mock_path:
-            mock_path_instance = Mock()
-            mock_path_instance.exists.return_value = True
-            mock_path.return_value = mock_path_instance
+        with patch("slaf.cli.os.path.exists", return_value=True):
             with patch("slaf.SLAFArray", create=True) as mock_slaf:
                 mock_dataset = Mock()
                 mock_result = Mock()
@@ -825,10 +807,7 @@ class TestCLI:
     @patch("slaf.cli.check_dependencies")
     def test_query_with_polars_dataframe(self, mock_check_deps, runner):
         """Test query command with Polars DataFrame (simulating the new behavior)."""
-        with patch("slaf.cli.Path") as mock_path:
-            mock_path_instance = Mock()
-            mock_path_instance.exists.return_value = True
-            mock_path.return_value = mock_path_instance
+        with patch("slaf.cli.os.path.exists", return_value=True):
             with patch("slaf.SLAFArray", create=True) as mock_slaf:
                 mock_dataset = Mock()
                 # Simulate a Polars DataFrame (no to_csv method, has write_csv)
@@ -856,10 +835,7 @@ class TestCLI:
     @patch("slaf.cli.check_dependencies")
     def test_query_with_pandas_dataframe(self, mock_check_deps, runner):
         """Test query command with Pandas DataFrame (backward compatibility)."""
-        with patch("slaf.cli.Path") as mock_path:
-            mock_path_instance = Mock()
-            mock_path_instance.exists.return_value = True
-            mock_path.return_value = mock_path_instance
+        with patch("slaf.cli.os.path.exists", return_value=True):
             with patch("slaf.SLAFArray", create=True) as mock_slaf:
                 mock_dataset = Mock()
                 # Simulate a Pandas DataFrame (has to_string method)
@@ -884,10 +860,7 @@ class TestCLI:
     @patch("slaf.cli.check_dependencies")
     def test_query_display_polars_dataframe(self, mock_check_deps, runner):
         """Test query command display with Polars DataFrame."""
-        with patch("slaf.cli.Path") as mock_path:
-            mock_path_instance = Mock()
-            mock_path_instance.exists.return_value = True
-            mock_path.return_value = mock_path_instance
+        with patch("slaf.cli.os.path.exists", return_value=True):
             with patch("slaf.SLAFArray", create=True) as mock_slaf:
                 mock_dataset = Mock()
                 # Simulate a Polars DataFrame
@@ -913,10 +886,7 @@ class TestCLI:
     @patch("slaf.cli.check_dependencies")
     def test_query_with_limit(self, mock_check_deps, runner):
         """Test query command with custom limit."""
-        with patch("slaf.cli.Path") as mock_path:
-            mock_path_instance = Mock()
-            mock_path_instance.exists.return_value = True
-            mock_path.return_value = mock_path_instance
+        with patch("slaf.cli.os.path.exists", return_value=True):
             with patch("slaf.SLAFArray", create=True) as mock_slaf:
                 mock_dataset = Mock()
                 mock_dataset.query.return_value = Mock()
@@ -941,10 +911,7 @@ class TestCLI:
     @patch("slaf.cli.check_dependencies")
     def test_query_failure(self, mock_check_deps, runner):
         """Test query command when query fails."""
-        with patch("slaf.cli.Path") as mock_path:
-            mock_path_instance = Mock()
-            mock_path_instance.exists.return_value = True
-            mock_path.return_value = mock_path_instance
+        with patch("slaf.cli.os.path.exists", return_value=True):
             with patch("slaf.SLAFArray", create=True) as mock_slaf:
                 mock_dataset = Mock()
                 mock_dataset.query.side_effect = ValueError("Invalid SQL")
@@ -957,10 +924,7 @@ class TestCLI:
     @patch("slaf.cli.check_dependencies")
     def test_info_failure(self, mock_check_deps, runner):
         """Test info command when dataset loading fails."""
-        with patch("slaf.cli.Path") as mock_path:
-            mock_path_instance = Mock()
-            mock_path_instance.exists.return_value = True
-            mock_path.return_value = mock_path_instance
+        with patch("slaf.cli.os.path.exists", return_value=True):
             with patch("slaf.SLAFArray", create=True) as mock_slaf:
                 mock_slaf.side_effect = ValueError("Invalid dataset")
 
@@ -970,8 +934,8 @@ class TestCLI:
 
     def test_get_current_version_success(self):
         """Test get_current_version with valid pyproject.toml."""
-        with patch("slaf.cli.Path.exists", return_value=True):
-            with patch("slaf.cli.Path.read_text", return_value='version = "1.2.3"'):
+        with patch("slaf.cli.os.path.exists", return_value=True):
+            with patch("builtins.open", mock_open(read_data='version = "1.2.3"')):
                 from slaf.cli import get_current_version
 
                 version = get_current_version()
@@ -979,7 +943,7 @@ class TestCLI:
 
     def test_get_current_version_file_not_found(self):
         """Test get_current_version when pyproject.toml doesn't exist."""
-        with patch("slaf.cli.Path.exists", return_value=False):
+        with patch("slaf.cli.os.path.exists", return_value=False):
             from slaf.cli import get_current_version
 
             with pytest.raises(FileNotFoundError):
@@ -987,8 +951,8 @@ class TestCLI:
 
     def test_get_current_version_no_version(self):
         """Test get_current_version when version not found in pyproject.toml."""
-        with patch("slaf.cli.Path.exists", return_value=True):
-            with patch("slaf.cli.Path.read_text", return_value="no version here"):
+        with patch("slaf.cli.os.path.exists", return_value=True):
+            with patch("builtins.open", mock_open(read_data="no version here")):
                 from slaf.cli import get_current_version
 
                 with pytest.raises(ValueError):
@@ -1026,22 +990,21 @@ class TestCLI:
         with pytest.raises(ValueError):
             calculate_new_version("1.2", "patch")
 
-    @patch("slaf.cli.Path")
     @patch("slaf.cli.run_command")
-    def test_update_version(self, mock_run_command, mock_path):
+    def test_update_version(self, mock_run_command):
         """Test update_version function."""
-        mock_path_instance = Mock()
-        mock_path_instance.read_text.return_value = '[project]\nversion = "1.2.3"\n'
-        mock_path.return_value = mock_path_instance
+        # Mock file operations
+        with patch(
+            "builtins.open", mock_open(read_data='[project]\nversion = "1.2.3"\n')
+        ) as mock_file:
+            from slaf.cli import update_version
 
-        from slaf.cli import update_version
+            update_version("1.2.4")
 
-        update_version("1.2.4")
-
-        # Verify the file was written with new version
-        mock_path_instance.write_text.assert_called_once()
-        written_content = mock_path_instance.write_text.call_args[0][0]
-        assert 'version = "1.2.4"' in written_content
+            # Verify the file was written with new version
+            mock_file.assert_called_with("pyproject.toml", "w")
+            written_content = mock_file().write.call_args[0][0]
+            assert 'version = "1.2.4"' in written_content
 
     @patch("slaf.cli.run_command")
     def test_create_tag_success(self, mock_run_command):
@@ -1080,20 +1043,19 @@ class TestCLI:
             Mock(returncode=0, stdout="commit1\ncommit2"),  # git log
         ]
 
-        with patch("slaf.cli.Path") as mock_path:
-            mock_path_instance = Mock()
-            mock_path_instance.exists.return_value = True
-            mock_path_instance.read_text.return_value = "# Changelog\n\n"
-            mock_path.return_value = mock_path_instance
+        # Mock file operations
+        with patch("slaf.cli.os.path.exists", return_value=True):
+            with patch(
+                "builtins.open", mock_open(read_data="# Changelog\n\n")
+            ) as mock_file:
+                from slaf.cli import generate_changelog
 
-            from slaf.cli import generate_changelog
+                generate_changelog("1.2.3")
 
-            generate_changelog("1.2.3")
-
-            # Verify changelog was written
-            mock_path_instance.write_text.assert_called_once()
-            written_content = mock_path_instance.write_text.call_args[0][0]
-            assert "## [1.2.3]" in written_content
+                # Verify changelog was written
+                mock_file.assert_called_with("CHANGELOG.md", "w")
+                written_content = mock_file().write.call_args[0][0]
+                assert "## [1.2.3]" in written_content
 
     @patch("slaf.cli.check_dependencies")
     def test_convert_with_verbose_and_chunked(self, mock_check_deps, runner):
@@ -1102,7 +1064,7 @@ class TestCLI:
         def exists_side_effect(self):
             return str(self).endswith("input.h5ad")
 
-        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+        with patch("slaf.cli.os.path.exists", new=exists_side_effect):
             with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
                 mock_converter_instance = Mock()
                 mock_converter.return_value = mock_converter_instance
@@ -1151,7 +1113,7 @@ class TestCLI:
         def exists_side_effect(self):
             return str(self).endswith("input.h5ad")
 
-        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+        with patch("slaf.cli.os.path.exists", new=exists_side_effect):
             with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
                 mock_converter_instance = Mock()
                 mock_converter.return_value = mock_converter_instance
@@ -1192,7 +1154,7 @@ class TestCLI:
         def exists_side_effect(self):
             return str(self).endswith("input.h5ad")
 
-        with patch("slaf.cli.Path.exists", new=exists_side_effect):
+        with patch("slaf.cli.os.path.exists", new=exists_side_effect):
             with patch("slaf.data.SLAFConverter", create=True) as mock_converter:
                 mock_converter_instance = Mock()
                 mock_converter.return_value = mock_converter_instance
