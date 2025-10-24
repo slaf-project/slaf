@@ -108,8 +108,8 @@ class TestAppendFunctionality:
         return {
             "compatible_dir": compatible_dir,
             "incompatible_dir": incompatible_dir,
-            "compatible_files": list(compatible_dir.glob("*.h5ad")),
-            "incompatible_files": list(incompatible_dir.glob("*.h5ad")),
+            "compatible_files": sorted(compatible_dir.glob("*.h5ad")),
+            "incompatible_files": sorted(incompatible_dir.glob("*.h5ad")),
         }
 
     def test_append_single_file(self, synthetic_data_dir, tmp_path):
