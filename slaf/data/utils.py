@@ -1,4 +1,4 @@
-from pathlib import Path
+import os
 
 from loguru import logger
 
@@ -22,30 +22,34 @@ def detect_format(input_path: str) -> str:
     ValueError
         If the format cannot be detected
     """
-    path = Path(input_path)
-
-    if path.suffix == ".h5ad":
+    if input_path.endswith(".h5ad"):
         return "h5ad"
-    elif path.suffix == ".h5":
+    elif input_path.endswith(".h5"):
         return "10x_h5"
-    elif path.is_dir() and (
+    elif os.path.isdir(input_path) and (
         # Check for TileDB SOMA format indicators
-        any((path / f).suffix == ".tdb" for f in path.iterdir() if f.is_file())
-        or (path / "ms").exists()
-        and (path / "obs").exists()
+        any(
+            f.endswith(".tdb")
+            for f in os.listdir(input_path)
+            if os.path.isfile(os.path.join(input_path, f))
+        )
+        or os.path.exists(os.path.join(input_path, "ms"))
+        and os.path.exists(os.path.join(input_path, "obs"))
     ):
         # Check for TileDB SOMA format
         # TileDB SOMA experiments have .tdb files and ms/obs directories
         return "tiledb"
-    elif path.is_dir():
+    elif os.path.isdir(input_path):
         # Check for 10x MTX files (both old and new formats)
-        if (path / "matrix.mtx").exists() or (path / "matrix.mtx.gz").exists():
+        if os.path.exists(os.path.join(input_path, "matrix.mtx")) or os.path.exists(
+            os.path.join(input_path, "matrix.mtx.gz")
+        ):
             # Check for either genes.tsv or features.tsv (old vs new 10x format)
             if (
-                (path / "genes.tsv").exists()
-                or (path / "genes.tsv.gz").exists()
-                or (path / "features.tsv").exists()
-                or (path / "features.tsv.gz").exists()
+                os.path.exists(os.path.join(input_path, "genes.tsv"))
+                or os.path.exists(os.path.join(input_path, "genes.tsv.gz"))
+                or os.path.exists(os.path.join(input_path, "features.tsv"))
+                or os.path.exists(os.path.join(input_path, "features.tsv.gz"))
             ):
                 return "10x_mtx"
 
@@ -75,17 +79,15 @@ def discover_input_files(input_path: str, max_depth: int = 2) -> tuple[list[str]
     FileNotFoundError
         If input path doesn't exist
     """
-    path = Path(input_path)
-
-    if not path.exists():
+    if not os.path.exists(input_path):
         raise FileNotFoundError(f"Input path does not exist: {input_path}")
 
-    if path.is_file():
+    if os.path.isfile(input_path):
         # Single file - use existing format detection
         format_type = detect_format(input_path)
         return [input_path], format_type
 
-    elif path.is_dir():
+    elif os.path.isdir(input_path):
         # Directory - discover files
         discovered_files = []
         detected_formats = set()
@@ -102,15 +104,17 @@ def discover_input_files(input_path: str, max_depth: int = 2) -> tuple[list[str]
             # Fall back to searching for files with supported extensions
             supported_extensions = {".h5ad", ".h5", ".tiledb"}
 
-            for file_path in path.rglob("*"):
-                if file_path.is_file() and file_path.suffix in supported_extensions:
-                    try:
-                        file_format = detect_format(str(file_path))
-                        discovered_files.append(str(file_path))
-                        detected_formats.add(file_format)
-                    except ValueError:
-                        # Skip files that can't be detected
-                        continue
+            for root, _dirs, files in os.walk(input_path):
+                for file in files:
+                    if any(file.endswith(ext) for ext in supported_extensions):
+                        file_path = os.path.join(root, file)
+                        try:
+                            file_format = detect_format(file_path)
+                            discovered_files.append(file_path)
+                            detected_formats.add(file_format)
+                        except ValueError:
+                            # Skip files that can't be detected
+                            continue
 
         if not discovered_files:
             raise ValueError(f"No supported files found in directory: {input_path}")
@@ -165,12 +169,12 @@ def validate_input_files(file_paths: list[str], format_type: str) -> None:
 
     # 1. Basic file checks
     for file_path in file_paths:
-        if not Path(file_path).exists():
+        if not os.path.exists(file_path):
             errors.append(f"File does not exist: {file_path}")
             continue
 
         # Check file size (non-empty)
-        file_size = Path(file_path).stat().st_size
+        file_size = os.path.getsize(file_path)
         if file_size == 0:
             errors.append(f"File is empty: {file_path}")
         elif file_size < 1024:  # Less than 1KB might be suspicious
@@ -222,7 +226,7 @@ def _validate_schema_compatibility(file_paths: list[str], format_type: str) -> N
                 missing_genes = reference_genes - genes
                 extra_genes = genes - reference_genes
                 if missing_genes or extra_genes:
-                    error_msg = f"File {Path(file_path).name} is incompatible with existing dataset:"
+                    error_msg = f"File {os.path.basename(file_path)} is incompatible with existing dataset:"
                     if missing_genes:
                         error_msg += f"\n  Missing genes: {sorted(missing_genes)[:5]}{'...' if len(missing_genes) > 5 else ''}"
                     if extra_genes:
@@ -234,7 +238,7 @@ def _validate_schema_compatibility(file_paths: list[str], format_type: str) -> N
                 missing_cols = reference_cells - cells
                 extra_cols = cells - reference_cells
                 if missing_cols or extra_cols:
-                    error_msg = f"File {Path(file_path).name} has incompatible cell metadata schema:"
+                    error_msg = f"File {os.path.basename(file_path)} has incompatible cell metadata schema:"
                     if missing_cols:
                         error_msg += f"\n  Missing columns: {sorted(missing_cols)}"
                     if extra_cols:
@@ -244,12 +248,12 @@ def _validate_schema_compatibility(file_paths: list[str], format_type: str) -> N
             # Check value type compatibility
             if value_type != reference_value_type:
                 errors.append(
-                    f"File {Path(file_path).name} has value type {value_type}, expected {reference_value_type}"
+                    f"File {os.path.basename(file_path)} has value type {value_type}, expected {reference_value_type}"
                 )
 
         except Exception as e:
             errors.append(
-                f"File {i + 1} ({Path(file_path).name}) could not be read: {e}"
+                f"File {i + 1} ({os.path.basename(file_path)}) could not be read: {e}"
             )
 
     if errors:

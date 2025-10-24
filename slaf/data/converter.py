@@ -1,5 +1,5 @@
 import json
-from pathlib import Path
+import os
 from typing import Any
 
 import lance
@@ -413,11 +413,8 @@ class SLAFConverter:
         )
 
         # Create output directory (only for local paths)
-        if not str(output_path).startswith(("s3:/", "gs:/", "azure:/", "r2:/")):
-            output_path_obj = Path(output_path)
-            output_path_obj.mkdir(exist_ok=True)
-        else:
-            output_path_obj = Path(output_path)
+        if not output_path.startswith(("s3://", "gs://", "azure://", "r2://")):
+            os.makedirs(output_path, exist_ok=True)
 
         # Track source file information
         source_file_info = []
@@ -428,7 +425,7 @@ class SLAFConverter:
         # Process each file and add fragments to the same SLAF dataset
         for i, file_path in enumerate(input_files):
             logger.info(
-                f"Processing file {i + 1}/{len(input_files)}: {Path(file_path).name}"
+                f"Processing file {i + 1}/{len(input_files)}: {os.path.basename(file_path)}"
             )
 
             try:
@@ -459,7 +456,7 @@ class SLAFConverter:
                     var_df["gene_integer_id"] = range(len(var_df))
 
                     # Add source file information to cell metadata
-                    source_file = Path(file_path).name
+                    source_file = os.path.basename(file_path)
                     obs_df["source_file"] = source_file
 
                     # Precompute cell start indices
@@ -476,9 +473,9 @@ class SLAFConverter:
                     )
 
                     # Process expression data in chunks and write directly
-                    expression_path = output_path_obj / "expression.lance"
-                    cells_path = output_path_obj / "cells.lance"
-                    genes_path = output_path_obj / "genes.lance"
+                    expression_path = f"{output_path}/expression.lance"
+                    cells_path = f"{output_path}/cells.lance"
+                    genes_path = f"{output_path}/genes.lance"
 
                     # Write metadata tables (overwrite for first file, append for subsequent)
                     if i == 0:
@@ -590,15 +587,15 @@ class SLAFConverter:
 
         # Create indices if enabled
         if self.create_indices:
-            self._create_indices(output_path_obj)
+            self._create_indices(output_path)
 
         # Compact dataset if enabled
         if self.compact_after_write:
-            self._compact_dataset(output_path_obj)
+            self._compact_dataset(output_path)
 
         # Save config with multi-file information
         self._save_multi_file_config(
-            output_path_obj,
+            output_path,
             source_file_info,
             None,  # We don't need to pass tables since they're already written
             None,
@@ -632,8 +629,7 @@ class SLAFConverter:
         )
 
         # Check if existing SLAF dataset exists
-        existing_slaf_obj = Path(existing_slaf_path)
-        if not existing_slaf_obj.exists():
+        if not os.path.exists(existing_slaf_path):
             raise FileNotFoundError(
                 f"Existing SLAF dataset not found: {existing_slaf_path}"
             )
@@ -649,7 +645,9 @@ class SLAFConverter:
         )
 
         # Read existing dataset metadata
-        existing_cells_dataset = lance.dataset(str(existing_slaf_obj / "cells.lance"))
+        existing_cells_dataset = lance.dataset(
+            os.path.join(existing_slaf_path, "cells.lance")
+        )
         existing_cells_table = existing_cells_dataset.to_table()
         current_cell_count = len(existing_cells_table)
 
@@ -661,7 +659,7 @@ class SLAFConverter:
         # Process each new file and append to existing dataset
         for i, file_path in enumerate(input_files):
             logger.info(
-                f"Processing file {i + 1}/{len(input_files)}: {Path(file_path).name}"
+                f"Processing file {i + 1}/{len(input_files)}: {os.path.basename(file_path)}"
             )
 
             try:
@@ -691,12 +689,12 @@ class SLAFConverter:
                     )
 
                     # Add source file information to cell metadata
-                    source_file = Path(file_path).name
+                    source_file = os.path.basename(file_path)
                     obs_df["source_file"] = source_file
 
                     # Check if existing dataset has source_file column
                     existing_cells_dataset = lance.dataset(
-                        str(existing_slaf_obj / "cells.lance")
+                        os.path.join(existing_slaf_path, "cells.lance")
                     )
                     existing_cells_table = existing_cells_dataset.to_table()
                     existing_columns = set(existing_cells_table.column_names)
@@ -714,7 +712,7 @@ class SLAFConverter:
                         updated_cells_table = pa.table(existing_cells_df)
                         lance.write_dataset(
                             updated_cells_table,
-                            existing_slaf_obj / "cells.lance",
+                            os.path.join(existing_slaf_path, "cells.lance"),
                             mode="overwrite",
                             enable_v2_manifest_paths=self.enable_v2_manifest,
                             data_storage_version="2.1",
@@ -732,7 +730,7 @@ class SLAFConverter:
                     )
 
                     # Append to existing cells dataset
-                    cells_path = existing_slaf_obj / "cells.lance"
+                    cells_path = os.path.join(existing_slaf_path, "cells.lance")
                     lance.write_dataset(
                         cell_metadata_table,
                         cells_path,
@@ -742,7 +740,9 @@ class SLAFConverter:
                     )
 
                     # Process expression data in chunks and append
-                    expression_path = existing_slaf_obj / "expression.lance"
+                    expression_path = os.path.join(
+                        existing_slaf_path, "expression.lance"
+                    )
                     for chunk_table, _obs_slice in reader.iter_chunks(
                         chunk_size=self.chunk_size
                     ):
@@ -827,13 +827,9 @@ class SLAFConverter:
         logger.info("Validating compatibility with existing SLAF dataset...")
 
         # Load existing dataset metadata
-        existing_cells_dataset = lance.dataset(
-            str(Path(existing_slaf_path) / "cells.lance")
-        )
+        existing_cells_dataset = lance.dataset(f"{existing_slaf_path}/cells.lance")
         existing_cells_table = existing_cells_dataset.to_table()
-        existing_genes_dataset = lance.dataset(
-            str(Path(existing_slaf_path) / "genes.lance")
-        )
+        existing_genes_dataset = lance.dataset(f"{existing_slaf_path}/genes.lance")
         existing_genes_table = existing_genes_dataset.to_table()
 
         # Get existing gene set and cell metadata schema
@@ -852,7 +848,7 @@ class SLAFConverter:
                 if genes != existing_genes:
                     missing_genes = existing_genes - genes
                     extra_genes = genes - existing_genes
-                    error_msg = f"File {Path(file_path).name} is incompatible with existing dataset:"
+                    error_msg = f"File {os.path.basename(file_path)} is incompatible with existing dataset:"
                     if missing_genes:
                         error_msg += f"\n  Missing genes: {sorted(missing_genes)[:5]}{'...' if len(missing_genes) > 5 else ''}"
                     if extra_genes:
@@ -875,7 +871,7 @@ class SLAFConverter:
                 if new_cell_columns != existing_cell_columns_no_slaf:
                     missing_cols = existing_cell_columns_no_slaf - new_cell_columns
                     extra_cols = new_cell_columns - existing_cell_columns_no_slaf
-                    error_msg = f"File {Path(file_path).name} has incompatible cell metadata schema:"
+                    error_msg = f"File {os.path.basename(file_path)} has incompatible cell metadata schema:"
                     if missing_cols:
                         error_msg += f"\n  Missing columns: {sorted(missing_cols)}"
                     if extra_cols:
@@ -884,15 +880,15 @@ class SLAFConverter:
 
             except Exception as e:
                 raise ValueError(
-                    f"Validation failed for {Path(file_path).name}: {e}"
+                    f"Validation failed for {os.path.basename(file_path)}: {e}"
                 ) from e
 
         logger.info("✓ All files are compatible with existing dataset")
 
     def _load_existing_config(self, existing_slaf_path: str) -> dict:
         """Load existing SLAF configuration."""
-        config_path = Path(existing_slaf_path) / "config.json"
-        if not config_path.exists():
+        config_path = f"{existing_slaf_path}/config.json"
+        if not os.path.exists(config_path):
             raise FileNotFoundError(f"Config file not found: {config_path}")
 
         with open(config_path) as f:
@@ -902,7 +898,7 @@ class SLAFConverter:
         self, existing_slaf_path: str, source_file_info: list, total_new_cells: int
     ):
         """Update configuration with new source file information."""
-        config_path = Path(existing_slaf_path) / "config.json"
+        config_path = f"{existing_slaf_path}/config.json"
         config = self._load_existing_config(existing_slaf_path)
 
         # Update cell count
@@ -1054,11 +1050,8 @@ class SLAFConverter:
     def _convert_anndata(self, adata, output_path: str):
         """Internal method to convert AnnData object to SLAF format"""
         # Create output directory (only for local paths)
-        if not str(output_path).startswith(("s3://", "gs://", "azure://", "r2://")):
-            output_path_obj = Path(output_path)
-            output_path_obj.mkdir(exist_ok=True)
-        else:
-            output_path_obj = Path(output_path)
+        if not output_path.startswith(("s3://", "gs://", "azure://", "r2://")):
+            os.makedirs(output_path, exist_ok=True)
 
         # Validate optimized data types and determine value type
         validation_result, value_type = self._validate_optimized_dtypes_anndata(adata)
@@ -1112,14 +1105,14 @@ class SLAFConverter:
             ("genes", gene_metadata_table),
         ]
 
-        self._write_lance_tables(output_path_obj, table_configs)
+        self._write_lance_tables(output_path, table_configs)
 
         # Compact dataset for optimal storage (only if enabled)
         if self.compact_after_write:
-            self._compact_dataset(output_path_obj)
+            self._compact_dataset(output_path)
 
         # Save config
-        self._save_config(output_path_obj, adata.shape)
+        self._save_config(output_path, adata.shape)
         logger.info(f"Conversion complete! Saved to {output_path}")
 
     def _convert_chunked(self, h5ad_path: str, output_path: str):
@@ -1147,31 +1140,28 @@ class SLAFConverter:
             logger.info(f"Loaded: {reader.n_obs:,} cells × {reader.n_vars:,} genes")
 
             # Create output directory (only for local paths)
-            if not str(output_path).startswith(("s3://", "gs://", "azure://", "r2://")):
-                output_path_obj = Path(output_path)
-                output_path_obj.mkdir(exist_ok=True)
-            else:
-                output_path_obj = Path(output_path)
+            if not output_path.startswith(("s3://", "gs://", "azure://", "r2://")):
+                os.makedirs(output_path, exist_ok=True)
 
             # Write metadata tables efficiently (without loading everything into memory)
-            self._write_metadata_efficiently(reader, output_path_obj)
+            self._write_metadata_efficiently(reader, output_path)
 
             # Process expression data
-            self._process_expression(reader, output_path_obj, value_type)
+            self._process_expression(reader, output_path, value_type)
 
             # Create indices (if enabled)
             if self.create_indices:
-                self._create_indices(output_path_obj)
+                self._create_indices(output_path)
 
             # Compact dataset for optimal storage (only if enabled)
             if self.compact_after_write:
-                self._compact_dataset(output_path_obj)
+                self._compact_dataset(output_path)
 
             # Save config
-            self._save_config(output_path_obj, (reader.n_obs, reader.n_vars))
+            self._save_config(output_path, (reader.n_obs, reader.n_vars))
             logger.info(f"Conversion complete! Saved to {output_path}")
 
-    def _write_metadata_efficiently(self, reader, output_path_obj: Path):
+    def _write_metadata_efficiently(self, reader, output_path: str):
         """Write metadata tables efficiently while preserving all columns"""
         logger.info("Writing metadata tables...")
 
@@ -1213,14 +1203,14 @@ class SLAFConverter:
         # Write metadata tables
         lance.write_dataset(
             cell_metadata_table,
-            output_path_obj / "cells.lance",
+            f"{output_path}/cells.lance",
             mode="overwrite",
             enable_v2_manifest_paths=self.enable_v2_manifest,
             data_storage_version="2.1",
         )
         lance.write_dataset(
             gene_metadata_table,
-            output_path_obj / "genes.lance",
+            f"{output_path}/genes.lance",
             mode="overwrite",
             enable_v2_manifest_paths=self.enable_v2_manifest,
             data_storage_version="2.1",
@@ -1228,7 +1218,7 @@ class SLAFConverter:
 
         logger.info("Metadata tables written!")
 
-    def _process_expression(self, reader, output_path_obj: Path, value_type="uint16"):
+    def _process_expression(self, reader, output_path: str, value_type="uint16"):
         """Process expression data in single-threaded mode with large chunks"""
         logger.info("Processing expression data in single-threaded mode...")
 
@@ -1251,7 +1241,7 @@ class SLAFConverter:
             logger.info("Install psutil for memory monitoring: pip install psutil")
 
         # Create Lance dataset with schema
-        expression_path = output_path_obj / "expression.lance"
+        expression_path = f"{output_path}/expression.lance"
         schema = self._get_expression_schema(value_type)
 
         # Create empty dataset first
@@ -1666,16 +1656,16 @@ class SLAFConverter:
         )
         return True, "uint16"  # Default to uint16 for integer data
 
-    def _compact_dataset(self, output_path_obj: Path):
+    def _compact_dataset(self, output_path: str):
         """Compact the dataset to optimize storage after writing"""
         logger.info("Compacting dataset for optimal storage...")
 
         try:
             # Compact expression table
-            expression_path = output_path_obj / "expression.lance"
-            if expression_path.exists():
+            expression_path = f"{output_path}/expression.lance"
+            if os.path.exists(expression_path):
                 logger.info("  Compacting expression table...")
-                dataset = lance.dataset(str(expression_path))
+                dataset = lance.dataset(expression_path)
                 dataset.optimize.compact_files(
                     target_rows_per_fragment=1024 * 1024
                 )  # 1M rows per fragment
@@ -1685,10 +1675,10 @@ class SLAFConverter:
 
             # Compact metadata tables
             for table_name in ["cells", "genes"]:
-                table_path = output_path_obj / f"{table_name}.lance"
-                if table_path.exists():
+                table_path = f"{output_path}/{table_name}.lance"
+                if os.path.exists(table_path):
                     logger.info(f"  Compacting {table_name} table...")
-                    dataset = lance.dataset(str(table_path))
+                    dataset = lance.dataset(table_path)
                     dataset.optimize.compact_files(
                         target_rows_per_fragment=100000
                     )  # 100K rows per fragment for metadata
@@ -2020,11 +2010,11 @@ class SLAFConverter:
         return table
 
     def _write_lance_tables(
-        self, output_path: Path, table_configs: list[tuple[str, pa.Table]]
+        self, output_path: str, table_configs: list[tuple[str, pa.Table]]
     ):
         """Write multiple Lance tables with consistent naming"""
         for table_name, table in table_configs:
-            table_path = output_path / f"{table_name}.lance"
+            table_path = f"{output_path}/{table_name}.lance"
 
             # Write table with basic settings (using max_rows_per_file for large fragments)
             if table_name == "expression":
@@ -2047,7 +2037,7 @@ class SLAFConverter:
         if self.create_indices:
             self._create_indices(output_path)
 
-    def _create_indices(self, output_path: Path):
+    def _create_indices(self, output_path: str):
         """Create optimal indices for SLAF tables with column existence checks"""
         logger.info("Creating indices for optimal query performance...")
 
@@ -2068,9 +2058,9 @@ class SLAFConverter:
 
         # Create indices for each table
         for table_name, desired_columns in table_indices.items():
-            table_path = output_path / f"{table_name}.lance"
-            if table_path.exists():
-                dataset = lance.dataset(str(table_path))
+            table_path = f"{output_path}/{table_name}.lance"
+            if os.path.exists(table_path):
+                dataset = lance.dataset(table_path)
                 schema = dataset.schema
 
                 for column in desired_columns:
@@ -2294,7 +2284,7 @@ class SLAFConverter:
 
         return stats, int(running_stats["count"])
 
-    def _save_config(self, output_path_obj: Path, shape: tuple):
+    def _save_config(self, output_path: str, shape: tuple):
         """Save SLAF configuration with computed metadata"""
         n_cells = int(shape[0])
         n_genes = int(shape[1])
@@ -2303,7 +2293,7 @@ class SLAFConverter:
         logger.info("Computing dataset statistics...")
 
         # Reference Lance dataset
-        expression = lance.dataset(str(output_path_obj / "expression.lance"))
+        expression = lance.dataset(f"{output_path}/expression.lance")
 
         # Compute basic statistics and count from expression data
         expression_stats, expression_count = self._compute_expression_statistics(
@@ -2337,13 +2327,13 @@ class SLAFConverter:
             "created_at": pd.Timestamp.now().isoformat(),
         }
 
-        config_path = output_path_obj / "config.json"
+        config_path = f"{output_path}/config.json"
         with open(config_path, "w") as f:
             json.dump(config, f, indent=2)
 
     def _save_multi_file_config(
         self,
-        output_path_obj: Path,
+        output_path: str,
         source_file_info: list,
         combined_expression: pa.Table | None = None,
         combined_cells: pa.Table | None = None,
@@ -2353,8 +2343,8 @@ class SLAFConverter:
 
         # If tables are not provided, load them from the Lance datasets
         if combined_cells is None or combined_genes is None:
-            cells_dataset = lance.dataset(str(output_path_obj / "cells.lance"))
-            genes_dataset = lance.dataset(str(output_path_obj / "genes.lance"))
+            cells_dataset = lance.dataset(f"{output_path}/cells.lance")
+            genes_dataset = lance.dataset(f"{output_path}/genes.lance")
             n_cells = len(cells_dataset.to_table())
             n_genes = len(genes_dataset.to_table())
         else:
@@ -2365,7 +2355,7 @@ class SLAFConverter:
         logger.info("Computing multi-file dataset statistics...")
 
         # Reference Lance dataset
-        expression = lance.dataset(str(output_path_obj / "expression.lance"))
+        expression = lance.dataset(f"{output_path}/expression.lance")
 
         # Compute basic statistics and count from expression data
         expression_stats, expression_count = self._compute_expression_statistics(
@@ -2411,6 +2401,6 @@ class SLAFConverter:
             "created_at": pd.Timestamp.now().isoformat(),
         }
 
-        config_path = output_path_obj / "config.json"
+        config_path = f"{output_path}/config.json"
         with open(config_path, "w") as f:
             json.dump(config, f, indent=2)
