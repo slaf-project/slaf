@@ -89,6 +89,7 @@ class SLAFConverter:
         enable_v2_manifest: bool = True,  # Enable v2 manifest paths for better performance
         compact_after_write: bool = False,  # Compact dataset after writing for optimal storage (disabled by default to avoid manifest corruption)
         tiledb_collection_name: str = "RNA",  # Collection name for TileDB format
+        enable_checkpointing: bool = True,  # Enable checkpointing for long-running conversions
     ):
         """
         Initialize converter with optimization options.
@@ -114,6 +115,9 @@ class SLAFConverter:
                                This creates a new version but significantly reduces file size.
             tiledb_collection_name: Name of the measurement collection for TileDB format.
                                   Default: "RNA". Only used when converting from TileDB format.
+            enable_checkpointing: Enable checkpointing for long-running conversions.
+                                This allows resuming from the last completed chunk if the
+                                conversion is interrupted. Default: True.
 
         Examples:
             >>> # Default optimization (recommended)
@@ -141,6 +145,7 @@ class SLAFConverter:
         self.enable_v2_manifest = enable_v2_manifest
         self.compact_after_write = compact_after_write
         self.tiledb_collection_name = tiledb_collection_name
+        self.enable_checkpointing = enable_checkpointing
 
     def _is_cloud_path(self, path: str) -> bool:
         """Check if path is a cloud storage path."""
@@ -178,6 +183,73 @@ class SLAFConverter:
             return smart_open(path, mode)
         else:
             return open(path, mode)
+
+    def _save_checkpoint(self, output_path: str, checkpoint_data: dict):
+        """Save checkpoint data to config.json"""
+        if not self.enable_checkpointing:
+            return
+
+        config_path = f"{output_path}/config.json"
+
+        # Load existing config if it exists
+        if self._path_exists(config_path):
+            with self._open_file(config_path) as f:
+                config = json.load(f)
+        else:
+            config = {}
+
+        # Update checkpoint data
+        config["checkpoint"] = checkpoint_data
+
+        # Save updated config
+        with self._open_file(config_path, "w") as f:
+            json.dump(config, f, indent=2)
+
+        logger.info(f"Checkpoint saved: {checkpoint_data}")
+
+    def _load_checkpoint(self, output_path: str) -> dict | None:
+        """Load checkpoint data from config.json"""
+        if not self.enable_checkpointing:
+            return None
+
+        config_path = f"{output_path}/config.json"
+
+        if not self._path_exists(config_path):
+            return None
+
+        try:
+            with self._open_file(config_path) as f:
+                config = json.load(f)
+                return config.get("checkpoint")
+        except Exception as e:
+            logger.warning(f"Could not load checkpoint: {e}")
+            return None
+
+    def _clear_checkpoint(self, output_path: str):
+        """Clear checkpoint data from config.json"""
+        if not self.enable_checkpointing:
+            return
+
+        config_path = f"{output_path}/config.json"
+
+        if not self._path_exists(config_path):
+            return
+
+        try:
+            with self._open_file(config_path) as f:
+                config = json.load(f)
+
+            # Remove checkpoint data
+            if "checkpoint" in config:
+                del config["checkpoint"]
+
+            # Save updated config
+            with self._open_file(config_path, "w") as f:
+                json.dump(config, f, indent=2)
+
+            logger.info("Checkpoint cleared - conversion completed successfully")
+        except Exception as e:
+            logger.warning(f"Could not clear checkpoint: {e}")
 
     def convert(
         self,
@@ -444,7 +516,7 @@ class SLAFConverter:
         self, input_files: list[str], output_path: str, input_format: str
     ):
         """
-        Convert multiple files to a single SLAF dataset with auto-incrementing IDs.
+        Convert multiple files to a single SLAF dataset with auto-incrementing IDs and checkpointing.
 
         This method processes files sequentially and adds fragments to the same
         SLAF dataset, avoiding the overhead of creating separate SLAF files.
@@ -458,6 +530,20 @@ class SLAFConverter:
             f"Converting {len(input_files)} {input_format} files to SLAF format..."
         )
 
+        # Check for existing checkpoint
+        checkpoint = self._load_checkpoint(output_path)
+        if checkpoint:
+            logger.info(f"Found checkpoint: {checkpoint}")
+            if checkpoint.get("status") == "completed":
+                logger.info(
+                    "Multi-file conversion already completed according to checkpoint"
+                )
+                return
+            elif checkpoint.get("status") == "in_progress":
+                logger.info("Resuming multi-file conversion from checkpoint...")
+            else:
+                logger.info("Starting fresh multi-file conversion...")
+
         # Create output directory (only for local paths)
         self._ensure_directory_exists(output_path)
 
@@ -467,8 +553,27 @@ class SLAFConverter:
         total_genes = 0
         total_cells = 0
 
+        # Determine starting file and chunk from checkpoint
+        start_file_idx = 0
+        start_chunk_idx = 0
+        if checkpoint and checkpoint.get("status") == "in_progress":
+            start_file_idx = checkpoint.get("last_completed_file", -1) + 1
+            start_chunk_idx = checkpoint.get("last_completed_chunk", 0)
+            global_cell_offset = checkpoint.get("global_cell_offset", 0)
+            logger.info(
+                f"Resuming from file {start_file_idx}, chunk {start_chunk_idx} (last completed file: {checkpoint.get('last_completed_file', -1)}, chunk: {checkpoint.get('last_completed_chunk', -1)})"
+            )
+            logger.info(f"Global cell offset: {global_cell_offset}")
+
         # Process each file and add fragments to the same SLAF dataset
         for i, file_path in enumerate(input_files):
+            # Skip files if resuming from checkpoint
+            if i < start_file_idx:
+                logger.info(
+                    f"Skipping file {i + 1}/{len(input_files)}: {os.path.basename(file_path)} (already processed)"
+                )
+                continue
+
             logger.info(
                 f"Processing file {i + 1}/{len(input_files)}: {os.path.basename(file_path)}"
             )
@@ -518,7 +623,6 @@ class SLAFConverter:
                     )
 
                     # Process expression data in chunks and write directly
-                    expression_path = f"{output_path}/expression.lance"
                     cells_path = f"{output_path}/cells.lance"
                     genes_path = f"{output_path}/genes.lance"
 
@@ -550,63 +654,13 @@ class SLAFConverter:
                             data_storage_version="2.1",
                         )
 
-                    # Process expression data in chunks and write directly
-                    for chunk_idx, (chunk_table, _obs_slice) in enumerate(
-                        reader.iter_chunks(chunk_size=self.chunk_size)
-                    ):
-                        # Adjust cell integer IDs with global offset
-                        cell_integer_ids = (
-                            chunk_table.column("cell_integer_id").to_numpy()
-                            + global_cell_offset
-                        )
-
-                        # Create adjusted chunk table
-                        if self.optimize_storage:
-                            # Only store integer IDs for maximum storage efficiency
-                            adjusted_chunk = pa.table(
-                                {
-                                    "cell_integer_id": pa.array(cell_integer_ids),
-                                    "gene_integer_id": chunk_table.column(
-                                        "gene_integer_id"
-                                    ),
-                                    "value": chunk_table.column("value"),
-                                }
-                            )
-                        else:
-                            # Store both string and integer IDs for compatibility
-                            adjusted_chunk = pa.table(
-                                {
-                                    "cell_id": chunk_table.column("cell_id"),
-                                    "gene_id": chunk_table.column("gene_id"),
-                                    "cell_integer_id": pa.array(cell_integer_ids),
-                                    "gene_integer_id": chunk_table.column(
-                                        "gene_integer_id"
-                                    ),
-                                    "value": chunk_table.column("value"),
-                                }
-                            )
-
-                        # Write chunk directly to expression dataset
-                        if i == 0 and chunk_idx == 0:
-                            # First chunk of first file - create new dataset
-                            lance.write_dataset(
-                                adjusted_chunk,
-                                expression_path,
-                                mode="overwrite",
-                                max_rows_per_file=10000000,
-                                enable_v2_manifest_paths=self.enable_v2_manifest,
-                                data_storage_version="2.1",
-                            )
-                        else:
-                            # Append to existing dataset
-                            lance.write_dataset(
-                                adjusted_chunk,
-                                expression_path,
-                                mode="append",
-                                max_rows_per_file=10000000,
-                                enable_v2_manifest_paths=self.enable_v2_manifest,
-                                data_storage_version="2.1",
-                            )
+                    # Process expression data in chunks with checkpointing support
+                    # If we're resuming from this file, use the checkpoint chunk index
+                    # Otherwise start from chunk 0
+                    chunk_start_idx = start_chunk_idx if i == start_file_idx else 0
+                    self._process_file_chunks_with_checkpoint(
+                        reader, output_path, i, chunk_start_idx, global_cell_offset
+                    )
 
                     # Track source file information
                     source_file_info.append(
@@ -622,8 +676,31 @@ class SLAFConverter:
                     global_cell_offset += len(obs_df)
                     total_cells += len(obs_df)
 
+                    # Save checkpoint after each file (chunk-level checkpointing is handled in _process_file_chunks_with_checkpoint)
+                    if self.enable_checkpointing:
+                        checkpoint_data = {
+                            "status": "in_progress",
+                            "last_completed_file": i,
+                            "last_completed_chunk": -1,  # -1 indicates file is fully completed
+                            "global_cell_offset": global_cell_offset,
+                            "total_files": len(input_files),
+                            "timestamp": pd.Timestamp.now().isoformat(),
+                        }
+                        self._save_checkpoint(output_path, checkpoint_data)
+
             except Exception as e:
                 logger.error(f"Failed to process file {file_path}: {e}")
+                # Save checkpoint with error status
+                if self.enable_checkpointing:
+                    checkpoint_data = {
+                        "status": "error",
+                        "last_completed_file": i - 1,
+                        "last_completed_chunk": -1,  # -1 indicates previous file was fully completed
+                        "global_cell_offset": global_cell_offset,
+                        "error": str(e),
+                        "timestamp": pd.Timestamp.now().isoformat(),
+                    }
+                    self._save_checkpoint(output_path, checkpoint_data)
                 # Continue with other files
                 continue
 
@@ -646,6 +723,9 @@ class SLAFConverter:
             None,
             None,
         )
+
+        # Clear checkpoint after successful completion
+        self._clear_checkpoint(output_path)
 
         logger.info(
             f"Multi-file conversion complete! Processed {len(source_file_info)} files"
@@ -784,54 +864,11 @@ class SLAFConverter:
                         data_storage_version="2.1",
                     )
 
-                    # Process expression data in chunks and append
-                    expression_path = os.path.join(
-                        existing_slaf_path, "expression.lance"
+                    # Process expression data in chunks with checkpointing support
+                    # Use the same checkpointing infrastructure as convert method
+                    self._process_file_chunks_with_checkpoint(
+                        reader, existing_slaf_path, i, 0, global_cell_offset
                     )
-                    for chunk_table, _obs_slice in reader.iter_chunks(
-                        chunk_size=self.chunk_size
-                    ):
-                        # Adjust cell integer IDs with global offset
-                        cell_integer_ids = (
-                            chunk_table.column("cell_integer_id").to_numpy()
-                            + global_cell_offset
-                        )
-
-                        # Create adjusted chunk table
-                        if self.optimize_storage:
-                            # Only store integer IDs for maximum storage efficiency
-                            adjusted_chunk = pa.table(
-                                {
-                                    "cell_integer_id": pa.array(cell_integer_ids),
-                                    "gene_integer_id": chunk_table.column(
-                                        "gene_integer_id"
-                                    ),
-                                    "value": chunk_table.column("value"),
-                                }
-                            )
-                        else:
-                            # Store both string and integer IDs for compatibility
-                            adjusted_chunk = pa.table(
-                                {
-                                    "cell_id": chunk_table.column("cell_id"),
-                                    "gene_id": chunk_table.column("gene_id"),
-                                    "cell_integer_id": pa.array(cell_integer_ids),
-                                    "gene_integer_id": chunk_table.column(
-                                        "gene_integer_id"
-                                    ),
-                                    "value": chunk_table.column("value"),
-                                }
-                            )
-
-                        # Append chunk to existing expression dataset
-                        lance.write_dataset(
-                            adjusted_chunk,
-                            expression_path,
-                            mode="append",
-                            max_rows_per_file=10000000,
-                            enable_v2_manifest_paths=self.enable_v2_manifest,
-                            data_storage_version="2.1",
-                        )
 
                     # Track source file information
                     source_file_info.append(
@@ -847,8 +884,32 @@ class SLAFConverter:
                     global_cell_offset += len(obs_df)
                     total_new_cells += len(obs_df)
 
+                    # Save checkpoint after each file (for append operations)
+                    if self.enable_checkpointing:
+                        checkpoint_data = {
+                            "status": "in_progress",
+                            "last_completed_file": i,
+                            "last_completed_chunk": -1,  # -1 indicates file is fully completed
+                            "global_cell_offset": global_cell_offset,
+                            "operation": "append",  # Mark this as an append operation
+                            "timestamp": pd.Timestamp.now().isoformat(),
+                        }
+                        self._save_checkpoint(existing_slaf_path, checkpoint_data)
+
             except Exception as e:
                 logger.error(f"Failed to process file {file_path}: {e}")
+                # Save checkpoint with error status
+                if self.enable_checkpointing:
+                    checkpoint_data = {
+                        "status": "error",
+                        "last_completed_file": i - 1,
+                        "last_completed_chunk": -1,  # -1 indicates previous file was fully completed
+                        "global_cell_offset": global_cell_offset,
+                        "operation": "append",  # Mark this as an append operation
+                        "error": str(e),
+                        "timestamp": pd.Timestamp.now().isoformat(),
+                    }
+                    self._save_checkpoint(existing_slaf_path, checkpoint_data)
                 # Continue with other files
                 continue
 
@@ -859,6 +920,9 @@ class SLAFConverter:
         self._update_config_with_append(
             existing_slaf_path, source_file_info, total_new_cells
         )
+
+        # Clear checkpoint after successful completion
+        self._clear_checkpoint(existing_slaf_path)
 
         logger.info(
             f"Append complete! Added {total_new_cells} cells from {len(source_file_info)} files"
@@ -1160,8 +1224,21 @@ class SLAFConverter:
         logger.info(f"Conversion complete! Saved to {output_path}")
 
     def _convert_chunked(self, h5ad_path: str, output_path: str):
-        """Convert h5ad file using chunked processing with sorted-by-construction approach"""
+        """Convert h5ad file using chunked processing with checkpointing support"""
         logger.info(f"Processing in chunks of {self.chunk_size} cells...")
+
+        # Check for existing checkpoint
+        checkpoint = self._load_checkpoint(output_path)
+        if checkpoint:
+            logger.info(f"Found checkpoint: {checkpoint}")
+            if checkpoint.get("status") == "completed":
+                logger.info("Conversion already completed according to checkpoint")
+                return
+            elif checkpoint.get("status") == "in_progress":
+                logger.info("Resuming from checkpoint...")
+                # Resume logic will be handled in _process_expression
+            else:
+                logger.info("Starting fresh conversion...")
 
         # First, create a temporary reader to determine the value type
         with create_chunked_reader(
@@ -1187,10 +1264,14 @@ class SLAFConverter:
             self._ensure_directory_exists(output_path)
 
             # Write metadata tables efficiently (without loading everything into memory)
-            self._write_metadata_efficiently(reader, output_path)
+            # Only write metadata if not resuming from checkpoint
+            if not checkpoint or checkpoint.get("status") != "in_progress":
+                self._write_metadata_efficiently(reader, output_path)
 
-            # Process expression data
-            self._process_expression(reader, output_path, value_type)
+            # Process expression data with checkpointing
+            self._process_expression_with_checkpoint(
+                reader, output_path, value_type, checkpoint
+            )
 
             # Create indices (if enabled)
             if self.create_indices:
@@ -1200,8 +1281,9 @@ class SLAFConverter:
             if self.compact_after_write:
                 self._compact_dataset(output_path)
 
-            # Save config
+            # Save config and clear checkpoint
             self._save_config(output_path, (reader.n_obs, reader.n_vars))
+            self._clear_checkpoint(output_path)
             logger.info(f"Conversion complete! Saved to {output_path}")
 
     def _write_metadata_efficiently(self, reader, output_path: str):
@@ -1436,6 +1518,365 @@ class SLAFConverter:
             f"Processed {total_chunks} chunks in {total_processing_time:.1f}s "
             f"({total_processing_time / total_chunks:.2f}s per chunk average)"
         )
+
+    def _process_expression_with_checkpoint(
+        self, reader, output_path: str, value_type="uint16", checkpoint=None
+    ):
+        """Process expression data with checkpointing support"""
+        logger.info("Processing expression data with checkpointing...")
+
+        # Calculate total chunks
+        total_chunks = (reader.n_obs + self.chunk_size - 1) // self.chunk_size
+        logger.info(
+            f"Processing {total_chunks} chunks with chunk size {self.chunk_size:,}..."
+        )
+
+        # Determine starting chunk from checkpoint
+        start_chunk = 0
+        if checkpoint and checkpoint.get("status") == "in_progress":
+            start_chunk = checkpoint.get("last_completed_chunk", 0) + 1
+            logger.info(
+                f"Resuming from chunk {start_chunk} (last completed: {checkpoint.get('last_completed_chunk', -1)})"
+            )
+
+        # Memory monitoring
+        process = None
+        initial_memory = None
+        try:
+            import psutil
+
+            process = psutil.Process()
+            initial_memory = process.memory_info().rss / 1024 / 1024  # MB
+            logger.info(f"Initial memory usage: {initial_memory:.1f} MB")
+        except ImportError:
+            logger.info("Install psutil for memory monitoring: pip install psutil")
+
+        # Create Lance dataset with schema
+        expression_path = f"{output_path}/expression.lance"
+        schema = self._get_expression_schema(value_type)
+
+        # Create empty dataset first (only if not resuming)
+        if start_chunk == 0:
+            logger.info("Creating initial Lance dataset...")
+            schema = self._get_expression_schema(value_type)
+
+            # Create empty table with correct schema based on settings
+            if value_type == "uint16":
+                value_pa_type = pa.uint16()
+            elif value_type == "float32":
+                value_pa_type = pa.float32()
+            else:
+                raise ValueError(f"Unsupported value type: {value_type}")
+
+            if self.optimize_storage:
+                if self.use_optimized_dtypes:
+                    empty_table = pa.table(
+                        {
+                            "cell_integer_id": pa.array([], type=pa.uint32()),
+                            "gene_integer_id": pa.array([], type=pa.uint16()),
+                            "value": pa.array([], type=value_pa_type),
+                        }
+                    )
+                else:
+                    empty_table = pa.table(
+                        {
+                            "cell_integer_id": pa.array([], type=pa.int32()),
+                            "gene_integer_id": pa.array([], type=pa.int32()),
+                            "value": pa.array([], type=value_pa_type),
+                        }
+                    )
+            else:
+                if self.use_optimized_dtypes:
+                    empty_table = pa.table(
+                        {
+                            "cell_id": pa.array([], type=pa.string()),
+                            "gene_id": pa.array([], type=pa.string()),
+                            "cell_integer_id": pa.array([], type=pa.uint32()),
+                            "gene_integer_id": pa.array([], type=pa.uint16()),
+                            "value": pa.array([], type=value_pa_type),
+                        }
+                    )
+                else:
+                    empty_table = pa.table(
+                        {
+                            "cell_id": pa.array([], type=pa.string()),
+                            "gene_id": pa.array([], type=pa.string()),
+                            "cell_integer_id": pa.array([], type=pa.int32()),
+                            "gene_integer_id": pa.array([], type=pa.int32()),
+                            "value": pa.array([], type=value_pa_type),
+                        }
+                    )
+
+            # Create initial Lance dataset (using max_rows_per_file for large fragments)
+            lance.write_dataset(
+                empty_table,
+                expression_path,
+                mode="overwrite",
+                schema=schema,
+                max_rows_per_file=10000000,  # 10M rows per file to avoid memory issues
+                enable_v2_manifest_paths=self.enable_v2_manifest,
+                data_storage_version="2.1",
+            )
+
+        # Process chunks sequentially with checkpointing
+        logger.info("Processing chunks sequentially with checkpointing...")
+        import time
+
+        from tqdm import tqdm
+
+        processing_start_time = time.time()
+
+        # Create iterator for chunks
+        chunk_iterator = reader.iter_chunks(chunk_size=self.chunk_size)
+
+        # Skip chunks if resuming
+        for _ in range(start_chunk):
+            try:
+                next(chunk_iterator)
+            except StopIteration:
+                logger.warning(
+                    f"Tried to skip {start_chunk} chunks but iterator ended early"
+                )
+                break
+
+        # Process remaining chunks
+        for chunk_idx in tqdm(
+            range(start_chunk, total_chunks),
+            desc="Processing chunks",
+            unit="chunk",
+            initial=start_chunk,
+            total=total_chunks,
+        ):
+            try:
+                # Get next chunk
+                chunk_table, _obs_slice = next(chunk_iterator)
+
+                # Process chunk (data type conversion and string ID addition if needed)
+                if not self.use_optimized_dtypes:
+                    # Convert from optimized dtypes to standard dtypes
+                    cell_integer_ids = (
+                        chunk_table.column("cell_integer_id")
+                        .to_numpy()
+                        .astype(np.int32)
+                    )
+                    gene_integer_ids = (
+                        chunk_table.column("gene_integer_id")
+                        .to_numpy()
+                        .astype(np.int32)
+                    )
+                    values = chunk_table.column("value").to_numpy().astype(np.float32)
+
+                    chunk_table = pa.table(
+                        {
+                            "cell_integer_id": pa.array(cell_integer_ids),
+                            "gene_integer_id": pa.array(gene_integer_ids),
+                            "value": pa.array(values),
+                        }
+                    )
+
+                if not self.optimize_storage:
+                    # Get cell and gene names
+                    cell_names = reader.obs_names
+                    gene_names = reader.var_names
+
+                    # Create string ID arrays
+                    cell_integer_ids = chunk_table.column("cell_integer_id").to_numpy()
+                    gene_integer_ids = chunk_table.column("gene_integer_id").to_numpy()
+
+                    cell_ids = cell_names[cell_integer_ids].astype(str)
+                    gene_ids = gene_names[gene_integer_ids].astype(str)
+
+                    # Create new table with string IDs
+                    chunk_table = pa.table(
+                        {
+                            "cell_id": pa.array(cell_ids),
+                            "gene_id": pa.array(gene_ids),
+                            "cell_integer_id": chunk_table.column("cell_integer_id"),
+                            "gene_integer_id": chunk_table.column("gene_integer_id"),
+                            "value": chunk_table.column("value"),
+                        }
+                    )
+
+                # Write chunk to Lance dataset (using max_rows_per_file for large fragments)
+                lance.write_dataset(
+                    chunk_table,
+                    expression_path,
+                    mode="append",
+                    max_rows_per_file=10000000,  # 10M rows per file to avoid memory issues
+                    enable_v2_manifest_paths=self.enable_v2_manifest,
+                    data_storage_version="2.1",
+                )
+
+                # Save checkpoint after each chunk
+                if self.enable_checkpointing:
+                    checkpoint_data = {
+                        "status": "in_progress",
+                        "last_completed_chunk": chunk_idx,
+                        "total_chunks": total_chunks,
+                        "chunk_size": self.chunk_size,
+                        "timestamp": pd.Timestamp.now().isoformat(),
+                    }
+                    self._save_checkpoint(output_path, checkpoint_data)
+
+            except StopIteration:
+                logger.warning(f"Chunk iterator ended at chunk {chunk_idx}")
+                break
+            except Exception as e:
+                logger.error(f"Error processing chunk {chunk_idx}: {e}")
+                # Save checkpoint with error status
+                if self.enable_checkpointing:
+                    checkpoint_data = {
+                        "status": "error",
+                        "last_completed_chunk": chunk_idx - 1,
+                        "total_chunks": total_chunks,
+                        "error": str(e),
+                        "timestamp": pd.Timestamp.now().isoformat(),
+                    }
+                    self._save_checkpoint(output_path, checkpoint_data)
+                raise
+
+        # Final memory report
+        if process is not None and initial_memory is not None:
+            try:
+                final_memory = process.memory_info().rss / 1024 / 1024  # MB
+                memory_increase = final_memory - initial_memory
+                logger.info(
+                    f"Final memory usage: {final_memory:.1f} MB (change: {memory_increase:+.1f} MB)"
+                )
+            except Exception:
+                pass
+
+        # Calculate and log overall statistics
+        total_processing_time = time.time() - processing_start_time
+
+        logger.info(
+            f"Expression data processing complete! "
+            f"Processed {total_chunks} chunks in {total_processing_time:.1f}s "
+            f"({total_processing_time / total_chunks:.2f}s per chunk average)"
+        )
+
+    def _process_file_chunks_with_checkpoint(
+        self,
+        reader,
+        output_path: str,
+        file_idx: int,
+        start_chunk_idx: int,
+        global_cell_offset: int,
+    ):
+        """Process chunks for a single file with checkpointing support"""
+        expression_path = f"{output_path}/expression.lance"
+
+        # Calculate total chunks for this file
+        total_chunks = (reader.n_obs + self.chunk_size - 1) // self.chunk_size
+
+        logger.info(
+            f"Processing file {file_idx + 1} chunks: {start_chunk_idx}/{total_chunks}"
+        )
+
+        # Create iterator for chunks
+        chunk_iterator = reader.iter_chunks(chunk_size=self.chunk_size)
+
+        # Skip chunks if resuming from checkpoint
+        for _ in range(start_chunk_idx):
+            try:
+                next(chunk_iterator)
+            except StopIteration:
+                logger.warning(
+                    f"Tried to skip {start_chunk_idx} chunks but iterator ended early"
+                )
+                break
+
+        # Process remaining chunks
+        for chunk_idx in range(start_chunk_idx, total_chunks):
+            try:
+                # Get next chunk
+                chunk_table, _obs_slice = next(chunk_iterator)
+
+                # Adjust cell integer IDs with global offset
+                cell_integer_ids = (
+                    chunk_table.column("cell_integer_id").to_numpy()
+                    + global_cell_offset
+                )
+
+                # Create adjusted chunk table
+                if self.optimize_storage:
+                    # Only store integer IDs for maximum storage efficiency
+                    adjusted_chunk = pa.table(
+                        {
+                            "cell_integer_id": pa.array(cell_integer_ids),
+                            "gene_integer_id": chunk_table.column("gene_integer_id"),
+                            "value": chunk_table.column("value"),
+                        }
+                    )
+                else:
+                    # Store both string and integer IDs for compatibility
+                    adjusted_chunk = pa.table(
+                        {
+                            "cell_id": chunk_table.column("cell_id"),
+                            "gene_id": chunk_table.column("gene_id"),
+                            "cell_integer_id": pa.array(cell_integer_ids),
+                            "gene_integer_id": chunk_table.column("gene_integer_id"),
+                            "value": chunk_table.column("value"),
+                        }
+                    )
+
+                # Write chunk directly to expression dataset
+                # Check if this is the first chunk of the first file in a new dataset
+                is_first_chunk_of_new_dataset = file_idx == 0 and chunk_idx == 0
+
+                # Check if the expression dataset already exists (for append operations)
+                expression_dataset_exists = self._path_exists(expression_path)
+                if is_first_chunk_of_new_dataset and not expression_dataset_exists:
+                    # First chunk of first file in a new dataset - create new dataset
+                    lance.write_dataset(
+                        adjusted_chunk,
+                        expression_path,
+                        mode="overwrite",
+                        max_rows_per_file=10000000,
+                        enable_v2_manifest_paths=self.enable_v2_manifest,
+                        data_storage_version="2.1",
+                    )
+                else:
+                    # Append to existing dataset (either subsequent chunks or append operations)
+                    lance.write_dataset(
+                        adjusted_chunk,
+                        expression_path,
+                        mode="append",
+                        max_rows_per_file=10000000,
+                        enable_v2_manifest_paths=self.enable_v2_manifest,
+                        data_storage_version="2.1",
+                    )
+
+                # Save checkpoint after each chunk
+                if self.enable_checkpointing:
+                    checkpoint_data = {
+                        "status": "in_progress",
+                        "last_completed_file": file_idx,
+                        "last_completed_chunk": chunk_idx,
+                        "global_cell_offset": global_cell_offset,
+                        "timestamp": pd.Timestamp.now().isoformat(),
+                    }
+                    self._save_checkpoint(output_path, checkpoint_data)
+
+            except StopIteration:
+                logger.warning(f"Chunk iterator ended at chunk {chunk_idx}")
+                break
+            except Exception as e:
+                logger.error(
+                    f"Error processing chunk {chunk_idx} in file {file_idx + 1}: {e}"
+                )
+                # Save checkpoint with error status
+                if self.enable_checkpointing:
+                    checkpoint_data = {
+                        "status": "error",
+                        "last_completed_file": file_idx,
+                        "last_completed_chunk": chunk_idx - 1,
+                        "global_cell_offset": global_cell_offset,
+                        "error": str(e),
+                        "timestamp": pd.Timestamp.now().isoformat(),
+                    }
+                    self._save_checkpoint(output_path, checkpoint_data)
+                raise
 
     def _validate_optimized_dtypes(self, reader):
         """Validate that data fits in optimized data types and determine appropriate value type"""
