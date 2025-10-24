@@ -483,14 +483,14 @@ class SLAFConverter:
                         # First file - create new datasets
                         lance.write_dataset(
                             cell_metadata_table,
-                            str(cells_path),
+                            cells_path,
                             mode="overwrite",
                             enable_v2_manifest_paths=self.enable_v2_manifest,
                             data_storage_version="2.1",
                         )
                         lance.write_dataset(
                             gene_metadata_table,
-                            str(genes_path),
+                            genes_path,
                             mode="overwrite",
                             enable_v2_manifest_paths=self.enable_v2_manifest,
                             data_storage_version="2.1",
@@ -500,7 +500,7 @@ class SLAFConverter:
                         # Subsequent files - append to existing datasets
                         lance.write_dataset(
                             cell_metadata_table,
-                            str(cells_path),
+                            cells_path,
                             mode="append",
                             enable_v2_manifest_paths=self.enable_v2_manifest,
                             data_storage_version="2.1",
@@ -547,7 +547,7 @@ class SLAFConverter:
                             # First chunk of first file - create new dataset
                             lance.write_dataset(
                                 adjusted_chunk,
-                                str(expression_path),
+                                expression_path,
                                 mode="overwrite",
                                 max_rows_per_file=10000000,
                                 enable_v2_manifest_paths=self.enable_v2_manifest,
@@ -557,7 +557,7 @@ class SLAFConverter:
                             # Append to existing dataset
                             lance.write_dataset(
                                 adjusted_chunk,
-                                str(expression_path),
+                                expression_path,
                                 mode="append",
                                 max_rows_per_file=10000000,
                                 enable_v2_manifest_paths=self.enable_v2_manifest,
@@ -712,7 +712,7 @@ class SLAFConverter:
                         updated_cells_table = pa.table(existing_cells_df)
                         lance.write_dataset(
                             updated_cells_table,
-                            str(existing_slaf_obj / "cells.lance"),
+                            existing_slaf_obj / "cells.lance",
                             mode="overwrite",
                             enable_v2_manifest_paths=self.enable_v2_manifest,
                             data_storage_version="2.1",
@@ -733,7 +733,7 @@ class SLAFConverter:
                     cells_path = existing_slaf_obj / "cells.lance"
                     lance.write_dataset(
                         cell_metadata_table,
-                        str(cells_path),
+                        cells_path,
                         mode="append",
                         enable_v2_manifest_paths=self.enable_v2_manifest,
                         data_storage_version="2.1",
@@ -779,7 +779,7 @@ class SLAFConverter:
                         # Append chunk to existing expression dataset
                         lance.write_dataset(
                             adjusted_chunk,
-                            str(expression_path),
+                            expression_path,
                             mode="append",
                             max_rows_per_file=10000000,
                             enable_v2_manifest_paths=self.enable_v2_manifest,
@@ -1207,14 +1207,14 @@ class SLAFConverter:
         # Write metadata tables
         lance.write_dataset(
             cell_metadata_table,
-            str(output_path_obj / "cells.lance"),
+            output_path_obj / "cells.lance",
             mode="overwrite",
             enable_v2_manifest_paths=self.enable_v2_manifest,
             data_storage_version="2.1",
         )
         lance.write_dataset(
             gene_metadata_table,
-            str(output_path_obj / "genes.lance"),
+            output_path_obj / "genes.lance",
             mode="overwrite",
             enable_v2_manifest_paths=self.enable_v2_manifest,
             data_storage_version="2.1",
@@ -1302,7 +1302,7 @@ class SLAFConverter:
         # Create initial Lance dataset (using max_rows_per_file for large fragments)
         lance.write_dataset(
             empty_table,
-            str(expression_path),
+            expression_path,
             mode="overwrite",
             schema=schema,
             max_rows_per_file=10000000,  # 10M rows per file to avoid memory issues
@@ -1371,7 +1371,7 @@ class SLAFConverter:
             # Write chunk to Lance dataset (using max_rows_per_file for large fragments)
             lance.write_dataset(
                 chunk_table,
-                str(expression_path),
+                expression_path,
                 mode="append",
                 max_rows_per_file=10000000,  # 10M rows per file to avoid memory issues
                 enable_v2_manifest_paths=self.enable_v2_manifest,
@@ -2024,7 +2024,7 @@ class SLAFConverter:
             if table_name == "expression":
                 lance.write_dataset(
                     table,
-                    str(table_path),
+                    table_path,
                     max_rows_per_file=10000000,  # 10M rows per file to avoid memory issues
                     enable_v2_manifest_paths=self.enable_v2_manifest,
                     data_storage_version="2.1",
@@ -2032,7 +2032,7 @@ class SLAFConverter:
             else:
                 lance.write_dataset(
                     table,
-                    str(table_path),
+                    table_path,
                     enable_v2_manifest_paths=self.enable_v2_manifest,
                     data_storage_version="2.1",
                 )
