@@ -246,10 +246,10 @@ class SLAFConverter:
                 chunks_since_checkpoint = fragment_count % checkpoint_interval
 
                 # Resume from the next chunk after what was actually written
-                # But don't exceed the total chunks
-                total_chunks = checkpoint.get("total_chunks", fragment_count)
-                actual_resume_chunk = min(
-                    last_checkpoint_boundary + chunks_since_checkpoint + 1, total_chunks
+                # The fragment count represents the actual progress, so we don't need total_chunks
+                # Just ensure we don't exceed the total chunks for the current file
+                actual_resume_chunk = (
+                    last_checkpoint_boundary + chunks_since_checkpoint + 1
                 )
 
                 # Update checkpoint with actual resume position
@@ -619,23 +619,55 @@ class SLAFConverter:
                 0 if last_completed_chunk == -1 else last_completed_chunk + 1
             )
             global_cell_offset = checkpoint.get("global_cell_offset", 0)
+
+            # Enhanced logging for resume tracking
+            logger.info("=" * 60)
+            logger.info("🔄 CHECKPOINT RESUME DETECTED")
+            logger.info("=" * 60)
             logger.info(
-                f"Resuming from file {start_file_idx}, chunk {start_chunk_idx} (last completed file: {checkpoint.get('last_completed_file', -1)}, chunk: {checkpoint.get('last_completed_chunk', -1)})"
+                f"📁 Resuming from FILE {start_file_idx + 1} of {len(input_files)}"
             )
-            logger.info(f"Global cell offset: {global_cell_offset}")
+            logger.info(f"📊 Resuming from CHUNK {start_chunk_idx} within that file")
+            logger.info(
+                f"📈 Last completed file: {checkpoint.get('last_completed_file', -1) + 1}"
+            )
+            logger.info(
+                f"📈 Last completed chunk: {checkpoint.get('last_completed_chunk', -1)}"
+            )
+            logger.info(f"🔢 Global cell offset: {global_cell_offset:,}")
+            if "fragment_count" in checkpoint:
+                logger.info(
+                    f"🧩 Fragment count: {checkpoint.get('fragment_count', 0):,}"
+                )
+            if "chunks_since_checkpoint" in checkpoint:
+                logger.info(
+                    f"⏭️  Chunks since checkpoint: {checkpoint.get('chunks_since_checkpoint', 0)}"
+                )
+            logger.info("=" * 60)
 
         # Process each file and add fragments to the same SLAF dataset
         for i, file_path in enumerate(input_files):
             # Skip files if resuming from checkpoint
             if i < start_file_idx:
                 logger.info(
-                    f"Skipping file {i + 1}/{len(input_files)}: {os.path.basename(file_path)} (already processed)"
+                    f"⏭️  Skipping file {i + 1}/{len(input_files)}: {os.path.basename(file_path)} (already processed)"
                 )
                 continue
 
-            logger.info(
-                f"Processing file {i + 1}/{len(input_files)}: {os.path.basename(file_path)}"
-            )
+            # Enhanced file processing logging
+            if i == start_file_idx:
+                logger.info("=" * 60)
+                logger.info(
+                    f"🔄 RESUMING FILE {i + 1}/{len(input_files)}: {os.path.basename(file_path)}"
+                )
+                logger.info(
+                    f"📊 Starting from chunk {start_chunk_idx} within this file"
+                )
+                logger.info("=" * 60)
+            else:
+                logger.info(
+                    f"📁 Processing file {i + 1}/{len(input_files)}: {os.path.basename(file_path)}"
+                )
 
             try:
                 # Use chunked reader to process file directly
@@ -686,6 +718,15 @@ class SLAFConverter:
                     genes_path = f"{output_path}/genes.lance"
 
                     # Write metadata tables (overwrite for first file, append for subsequent)
+                    # Skip metadata writing for files that were already completed
+                    # Only write metadata for files that haven't been started yet, or for the current file if starting from beginning
+                    should_write_metadata = (
+                        i > start_file_idx  # Future files - always write metadata
+                        or (
+                            i == start_file_idx and start_chunk_idx == 0
+                        )  # Current file only if starting from beginning
+                    )
+
                     if i == 0:
                         # First file - create new datasets
                         lance.write_dataset(
@@ -703,8 +744,8 @@ class SLAFConverter:
                             data_storage_version="2.1",
                         )
                         total_genes = len(var_df)
-                    else:
-                        # Subsequent files - append to existing datasets
+                    elif should_write_metadata:
+                        # Subsequent files - append to existing datasets (only if not resuming from middle)
                         lance.write_dataset(
                             cell_metadata_table,
                             cells_path,
@@ -1835,27 +1876,43 @@ class SLAFConverter:
         total_chunks = (reader.n_obs + self.chunk_size - 1) // self.chunk_size
 
         logger.info(
-            f"Processing file {file_idx + 1} chunks: {start_chunk_idx}/{total_chunks}"
+            f"📊 Processing file {file_idx + 1} chunks: {start_chunk_idx}/{total_chunks}"
         )
+        if start_chunk_idx > 0:
+            logger.info(
+                f"🔄 Resuming from chunk {start_chunk_idx} (chunks 0-{start_chunk_idx - 1} already processed)"
+            )
 
         # Create iterator for chunks
         chunk_iterator = reader.iter_chunks(chunk_size=self.chunk_size)
 
         # Skip chunks if resuming from checkpoint
-        for _ in range(start_chunk_idx):
-            try:
-                next(chunk_iterator)
-            except StopIteration:
-                logger.warning(
-                    f"Tried to skip {start_chunk_idx} chunks but iterator ended early"
-                )
-                break
+        if start_chunk_idx > 0:
+            logger.info(f"⏭️  Skipping {start_chunk_idx} already-processed chunks...")
+            for _ in range(start_chunk_idx):
+                try:
+                    next(chunk_iterator)
+                except StopIteration:
+                    logger.warning(
+                        f"Tried to skip {start_chunk_idx} chunks but iterator ended early"
+                    )
+                    break
 
         # Process remaining chunks
         for chunk_idx in range(start_chunk_idx, total_chunks):
             try:
                 # Get next chunk
                 chunk_table, _obs_slice = next(chunk_iterator)
+
+                # Log progress every 10 chunks or on first/last chunk
+                if (
+                    chunk_idx % 10 == 0
+                    or chunk_idx == start_chunk_idx
+                    or chunk_idx == total_chunks - 1
+                ):
+                    logger.info(
+                        f"📈 Processing chunk {chunk_idx + 1}/{total_chunks} (file {file_idx + 1})"
+                    )
 
                 # Adjust cell integer IDs with global offset
                 cell_integer_ids = (
