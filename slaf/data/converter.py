@@ -298,7 +298,7 @@ class SLAFConverter:
 
     def convert(
         self,
-        input_path: str,
+        input_path: str | list[str],
         output_path: str,
         input_format: str = "auto",
         skip_validation: bool = False,
@@ -388,12 +388,21 @@ class SLAFConverter:
             ...     print(f"Error: {e}")
             Error: Cannot detect format for: unknown_file.txt
         """
-        # Discover input files (handles both single files and directories)
-        input_files, detected_format = discover_input_files(input_path)
+        # Handle both single paths and lists of files
+        if isinstance(input_path, list):
+            # Direct list of files - use multi-file conversion
+            input_files = input_path
+            # Detect format from first file
+            if input_format == "auto":
+                from .utils import detect_format
 
-        # Use detected format if auto, otherwise use specified format
-        if input_format == "auto":
-            input_format = detected_format
+                input_format = detect_format(input_files[0])
+        else:
+            # Single path - discover files
+            input_files, detected_format = discover_input_files(input_path)
+            # Use detected format if auto, otherwise use specified format
+            if input_format == "auto":
+                input_format = detected_format
 
         # Validate multi-file compatibility if multiple files (unless skipped)
         if not skip_validation:
