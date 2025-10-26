@@ -14,6 +14,49 @@ slaf convert data.tiledb output.slaf
 
 That's it! SLAF automatically detects your file format and converts it with optimized settings.
 
+## Multi-File Conversion
+
+Convert multiple files to a single SLAF dataset:
+
+```bash
+# Convert multiple files from a directory
+slaf convert data_folder/ output.slaf
+
+# Convert specific files
+slaf convert file1.h5ad file2.h5ad file3.h5ad output.slaf
+
+# Auto-detection works for all formats
+slaf convert 10x_data_folder/ output.slaf
+```
+
+SLAF automatically:
+
+- ✅ Validates all files are compatible
+- ✅ Assigns unique cell IDs across all files
+- ✅ Tracks which file each cell came from
+- ✅ Combines metadata intelligently
+
+## Appending to Existing Datasets
+
+Add new data to an existing SLAF dataset:
+
+```bash
+# Append a single file
+slaf append new_data.h5ad existing.slaf
+
+# Append multiple files from a directory
+slaf append new_data_folder/ existing.slaf
+
+# Skip validation if already validated (faster)
+slaf append new_data.h5ad existing.slaf --skip-validation
+```
+
+Perfect for:
+
+- **Incremental data collection** - Add new batches as they arrive
+- **Data updates** - Append new samples to existing datasets
+- **Combining datasets** - Merge related datasets over time
+
 ## Supported Formats
 
 SLAF supports conversion from these common single-cell formats:
@@ -34,6 +77,14 @@ converter.convert("data.h5ad", "output.slaf")
 converter.convert("filtered_feature_bc_matrix/", "output.slaf")
 converter.convert("data.h5", "output.slaf")
 converter.convert("data.tiledb", "output.slaf")
+
+# Multi-file conversion
+converter.convert("data_folder/", "output.slaf")  # Directory of files
+converter.convert(["file1.h5ad", "file2.h5ad"], "output.slaf")  # List of files
+
+# Append to existing dataset
+converter.append("new_data.h5ad", "existing.slaf")
+converter.append("new_data_folder/", "existing.slaf")
 
 # Convert existing AnnData object
 import scanpy as sc
@@ -59,6 +110,110 @@ converter = SLAFConverter(chunk_size=100000, create_indices=True)
 converter.convert("large_data.h5ad", "output.slaf")
 ```
 
+## Validation and Quality Control
+
+The `slaf validate-input-files` command helps you catch compatibility issues before conversion:
+
+### Basic Validation
+
+```bash
+# Validate a single file
+slaf validate-input-files data.h5ad
+
+# Validate multiple files from a directory
+slaf validate-input-files data_folder/
+
+# Validate specific files
+slaf validate-input-files file1.h5ad file2.h5ad file3.h5ad
+```
+
+### Verbose Output
+
+```bash
+# Get detailed information about files being validated
+slaf validate-input-files data_folder/ --verbose
+
+# Output shows:
+# 📁 Found 3 h5ad files
+#   1. batch_001.h5ad
+#   2. batch_002.h5ad
+#   3. batch_003.h5ad
+# ✅ All files are compatible for conversion
+```
+
+### Format-Specific Validation
+
+```bash
+# Validate 10x MTX directories
+slaf validate-input-files filtered_feature_bc_matrix/ --format 10x_mtx
+
+# Validate 10x H5 files
+slaf validate-input-files data.h5 --format 10x_h5
+
+# Validate TileDB SOMA files
+slaf validate-input-files experiment.tiledb --format tiledb
+```
+
+### What Validation Checks
+
+The validation command performs comprehensive compatibility checks:
+
+- ✅ **File Integrity**: Files exist, are readable, and not empty
+- ✅ **Format Consistency**: All files use the same format (h5ad, 10x_mtx, etc.)
+- ✅ **Gene Compatibility**: All files have identical gene sets
+- ✅ **Metadata Schema**: Cell metadata columns are compatible across files
+- ✅ **Value Types**: Expression data types are consistent (uint16, float32, etc.)
+- ✅ **File Sizes**: Ensures files contain actual data (not empty)
+
+### Common Validation Scenarios
+
+```bash
+# Validate before multi-file conversion
+slaf validate-input-files batch1/ batch2/ batch3/
+slaf convert batch1/ output.slaf  # Safe to proceed
+
+# Validate before appending
+slaf validate-input-files new_batch/
+slaf append existing.slaf new_batch/  # Safe to proceed
+
+# Check specific format compatibility
+slaf validate-input-files 10x_data/ --format 10x_mtx
+```
+
+### Error Examples
+
+When validation fails, you get clear error messages:
+
+```bash
+# Gene mismatch error
+❌ Validation failed: File batch_002.h5ad is incompatible:
+  Missing genes: GENE_001, GENE_002, GENE_003
+  Extra genes: GENE_999, GENE_1000
+
+# Schema mismatch error
+❌ Validation failed: File batch_003.h5ad has incompatible cell metadata schema:
+  Missing columns: ['cell_type', 'batch']
+  Extra columns: ['cluster_id']
+
+# Format mismatch error
+❌ Validation failed: Multiple formats detected in directory
+  Found: h5ad, 10x_mtx
+  All files must use the same format
+```
+
+### Integration with Conversion
+
+Validation runs automatically during conversion, but you can skip it for performance:
+
+```bash
+# Automatic validation (default)
+slaf convert data_folder/ output.slaf
+
+# Skip validation (faster, but less safe)
+slaf convert data_folder/ output.slaf --skip-validation
+slaf append new_data.h5ad existing.slaf --skip-validation
+```
+
 ## Advanced Options
 
 Most users won't need these, but they're available if needed:
@@ -78,6 +233,10 @@ slaf convert data.h5ad output.slaf --no-optimize-storage
 
 # Verbose output
 slaf convert data.h5ad output.slaf --verbose
+
+# Skip validation (if already validated)
+slaf convert data_folder/ output.slaf --skip-validation
+slaf append new_data.h5ad existing.slaf --skip-validation
 
 # TileDB-specific options
 slaf convert data.tiledb output.slaf --tiledb-collection RNA
@@ -142,6 +301,52 @@ SLAF converts your data to an optimized format that:
 - **Works with any size dataset** (memory-efficient processing)
 - **Preserves all metadata** (cell types, gene info, etc.)
 
+## Workflow Examples
+
+### Multi-File Workflow
+
+```bash
+# 1. Validate files first (recommended)
+slaf validate-input-files batch1/ batch2/ batch3/
+
+# 2. Convert all batches to single SLAF
+slaf convert batch1/ initial.slaf
+
+# 3. Append additional batches
+slaf append batch2/ initial.slaf
+slaf append batch3/ initial.slaf
+
+# 4. Explore the combined dataset
+slaf info initial.slaf
+```
+
+### Incremental Data Collection
+
+```bash
+# Start with first batch
+slaf convert batch_001/ dataset.slaf
+
+# Add new batches as they arrive
+slaf append batch_002/ dataset.slaf
+slaf append batch_003/ dataset.slaf
+slaf append batch_004/ dataset.slaf
+
+# Each append maintains data integrity and source tracking
+```
+
+### Quality Control Workflow
+
+```bash
+# 1. Validate all files before conversion
+slaf validate-input-files all_batches/
+
+# 2. Convert with validation (automatic)
+slaf convert all_batches/ combined.slaf
+
+# 3. Check source file tracking
+slaf query combined.slaf "SELECT source_file, COUNT(*) FROM cells GROUP BY source_file"
+```
+
 ## Next Steps
 
 After converting your data:
@@ -149,5 +354,6 @@ After converting your data:
 1. **Explore**: `slaf info output.slaf`
 2. **Query**: `slaf query output.slaf "SELECT * FROM expression LIMIT 10"`
 3. **Use in Python**: `import slaf; data = slaf.SLAFArray("output.slaf")`
+4. **Check Source Files**: `slaf query output.slaf "SELECT DISTINCT source_file FROM cells"`
 
 See the [Getting Started](../getting-started/quickstart.md) guide for more examples.

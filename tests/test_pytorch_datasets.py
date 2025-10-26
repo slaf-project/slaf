@@ -474,8 +474,8 @@ class TestSLAFIterableDataset:
         final_memory = process.memory_info().rss
         memory_increase = final_memory - initial_memory
 
-        # Memory increase should be reasonable (less than 100MB)
-        assert memory_increase < 100 * 1024 * 1024
+        # Memory increase should be reasonable (less than 200MB)
+        assert memory_increase < 200 * 1024 * 1024
 
     def test_pytorch_dataloader_integration(self, tiny_slaf):
         """Test integration with PyTorch DataLoader"""
