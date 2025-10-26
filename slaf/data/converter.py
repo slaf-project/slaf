@@ -160,10 +160,19 @@ class SLAFConverter:
                 )
                 return False
             try:
-                # For cloud paths, try to access the file directly
-                with smart_open(path, "r") as f:
-                    f.read(1)  # Try to read 1 byte
-                return True
+                # For Lance datasets, check if the directory exists by trying to list contents
+                # Lance datasets are directories, not files
+                if path.endswith(".lance"):
+                    # Try to access the Lance dataset directory
+                    import lance
+
+                    lance.dataset(path)  # This will fail if the dataset doesn't exist
+                    return True
+                else:
+                    # For regular files, try to access the file directly
+                    with smart_open(path, "r") as f:
+                        f.read(1)  # Try to read 1 byte
+                    return True
             except Exception:
                 return False
         else:
@@ -233,10 +242,21 @@ class SLAFConverter:
 
         # Get actual progress from Lance dataset using fragment count
         expression_path = f"{output_path}/expression.lance"
-        if self._path_exists(expression_path):
+        logger.info(f"🔍 Checking fragment-based resume for: {expression_path}")
+
+        # First, check if the path exists
+        path_exists = self._path_exists(expression_path)
+        logger.info(f"🔍 Path exists check result: {path_exists}")
+
+        if path_exists:
+            logger.info("✅ Expression dataset exists, loading...")
             try:
                 expression_dataset = lance.dataset(expression_path)
                 fragment_count = len(expression_dataset.get_fragments())
+                logger.info(f"🔍 Found {fragment_count} fragments in dataset")
+                logger.info(
+                    f"🔍 Original checkpoint: last_completed_chunk={checkpoint.get('last_completed_chunk')}"
+                )
 
                 # Calculate exact resume chunk using fragment count
                 last_checkpoint_boundary = checkpoint.get("last_completed_chunk", 0)
@@ -261,6 +281,9 @@ class SLAFConverter:
                     f"Fragment-based resume: {fragment_count} fragments written, "
                     f"chunks since checkpoint: {chunks_since_checkpoint}, "
                     f"resuming from chunk {actual_resume_chunk}"
+                )
+                logger.info(
+                    f"🔧 Updated checkpoint: last_completed_chunk={checkpoint['last_completed_chunk']}"
                 )
 
             except Exception as e:
@@ -611,13 +634,16 @@ class SLAFConverter:
         start_file_idx = 0
         start_chunk_idx = 0
         if checkpoint and checkpoint.get("status") == "in_progress":
-            start_file_idx = checkpoint.get("last_completed_file", -1) + 1
+            # Handle both file-level and chunk-level checkpoints
             last_completed_chunk = checkpoint.get("last_completed_chunk", -1)
-            # If last_completed_chunk is -1, it means the file was fully completed
-            # so we should start from chunk 0 of the next file
-            start_chunk_idx = (
-                0 if last_completed_chunk == -1 else last_completed_chunk + 1
-            )
+            if last_completed_chunk == -1:
+                # File-level checkpoint: file was fully completed, start next file
+                start_file_idx = checkpoint.get("last_completed_file", -1) + 1
+                start_chunk_idx = 0
+            else:
+                # Chunk-level checkpoint: file is partially completed, resume same file
+                start_file_idx = checkpoint.get("last_completed_file", -1)
+                start_chunk_idx = last_completed_chunk + 1
             global_cell_offset = checkpoint.get("global_cell_offset", 0)
 
             # Enhanced logging for resume tracking
@@ -1953,8 +1979,8 @@ class SLAFConverter:
                     if should_save_checkpoint:
                         checkpoint_data = {
                             "status": "in_progress",
-                            "last_completed_file": file_idx,
-                            "last_completed_chunk": chunk_idx,
+                            "last_completed_file": file_idx,  # Current file being processed
+                            "last_completed_chunk": chunk_idx,  # Current chunk being processed
                             "global_cell_offset": global_cell_offset,
                             "timestamp": pd.Timestamp.now().isoformat(),
                         }
