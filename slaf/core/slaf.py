@@ -100,21 +100,16 @@ class SLAFArray:
                 )
                 return False
             try:
-                # For Lance datasets, check if the directory exists by trying to list contents
-                # Lance datasets are directories, not files
-                if path.endswith(".lance"):
-                    # Try to access the Lance dataset directory
-                    lance.dataset(path)  # This will fail if the dataset doesn't exist
-                    return True
-                else:
-                    # For regular files, try to access the file directly
-                    with smart_open(path, "r") as f:
-                        f.read(1)  # Try to read 1 byte
-                    return True
+                # For SLAF datasets, check if config.json exists in the directory
+                config_path = self._join_path(path, "config.json")
+                with smart_open(config_path, "r") as f:
+                    f.read(1)  # Try to read 1 byte
+                return True
             except Exception:
                 return False
         else:
-            return os.path.exists(path)
+            # For local paths, check if it's a directory
+            return os.path.exists(path) and os.path.isdir(path)
 
     def _open_file(self, path: str, mode: str = "r"):
         """Open file with cloud storage compatibility."""
