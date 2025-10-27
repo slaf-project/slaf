@@ -1,12 +1,21 @@
 import json
+import os
 import threading
-from pathlib import Path
 from typing import Any
 
 import lance
 import numpy as np
 import polars as pl
 from loguru import logger
+
+# Import smart-open for cloud storage compatibility
+try:
+    from smart_open import open as smart_open
+
+    SMART_OPEN_AVAILABLE = True
+except ImportError:
+    SMART_OPEN_AVAILABLE = False
+    logger.warning("smart-open not available. Install with: pip install smart-open[s3]")
 
 
 def display_ascii_art():
@@ -35,6 +44,7 @@ class SLAFArray:
         - Direct access to cell and gene metadata
         - High-performance storage with Lance format
         - Scanpy/AnnData compatibility
+        - Cloud storage support (S3, GCS, Azure, etc.)
 
     Examples:
         >>> # Load a SLAF dataset
@@ -70,15 +80,68 @@ class SLAFArray:
         >>> expression = slaf_array.get_cell_expression(["cell_001", "cell_002"])
         >>> print(f"Expression matrix shape: {expression.shape}")
         Expression matrix shape: (2, 20000)
+
+        >>> # Load from cloud storage
+        >>> slaf_array = SLAFArray("s3://bucket/data.slaf")
+        >>> print(f"Cloud dataset: {slaf_array.shape}")
+        Cloud dataset: (5000, 25000)
     """
 
-    def __init__(self, slaf_path: str | Path):
+    def _is_cloud_path(self, path: str) -> bool:
+        """Check if path is a cloud storage path."""
+        return path.startswith(("s3://", "gs://", "azure://", "r2://"))
+
+    def _path_exists(self, path: str) -> bool:
+        """Check if path exists, works with both local and cloud paths."""
+        if self._is_cloud_path(path):
+            if not SMART_OPEN_AVAILABLE:
+                logger.warning(
+                    "smart-open not available, cannot check cloud path existence"
+                )
+                return False
+            try:
+                # For Lance datasets, check if the directory exists by trying to list contents
+                # Lance datasets are directories, not files
+                if path.endswith(".lance"):
+                    # Try to access the Lance dataset directory
+                    lance.dataset(path)  # This will fail if the dataset doesn't exist
+                    return True
+                else:
+                    # For regular files, try to access the file directly
+                    with smart_open(path, "r") as f:
+                        f.read(1)  # Try to read 1 byte
+                    return True
+            except Exception:
+                return False
+        else:
+            return os.path.exists(path)
+
+    def _open_file(self, path: str, mode: str = "r"):
+        """Open file with cloud storage compatibility."""
+        if self._is_cloud_path(path):
+            if not SMART_OPEN_AVAILABLE:
+                raise ImportError("smart-open required for cloud storage operations")
+            return smart_open(path, mode)
+        else:
+            return open(path, mode)
+
+    def _join_path(self, base_path: str, *paths: str) -> str:
+        """Join paths, works with both local and cloud paths."""
+        if self._is_cloud_path(base_path):
+            # For cloud paths, use forward slashes
+            return "/".join([base_path.rstrip("/")] + [p.lstrip("/") for p in paths])
+        else:
+            # For local paths, use os.path.join
+            return os.path.join(base_path, *paths)
+
+    def __init__(self, slaf_path: str):
         """
         Initialize SLAF array from a SLAF dataset directory.
 
         Args:
             slaf_path: Path to SLAF directory containing config.json and .lance files.
                        The directory should contain the dataset configuration and Lance tables.
+                       Supports both local paths and cloud storage (S3, GCS, Azure, etc.).
 
         Raises:
             FileNotFoundError: If the SLAF config file is not found at the specified path.
@@ -101,20 +164,24 @@ class SLAFArray:
             ...     slaf_array = SLAFArray("nonexistent/path")
             ... except FileNotFoundError as e:
             ...     print(f"Error: {e}")
-            Error: SLAF config not found at nonexistent/path/config.json
+            Error: SLAF dataset not found: nonexistent/path
         """
-        self.slaf_path = Path(slaf_path)
+        # Convert Path objects to strings for cloud compatibility
+        if hasattr(slaf_path, "__fspath__"):
+            slaf_path = str(slaf_path)
+
+        self.slaf_path = slaf_path
 
         # Validate dataset exists
-        if not self.slaf_path.exists():
+        if not self._path_exists(self.slaf_path):
             raise FileNotFoundError(f"SLAF dataset not found: {self.slaf_path}")
 
         # Load configuration
-        config_path = self.slaf_path / "config.json"
-        if not config_path.exists():
+        config_path = self._join_path(self.slaf_path, "config.json")
+        if not self._path_exists(config_path):
             raise FileNotFoundError(f"SLAF config not found at {config_path}")
 
-        with open(config_path) as f:
+        with self._open_file(config_path) as f:
             self.config = json.load(f)
 
         # Initialize shape
@@ -158,7 +225,12 @@ class SLAFArray:
         format_version = self.config.get("format_version", "unknown")
 
         # Get dataset name from path
-        dataset_name = self.slaf_path.name
+        if self._is_cloud_path(self.slaf_path):
+            # For cloud paths, extract the last part after the last slash
+            dataset_name = self.slaf_path.split("/")[-1]
+        else:
+            # For local paths, use os.path.basename
+            dataset_name = os.path.basename(self.slaf_path)
 
         # Display message
         logger.info(f"📊 SLAF Dataset Loaded: {dataset_name}")
@@ -211,12 +283,16 @@ class SLAFArray:
 
     def _setup_datasets(self):
         """Setup Lance datasets for the new table structure"""
-        # Load all Lance datasets
+        # Load all Lance datasets using cloud-compatible path joining
         self.expression = lance.dataset(
-            str(self.slaf_path / self.config["tables"]["expression"])
+            self._join_path(self.slaf_path, self.config["tables"]["expression"])
         )
-        self.cells = lance.dataset(str(self.slaf_path / self.config["tables"]["cells"]))
-        self.genes = lance.dataset(str(self.slaf_path / self.config["tables"]["genes"]))
+        self.cells = lance.dataset(
+            self._join_path(self.slaf_path, self.config["tables"]["cells"])
+        )
+        self.genes = lance.dataset(
+            self._join_path(self.slaf_path, self.config["tables"]["genes"])
+        )
 
     def _ensure_metadata_loaded(self):
         """Ensure metadata is loaded (lazy loading with async support)"""
