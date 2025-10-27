@@ -2718,6 +2718,11 @@ class SLAFConverter:
         elif "gene_count" in obs_df.columns:
             logger.info("Using existing gene_count column for cell start indices")
             gene_counts = obs_df["gene_count"].to_numpy()
+        elif "n_genes_by_counts" in obs_df.columns:
+            logger.info(
+                "Using existing n_genes_by_counts column for cell start indices"
+            )
+            gene_counts = obs_df["n_genes_by_counts"].to_numpy()
         else:
             # Calculate from expression data
             logger.info("Calculating gene counts from expression data...")
@@ -2770,6 +2775,11 @@ class SLAFConverter:
         elif "gene_count" in obs_df.columns:
             logger.info("Using existing gene_count column for cell start indices")
             gene_counts = obs_df["gene_count"].to_numpy()
+        elif "n_genes_by_counts" in obs_df.columns:
+            logger.info(
+                "Using existing n_genes_by_counts column for cell start indices"
+            )
+            gene_counts = obs_df["n_genes_by_counts"].to_numpy()
         else:
             # Calculate from expression data
             logger.info("Calculating gene counts from expression data...")
