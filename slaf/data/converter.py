@@ -200,12 +200,33 @@ class SLAFConverter:
 
         config_path = f"{output_path}/config.json"
 
-        # Load existing config if it exists
+        # Load existing config if it exists, otherwise create minimal config
         if self._path_exists(config_path):
             with self._open_file(config_path) as f:
                 config = json.load(f)
         else:
-            config = {}
+            # Create minimal config for checkpointing
+            config = {
+                "format_version": "0.3",
+                "array_shape": [0, 0],  # Will be updated when conversion completes
+                "n_cells": 0,
+                "n_genes": 0,
+                "tables": {
+                    "expression": "expression.lance",
+                    "cells": "cells.lance",
+                    "genes": "genes.lance",
+                },
+                "optimizations": {
+                    "use_integer_keys": self.use_integer_keys,
+                    "optimize_storage": self.optimize_storage,
+                },
+                "metadata": {
+                    "conversion_in_progress": True,
+                    "sparsity": 0.0,
+                    "density": 0.0,
+                    "expression_count": 0,
+                },
+            }
 
         # Update checkpoint data
         config["checkpoint"] = checkpoint_data
@@ -2952,6 +2973,16 @@ class SLAFConverter:
         total_possible_elements = n_cells * n_genes
         sparsity = 1 - (expression_count / total_possible_elements)
 
+        # Load existing config to preserve checkpoint data
+        config_path = f"{output_path}/config.json"
+        existing_config = {}
+        if self._path_exists(config_path):
+            try:
+                with self._open_file(config_path) as f:
+                    existing_config = json.load(f)
+            except Exception:
+                pass  # If we can't load existing config, start fresh
+
         config = {
             "format_version": "0.3",
             "array_shape": [n_cells, n_genes],
@@ -2975,6 +3006,10 @@ class SLAFConverter:
             },
             "created_at": pd.Timestamp.now().isoformat(),
         }
+
+        # Preserve checkpoint data if it exists
+        if "checkpoint" in existing_config:
+            config["checkpoint"] = existing_config["checkpoint"]
 
         config_path = f"{output_path}/config.json"
         with self._open_file(config_path, "w") as f:

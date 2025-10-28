@@ -173,8 +173,6 @@ class SLAFArray:
 
         # Load configuration
         config_path = self._join_path(self.slaf_path, "config.json")
-        if not self._path_exists(config_path):
-            raise FileNotFoundError(f"SLAF config not found at {config_path}")
 
         with self._open_file(config_path) as f:
             self.config = json.load(f)
