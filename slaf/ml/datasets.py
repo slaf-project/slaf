@@ -1396,7 +1396,7 @@ class SLAFIterableDataset(IterableDataset):
         tokenizer: SLAFTokenizer | None,
         batch_size: int = 32,
         seed: int = 42,
-        max_queue_size: int = 10,
+        max_queue_size: int = 5000,  # Increased default queue size
         pin_memory: bool = False,
         sampler_strategy: str = "sequential",
         tokenizer_type: str = "geneformer",  # Add tokenizer type parameter
@@ -1479,7 +1479,7 @@ class SLAFIterableDataset(IterableDataset):
         )
         self.prefetcher = AsyncPrefetcher(
             batch_processor=self.batch_processor,
-            max_queue_size=5000,
+            max_queue_size=max_queue_size,
         )
 
         # Start async prefetching
