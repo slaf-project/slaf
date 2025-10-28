@@ -281,6 +281,7 @@ class SLAFDataLoader:
         use_mixture_of_scanners: bool = True,  # Default to True for MoS (was False)
         n_scanners: int = 16,  # Add n_scanners parameter for MoS
         prefetch_batch_size: int = 4194304,  # Add prefetch_batch_size parameter for MoS
+        max_queue_size: int = 5000,  # Add max_queue_size parameter
     ):
         """
         Initialize the SLAF DataLoader with training configuration.
@@ -406,6 +407,7 @@ class SLAFDataLoader:
         self.prefetch_batch_size = (
             prefetch_batch_size  # Add prefetch_batch_size attribute
         )
+        self.max_queue_size = max_queue_size  # Add max_queue_size attribute
 
         # Validate MoS parameters
         if self.use_mixture_of_scanners:
@@ -451,7 +453,7 @@ class SLAFDataLoader:
             tokenizer=self.tokenizer,
             batch_size=batch_size,
             seed=42,  # TODO: make configurable
-            max_queue_size=500,
+            max_queue_size=max_queue_size,  # Pass max_queue_size to dataset
             tokenizer_type=tokenizer_type,
             n_epochs=n_epochs,  # Pass n_epochs to dataset
             raw_mode=raw_mode,  # Pass raw_mode to dataset

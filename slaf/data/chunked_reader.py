@@ -1,8 +1,8 @@
 import gzip
+import os
 import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
-from pathlib import Path
 from typing import Any
 
 import h5py
@@ -565,7 +565,7 @@ class Chunked10xMTXReader(BaseChunkedReader):
 
     def __init__(self, mtx_dir: str, value_type: str = "uint16"):
         super().__init__(mtx_dir)
-        self.mtx_dir = Path(mtx_dir)
+        self.mtx_dir = mtx_dir
         self.value_type = value_type
         self._barcodes = None
         self._genes = None
@@ -577,9 +577,9 @@ class Chunked10xMTXReader(BaseChunkedReader):
 
     def _open_file(self):
         # Read barcodes
-        barcodes_path = self.mtx_dir / "barcodes.tsv"
-        if not barcodes_path.exists():
-            barcodes_path = self.mtx_dir / "barcodes.tsv.gz"
+        barcodes_path = os.path.join(self.mtx_dir, "barcodes.tsv")
+        if not os.path.exists(barcodes_path):
+            barcodes_path = os.path.join(self.mtx_dir, "barcodes.tsv.gz")
         self._barcodes = (
             pd.read_csv(barcodes_path, header=None, sep="\t")
             .iloc[:, 0]
@@ -588,13 +588,13 @@ class Chunked10xMTXReader(BaseChunkedReader):
         )
 
         # Read genes/features
-        genes_path = self.mtx_dir / "genes.tsv"
-        if not genes_path.exists():
-            genes_path = self.mtx_dir / "genes.tsv.gz"
-        if not genes_path.exists():
-            genes_path = self.mtx_dir / "features.tsv"
-        if not genes_path.exists():
-            genes_path = self.mtx_dir / "features.tsv.gz"
+        genes_path = os.path.join(self.mtx_dir, "genes.tsv")
+        if not os.path.exists(genes_path):
+            genes_path = os.path.join(self.mtx_dir, "genes.tsv.gz")
+        if not os.path.exists(genes_path):
+            genes_path = os.path.join(self.mtx_dir, "features.tsv")
+        if not os.path.exists(genes_path):
+            genes_path = os.path.join(self.mtx_dir, "features.tsv.gz")
 
         # Read genes file and match scanpy behavior
         genes_df = pd.read_csv(genes_path, header=None, sep="\t")
@@ -606,9 +606,9 @@ class Chunked10xMTXReader(BaseChunkedReader):
             self._genes = genes_df.iloc[:, 0].astype(str).values
 
         # Open matrix file for streaming
-        mtx_path = self.mtx_dir / "matrix.mtx"
-        if not mtx_path.exists():
-            mtx_path = self.mtx_dir / "matrix.mtx.gz"
+        mtx_path = os.path.join(self.mtx_dir, "matrix.mtx")
+        if not os.path.exists(mtx_path):
+            mtx_path = os.path.join(self.mtx_dir, "matrix.mtx.gz")
 
         if str(mtx_path).endswith(".gz"):
             self._matrix_file = gzip.open(mtx_path, "rt")

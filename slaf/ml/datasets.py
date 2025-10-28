@@ -1154,8 +1154,8 @@ class AsyncPrefetcher:
                 try:
                     self.queue.put_nowait(batch)
                 except queue.Full:
-                    # Queue is full, wait a bit
-                    time.sleep(0.1)
+                    # Queue is full, wait a bit longer for cloud scenarios
+                    time.sleep(0.5)  # Increased from 0.1 to 0.5 seconds
 
             except StopIteration as e:
                 if "No more epochs available" in str(e):
@@ -1212,7 +1212,7 @@ class AsyncPrefetcher:
             Batch available: False
         """
         try:
-            return self.queue.get(timeout=1.0)
+            return self.queue.get(timeout=10.0)  # Increased from 1.0 to 10.0 seconds
         except queue.Empty:
             return None
 
@@ -1396,7 +1396,7 @@ class SLAFIterableDataset(IterableDataset):
         tokenizer: SLAFTokenizer | None,
         batch_size: int = 32,
         seed: int = 42,
-        max_queue_size: int = 10,
+        max_queue_size: int = 5000,  # Increased default queue size
         pin_memory: bool = False,
         sampler_strategy: str = "sequential",
         tokenizer_type: str = "geneformer",  # Add tokenizer type parameter
@@ -1479,7 +1479,7 @@ class SLAFIterableDataset(IterableDataset):
         )
         self.prefetcher = AsyncPrefetcher(
             batch_processor=self.batch_processor,
-            max_queue_size=5000,
+            max_queue_size=max_queue_size,
         )
 
         # Start async prefetching
@@ -1629,10 +1629,11 @@ class SLAFIterableDataset(IterableDataset):
                 wait_start = time.time()
                 while not self.prefetcher.has_batch():
                     time.sleep(0.1)
-                    # Timeout after 5 seconds to avoid infinite wait
-                    if time.time() - wait_start > 5.0:
+                    # Timeout after 60 seconds for cloud scenarios (was 5 seconds)
+                    if time.time() - wait_start > 60.0:
                         print_warning(
-                            "Timeout waiting for prefetcher data", self.verbose
+                            "Timeout waiting for prefetcher data after 60s",
+                            self.verbose,
                         )
                         break
 
