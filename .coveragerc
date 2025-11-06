@@ -4,6 +4,7 @@ omit =
     */tests/*
     */test_*
     slaf/data/dataset.py
+    slaf/ml/tiledb_dataloaders.py
     */__pycache__/*
     */site-packages/*
 
