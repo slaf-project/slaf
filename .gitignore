@@ -15,3 +15,4 @@ benchmarks/comprehensive_benchmark_results.json
 benchmarks/benchmark_summary.json
 benchmarks/benchmark_output.txt
 benchmarks/benchmark_results.json
+node_modules

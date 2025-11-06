@@ -3,10 +3,10 @@
 """SLAF Command Line Interface."""
 
 import importlib.util
+import os
 import re
 import subprocess
 import sys
-from pathlib import Path
 from typing import Any
 
 import typer
@@ -64,7 +64,7 @@ def docs(
     """Manage SLAF documentation."""
     check_dependencies()
 
-    if not Path("mkdocs.yml").exists():
+    if not os.path.exists("mkdocs.yml"):
         typer.echo("❌ mkdocs.yml not found. Are you in the project root?")
         raise typer.Exit(1) from None
 
@@ -114,30 +114,30 @@ def examples(
     """Manage SLAF examples."""
     check_dependencies()
 
-    examples_dir = Path("examples")
-    if not examples_dir.exists():
+    examples_dir = "examples"
+    if not os.path.exists(examples_dir):
         typer.echo("❌ Examples directory not found")
         raise typer.Exit(1) from None
 
     if list_examples:
         typer.echo("📚 Available examples:")
-        for py_file in examples_dir.glob("*.py"):
-            if not py_file.name.startswith("__"):
-                typer.echo(f"  - {py_file.stem}")
+        for py_file in os.listdir(examples_dir):
+            if py_file.endswith(".py") and not py_file.startswith("__"):
+                typer.echo(f"  - {py_file[:-3]}")
         return
 
     if export:
-        docs_examples_dir = Path("docs/examples")
-        docs_examples_dir.mkdir(exist_ok=True)
+        docs_examples_dir = "docs/examples"
+        os.makedirs(docs_examples_dir, exist_ok=True)
 
         if example:
             # Export specific example
-            example_file = examples_dir / f"{example}.py"
-            if not example_file.exists():
+            example_file = f"{examples_dir}/{example}.py"
+            if not os.path.exists(example_file):
                 typer.echo(f"❌ Example '{example}' not found")
                 raise typer.Exit(1) from None
 
-            output_file = docs_examples_dir / f"{example}.html"
+            output_file = f"{docs_examples_dir}/{example}.html"
             typer.echo(f"🔧 Exporting {example_file}...")
             try:
                 subprocess.run(
@@ -147,9 +147,9 @@ def examples(
                         "marimo",
                         "export",
                         "html",
-                        str(example_file),
+                        example_file,
                         "-o",
-                        str(output_file),
+                        output_file,
                     ],
                     check=True,
                 )
@@ -162,10 +162,10 @@ def examples(
             typer.echo("🔧 Exporting all examples...")
             exported_files = []
 
-            for py_file in examples_dir.glob("*.py"):
-                if not py_file.name.startswith("__"):
-                    output_file = docs_examples_dir / f"{py_file.stem}.html"
-                    typer.echo(f"  Exporting {py_file.name}...")
+            for py_file in os.listdir(examples_dir):
+                if py_file.endswith(".py") and not py_file.startswith("__"):
+                    output_file = f"{docs_examples_dir}/{py_file[:-3]}.html"
+                    typer.echo(f"  Exporting {py_file}...")
                     try:
                         subprocess.run(
                             [
@@ -174,20 +174,77 @@ def examples(
                                 "marimo",
                                 "export",
                                 "html",
-                                str(py_file),
+                                py_file,
                                 "-o",
-                                str(output_file),
+                                output_file,
                             ],
                             check=True,
                         )
                         exported_files.append(output_file)
                     except subprocess.CalledProcessError as e:
-                        typer.echo(f"❌ Failed to export {py_file.name}: {e}")
+                        typer.echo(f"❌ Failed to export {py_file}: {e}")
                         raise typer.Exit(1) from e
 
             typer.echo(f"✅ Exported {len(exported_files)} examples:")
             for file in exported_files:
                 typer.echo(f"  - {file}")
+
+
+@app.command()
+def validate_input_files(
+    input_path: str = typer.Argument(
+        ..., help="Input file or directory path to validate"
+    ),
+    format: str | None = typer.Option(
+        None,
+        "--format",
+        "-f",
+        help="Input format: h5ad, 10x_mtx, 10x_h5, tiledb (auto-detected if not specified)",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+):
+    """Validate input files for multi-file conversion compatibility."""
+    try:
+        from slaf.data.utils import discover_input_files, validate_input_files
+    except ImportError as e:
+        typer.echo("❌ SLAF not installed or not in PYTHONPATH")
+        raise typer.Exit(1) from e
+
+    if not os.path.exists(input_path):
+        typer.echo(f"❌ Input path not found: {input_path}")
+        raise typer.Exit(1) from None
+
+    typer.echo(f"🔍 Validating input files: {input_path}")
+
+    try:
+        # Discover input files
+        input_files, detected_format = discover_input_files(input_path)
+
+        # Use detected format if auto, otherwise use specified format
+        if format is None:
+            format = detected_format
+
+        typer.echo(f"📁 Found {len(input_files)} {format} files")
+
+        if verbose:
+            for i, file_path in enumerate(input_files, 1):
+                typer.echo(f"  {i}. {file_path}")
+
+        # Validate compatibility
+        validate_input_files(input_files, format)
+
+        typer.echo("✅ All files are compatible for conversion")
+
+        if len(input_files) > 1:
+            typer.echo(
+                f"📊 Summary: {len(input_files)} files ready for multi-file conversion"
+            )
+        else:
+            typer.echo("📊 Summary: Single file ready for conversion")
+
+    except Exception as e:
+        typer.echo(f"❌ Validation failed: {e}")
+        raise typer.Exit(1) from e
 
 
 @app.command()
@@ -239,6 +296,11 @@ def convert(
         "--tiledb-collection",
         help="Name of the measurement collection for TileDB format (default: RNA)",
     ),
+    skip_validation: bool = typer.Option(
+        False,
+        "--skip-validation",
+        help="Skip validation if already validated (for performance)",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ):
     """Convert single-cell datasets to SLAF format with optimized storage."""
@@ -248,13 +310,11 @@ def convert(
         typer.echo("❌ SLAF not installed or not in PYTHONPATH")
         raise typer.Exit(1) from e
 
-    input_file = Path(input_path)
-    if not input_file.exists():
+    if not os.path.exists(input_path):
         typer.echo(f"❌ Input file not found: {input_path}")
         raise typer.Exit(1) from None
 
-    output_dir = Path(output_path)
-    if output_dir.exists():
+    if os.path.exists(output_path):
         typer.echo(f"❌ Output directory already exists: {output_path}")
         raise typer.Exit(1) from None
 
@@ -289,10 +349,15 @@ def convert(
                 "tiledb": "tiledb",
             }
             input_format = format_mapping.get(format, format)
-            converter.convert(input_path, output_path, input_format=input_format)
+            converter.convert(
+                input_path,
+                output_path,
+                input_format=input_format,
+                skip_validation=skip_validation,
+            )
         else:
             # Use auto-detection
-            converter.convert(input_path, output_path)
+            converter.convert(input_path, output_path, skip_validation=skip_validation)
 
         typer.echo(f"✅ Successfully converted to {output_path}")
 
@@ -313,13 +378,111 @@ def convert(
         raise typer.Exit(1) from e
 
 
+@app.command()
+def append(
+    input_path: str = typer.Argument(
+        ..., help="Input file or directory path to append"
+    ),
+    existing_slaf_path: str = typer.Argument(..., help="Path to existing SLAF dataset"),
+    format: str | None = typer.Option(
+        None,
+        "--format",
+        "-f",
+        help="Input format: h5ad, 10x_mtx, 10x_h5, tiledb (auto-detected if not specified)",
+    ),
+    skip_validation: bool = typer.Option(
+        False,
+        "--skip-validation",
+        help="Skip validation if already validated (for performance)",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+):
+    """Append new data to an existing SLAF dataset."""
+    try:
+        from slaf.data.utils import discover_input_files, validate_input_files
+    except ImportError as e:
+        typer.echo("❌ SLAF not installed or not in PYTHONPATH")
+        raise typer.Exit(1) from e
+
+    if not os.path.exists(existing_slaf_path):
+        typer.echo(f"❌ Existing SLAF dataset not found: {existing_slaf_path}")
+        raise typer.Exit(1) from None
+
+    if not os.path.exists(input_path):
+        typer.echo(f"❌ Input path not found: {input_path}")
+        raise typer.Exit(1) from None
+
+    typer.echo(f"🔄 Appending data to existing SLAF dataset: {existing_slaf_path}")
+
+    try:
+        from slaf.data import SLAFConverter
+    except ImportError as e:
+        typer.echo("❌ SLAF not installed or not in PYTHONPATH")
+        raise typer.Exit(1) from e
+
+    typer.echo(f"🔄 Appending data from {input_path} to {existing_slaf_path}...")
+
+    try:
+        # Create converter instance
+        converter = SLAFConverter(
+            chunked=True,
+            chunk_size=5000,  # Use default chunk size
+            create_indices=False,  # Don't create indices during append
+            optimize_storage=True,
+            use_optimized_dtypes=True,
+            enable_v2_manifest=True,
+            compact_after_write=False,  # Don't compact during append
+        )
+
+        # Use detected format if auto, otherwise use specified format
+        if format is None:
+            # Discover input files to get format
+            input_files, detected_format = discover_input_files(input_path)
+            format = detected_format
+
+        typer.echo(f"📁 Found {len(input_files)} {format} files to append")
+
+        if verbose:
+            for i, file_path in enumerate(input_files, 1):
+                typer.echo(f"  {i}. {file_path}")
+
+        # Validate compatibility if not skipped
+        if not skip_validation:
+            typer.echo("🔍 Validating compatibility with existing dataset...")
+            validate_input_files(input_files, format)
+            typer.echo("✅ Files are compatible for appending")
+        else:
+            typer.echo("⏭️  Skipping validation (--skip-validation)")
+
+        # Perform append operation
+        converter.append(input_path, existing_slaf_path, input_format=format)
+
+        typer.echo(f"✅ Successfully appended data to {existing_slaf_path}")
+
+        if verbose:
+            # Show some info about the updated dataset
+            from slaf import SLAFArray
+
+            slaf_array = SLAFArray(existing_slaf_path)
+            typer.echo("📊 Updated dataset info:")
+            typer.echo(
+                f"  Shape: {slaf_array.shape[0]:,} cells × {slaf_array.shape[1]:,} genes"
+            )
+            typer.echo(f"  Cell metadata columns: {len(slaf_array.obs.columns)}")
+            typer.echo(f"  Gene metadata columns: {len(slaf_array.var.columns)}")
+
+    except Exception as e:
+        typer.echo(f"❌ Append failed: {e}")
+        raise typer.Exit(1) from e
+
+
 def get_current_version() -> str:
     """Get current version from pyproject.toml."""
-    pyproject_path = Path("pyproject.toml")
-    if not pyproject_path.exists():
+    if not os.path.exists("pyproject.toml"):
         raise FileNotFoundError("pyproject.toml not found")
 
-    content = pyproject_path.read_text()
+    with open("pyproject.toml") as f:
+        content = f.read()
     match = re.search(r'version = "([^"]+)"', content)
     if not match:
         raise ValueError("Could not find version in pyproject.toml")
@@ -329,8 +492,8 @@ def get_current_version() -> str:
 
 def update_version(new_version: str) -> None:
     """Update version in pyproject.toml and uv.lock."""
-    pyproject_path = Path("pyproject.toml")
-    content = pyproject_path.read_text()
+    with open("pyproject.toml") as f:
+        content = f.read()
 
     # Replace only the project version line, not other version-like strings
     # Look for the specific line in the [project] section
@@ -350,7 +513,8 @@ def update_version(new_version: str) -> None:
             updated_lines.append(line)
 
     new_content = "\n".join(updated_lines)
-    pyproject_path.write_text(new_content)
+    with open("pyproject.toml", "w") as f:
+        f.write(new_content)
     typer.echo(f"Updated version to {new_version}")
 
     # Update uv.lock to reflect the new version
@@ -457,14 +621,15 @@ def generate_changelog(version: str) -> None:
                 changelog_entry += f"- {line.strip()}\n"
 
     # Append to CHANGELOG.md
-    changelog_path = Path("CHANGELOG.md")
-    if changelog_path.exists():
-        content = changelog_path.read_text()
+    if os.path.exists("CHANGELOG.md"):
+        with open("CHANGELOG.md") as f:
+            content = f.read()
         new_content = changelog_entry + "\n" + content
     else:
         new_content = f"# Changelog\n\n{changelog_entry}"
 
-    changelog_path.write_text(new_content)
+    with open("CHANGELOG.md", "w") as f:
+        f.write(new_content)
     typer.echo("Changelog updated")
 
 
@@ -595,8 +760,7 @@ def info(
         typer.echo("❌ SLAF not installed or not in PYTHONPATH")
         raise typer.Exit(1) from e
 
-    dataset_dir = Path(dataset_path)
-    if not dataset_dir.exists():
+    if not os.path.exists(dataset_path):
         typer.echo(f"❌ Dataset not found: {dataset_path}")
         raise typer.Exit(1) from None
 
@@ -624,8 +788,7 @@ def query(
         typer.echo("❌ SLAF not installed or not in PYTHONPATH")
         raise typer.Exit(1) from e
 
-    dataset_dir = Path(dataset_path)
-    if not dataset_dir.exists():
+    if not os.path.exists(dataset_path):
         typer.echo(f"❌ Dataset not found: {dataset_path}")
         raise typer.Exit(1) from None
 
@@ -743,12 +906,12 @@ def benchmark(  # type: ignore[misc, assignment, attr-defined]
 
     # Set default data directory
     if not data_dir:
-        data_dir = str(Path(__file__).parent.parent.parent / "slaf-datasets")
+        data_dir = os.path.join(os.path.dirname(__file__), "..", "..", "slaf-datasets")
 
     if action.lower() == "run":
         typer.echo("🚀 Running SLAF benchmarks...")
 
-        data_path = Path(data_dir)
+        data_path = data_dir
         all_dataset_results = {}
 
         for dataset_name in datasets:
@@ -757,15 +920,14 @@ def benchmark(  # type: ignore[misc, assignment, attr-defined]
 
             # Check if dataset is already a SLAF file
             if dataset_name.endswith(".slaf"):
-                slaf_path = Path(dataset_name)
-                if not slaf_path.exists():
+                if not os.path.exists(dataset_name):
                     typer.echo(f"❌ SLAF file not found: {dataset_name}")
                     continue
 
                 # For SLAF files, we need to find the corresponding h5ad file
                 # or create a dummy path for comparison
-                h5ad_path = slaf_path.with_suffix(".h5ad")
-                if not h5ad_path.exists():
+                h5ad_path = dataset_name.replace(".slaf", ".h5ad")
+                if not os.path.exists(h5ad_path):
                     typer.echo(
                         f"⚠️  No corresponding h5ad file found for {dataset_name}"
                     )
@@ -860,7 +1022,7 @@ def benchmark(  # type: ignore[misc, assignment, attr-defined]
     elif action.lower() == "summary":
         typer.echo("📊 Generating benchmark summary...")
 
-        if not Path(results_file).exists():
+        if not os.path.exists(results_file):
             typer.echo(f"❌ Results file not found: {results_file}")
             raise typer.Exit(1) from None
 
@@ -869,11 +1031,11 @@ def benchmark(  # type: ignore[misc, assignment, attr-defined]
     elif action.lower() == "docs":
         typer.echo("📝 Updating performance documentation...")
 
-        if not Path(summary_file).exists():
+        if not os.path.exists(summary_file):
             typer.echo(f"❌ Summary file not found: {summary_file}")
             raise typer.Exit(1) from None
 
-        if not Path(docs_file).exists():
+        if not os.path.exists(docs_file):
             typer.echo(f"❌ Docs file not found: {docs_file}")
             raise typer.Exit(1) from None
 
@@ -884,7 +1046,7 @@ def benchmark(  # type: ignore[misc, assignment, attr-defined]
 
         # Step 1: Run benchmarks
         typer.echo("\n📊 Step 1: Running benchmarks...")
-        data_path = Path(data_dir)
+        data_path = data_dir
         all_dataset_results = {}
 
         for dataset_name in datasets:
@@ -893,15 +1055,14 @@ def benchmark(  # type: ignore[misc, assignment, attr-defined]
 
             # Check if dataset is already a SLAF file
             if dataset_name.endswith(".slaf"):
-                slaf_path = Path(dataset_name)
-                if not slaf_path.exists():
+                if not os.path.exists(dataset_name):
                     typer.echo(f"❌ SLAF file not found: {dataset_name}")
                     continue
 
                 # For SLAF files, we need to find the corresponding h5ad file
                 # or create a dummy path for comparison
-                h5ad_path = slaf_path.with_suffix(".h5ad")
-                if not h5ad_path.exists():
+                h5ad_path = dataset_name.replace(".slaf", ".h5ad")
+                if not os.path.exists(h5ad_path):
                     typer.echo(
                         f"⚠️  No corresponding h5ad file found for {dataset_name}"
                     )
@@ -1008,6 +1169,32 @@ def benchmark(  # type: ignore[misc, assignment, attr-defined]
         typer.echo(f"❌ Unknown action: {action}")
         typer.echo("Available actions: run, summary, docs, all")
         raise typer.Exit(1) from None
+
+
+# Backward compatibility for tests that mock slaf.cli.Path
+# This should not be used in new code - use os.path functions instead
+class Path:
+    """Deprecated: Use os.path functions instead of pathlib.Path"""
+
+    def __init__(self, *args, **kwargs):
+        raise DeprecationWarning(
+            "pathlib.Path has been removed from slaf.cli. "
+            "Use os.path functions instead (e.g., os.path.exists, os.path.join)"
+        )
+
+    @staticmethod
+    def read_text(*args, **kwargs):
+        """Mock method for tests - use open() and read() instead"""
+        raise DeprecationWarning(
+            "Path.read_text has been removed. Use open() and read() instead"
+        )
+
+    @staticmethod
+    def write_text(*args, **kwargs):
+        """Mock method for tests - use open() and write() instead"""
+        raise DeprecationWarning(
+            "Path.write_text has been removed. Use open() and write() instead"
+        )
 
 
 if __name__ == "__main__":

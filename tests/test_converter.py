@@ -480,7 +480,7 @@ class TestSLAFConverter:
 
         converter = SLAFConverter()
 
-        with pytest.raises(ValueError, match="Unsupported format"):
+        with pytest.raises(ValueError, match="Cannot detect format"):
             converter.convert(
                 str(dummy_file),
                 str(Path(tmp_path) / "output.slaf"),

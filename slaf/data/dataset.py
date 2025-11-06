@@ -1,3 +1,4 @@
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -116,7 +117,7 @@ def _download_pbmc3k_10x_mtx(output_path: Path) -> str:
     from scipy.io import mmwrite
 
     # Write matrix.mtx
-    matrix_path = mtx_dir / "matrix.mtx"
+    matrix_path = os.path.join(mtx_dir, "matrix.mtx")
     # Convert to scipy sparse matrix and transpose for MTX format
     from scipy.sparse import csr_matrix
 
@@ -126,13 +127,13 @@ def _download_pbmc3k_10x_mtx(output_path: Path) -> str:
     mmwrite(str(matrix_path), X_sparse.T)  # Transpose for MTX format
 
     # Write barcodes.tsv (cell names)
-    barcodes_path = mtx_dir / "barcodes.tsv"
+    barcodes_path = os.path.join(mtx_dir, "barcodes.tsv")
     pd.DataFrame(adata.obs_names).to_csv(
         barcodes_path, sep="\t", header=False, index=False
     )
 
     # Write genes.tsv (gene names)
-    genes_path = mtx_dir / "genes.tsv"
+    genes_path = os.path.join(mtx_dir, "genes.tsv")
     pd.DataFrame({"gene_id": adata.var_names, "gene_symbol": adata.var_names}).to_csv(
         genes_path, sep="\t", header=False, index=False
     )
