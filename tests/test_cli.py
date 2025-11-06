@@ -1,7 +1,6 @@
 """Tests for SLAF CLI functionality."""
 
 import subprocess
-from pathlib import Path
 from unittest.mock import Mock, mock_open, patch
 
 import pytest
@@ -618,131 +617,6 @@ class TestCLI:
         assert "10x_h5" in result.stdout
         assert "chunked" in result.stdout
         assert "verbose" in result.stdout
-
-        # Benchmark command tests
-
-    @pytest.mark.skip(
-        reason="Benchmark tests disabled until benchmark module is refactored"
-    )
-    def test_benchmark_help(self, runner):
-        """Test benchmark command help."""
-        result = runner.invoke(app, ["benchmark", "--help"])
-        assert result.exit_code == 0
-        assert "run" in result.stdout
-        assert "summary" in result.stdout
-        assert "docs" in result.stdout
-        assert "all" in result.stdout
-
-    @pytest.mark.skip(
-        reason="Benchmark tests disabled until benchmark module is refactored"
-    )
-    def test_benchmark_invalid_action(self, runner):
-        """Test benchmark command with invalid action."""
-        result = runner.invoke(app, ["benchmark", "invalid_action"])
-        assert result.exit_code == 1
-        assert "Unknown action" in result.stdout
-
-    @pytest.mark.skip(
-        reason="Benchmark tests disabled until benchmark module is refactored"
-    )
-    @patch("slaf.cli.check_dependencies")
-    def test_benchmark_run_action(self, mock_check_deps, runner):
-        """Test benchmark run action."""
-        with patch("slaf.cli.os.path.exists", return_value=True):
-            with patch(
-                "slaf.cli.os.path.glob",
-                return_value=[Path("data/pbmc3k_processed.h5ad")],
-            ):
-                result = runner.invoke(
-                    app, ["benchmark", "run", "--datasets", "pbmc3k"]
-                )
-                assert result.exit_code == 0
-                assert "Running SLAF benchmarks" in result.stdout
-
-    @pytest.mark.skip(
-        reason="Benchmark tests disabled until benchmark module is refactored"
-    )
-    @patch("slaf.cli.check_dependencies")
-    def test_benchmark_summary_action(self, mock_check_deps, runner):
-        """Test benchmark summary action."""
-        with patch("slaf.cli.os.path.exists", return_value=True):
-            with patch(
-                "slaf.cli.generate_benchmark_summary", create=True
-            ) as mock_summary:
-                result = runner.invoke(app, ["benchmark", "summary"])
-                assert result.exit_code == 0
-                assert "Generating benchmark summary" in result.stdout
-                mock_summary.assert_called_once()
-
-    @pytest.mark.skip(
-        reason="Benchmark tests disabled until benchmark module is refactored"
-    )
-    @patch("slaf.cli.check_dependencies")
-    def test_benchmark_docs_action(self, mock_check_deps, runner):
-        """Test benchmark docs action."""
-        with patch("slaf.cli.os.path.exists", return_value=True):
-            with patch("slaf.cli.update_performance_docs", create=True) as mock_docs:
-                result = runner.invoke(app, ["benchmark", "docs"])
-                assert result.exit_code == 0
-                assert "Updating performance documentation" in result.stdout
-                mock_docs.assert_called_once()
-
-    @pytest.mark.skip(
-        reason="Benchmark tests disabled until benchmark module is refactored"
-    )
-    @patch("slaf.cli.check_dependencies")
-    def test_benchmark_all_action(self, mock_check_deps, runner):
-        """Test benchmark all action."""
-        with patch("slaf.cli.Path") as mock_path:
-            mock_path_instance = Mock()
-            mock_path_instance.exists.return_value = True
-            mock_path_instance.glob.return_value = [Path("data/pbmc3k_processed.h5ad")]
-            mock_path.return_value = mock_path_instance
-
-            # Mock all benchmark functions
-            with patch("slaf.cli.run_benchmark_suite", create=True) as mock_run:
-                with patch("slaf.cli.generate_benchmark_summary", create=True):
-                    with patch("slaf.cli.update_performance_docs", create=True):
-                        mock_run.return_value = {"test": "results"}
-
-                        result = runner.invoke(
-                            app, ["benchmark", "all", "--datasets", "pbmc3k"]
-                        )
-                        assert result.exit_code == 0
-                        assert "Running complete benchmark workflow" in result.stdout
-
-    @pytest.mark.skip(
-        reason="Benchmark tests disabled until benchmark module is refactored"
-    )
-    @patch("slaf.cli.check_dependencies")
-    def test_benchmark_missing_results_file(self, mock_check_deps, runner):
-        """Test benchmark summary with missing results file."""
-        with patch("slaf.cli.os.path.exists", return_value=False):
-            result = runner.invoke(app, ["benchmark", "summary"])
-            assert result.exit_code == 1
-            assert "Results file not found" in result.stdout
-
-    @pytest.mark.skip(
-        reason="Benchmark tests disabled until benchmark module is refactored"
-    )
-    @patch("slaf.cli.check_dependencies")
-    def test_benchmark_missing_summary_file(self, mock_check_deps, runner):
-        """Test benchmark docs with missing summary file."""
-        with patch("slaf.cli.os.path.exists", side_effect=[True, False]):
-            result = runner.invoke(app, ["benchmark", "docs"])
-            assert result.exit_code == 1
-            assert "Summary file not found" in result.stdout
-
-    @pytest.mark.skip(
-        reason="Benchmark tests disabled until benchmark module is refactored"
-    )
-    @patch("slaf.cli.check_dependencies")
-    def test_benchmark_missing_docs_file(self, mock_check_deps, runner):
-        """Test benchmark docs with missing docs file."""
-        with patch("slaf.cli.os.path.exists", side_effect=[True, True, False]):
-            result = runner.invoke(app, ["benchmark", "docs"])
-            assert result.exit_code == 1
-            assert "Docs file not found" in result.stdout
 
     @patch("slaf.cli.check_dependencies")
     def test_convert_with_slaf_import_error(self, mock_check_deps, runner):
