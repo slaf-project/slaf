@@ -2,6 +2,7 @@ import queue
 import threading
 import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from queue import Queue
 from typing import Any, Union
@@ -301,6 +302,10 @@ class PrefetchBatchProcessor:
     This processor loads Lance fragments, applies window functions to rank and filter genes,
     shuffles cells for training, and tokenizes the sequences. It handles the complete
     pipeline from raw Lance data to training-ready tensors.
+
+    When using Mixture of Scanners (MoS), fragment reads can be parallelized for cloud
+    scenarios where network latency dominates. For local data, sequential reads are
+    typically more efficient as parallelization adds overhead without benefit.
     """
 
     def __init__(
@@ -323,6 +328,7 @@ class PrefetchBatchProcessor:
         use_mixture_of_scanners: bool = True,  # Default to True for MoS (was False)
         n_scanners: int = 16,  # Add n_scanners parameter for MoS
         prefetch_batch_size: int = 4194304,  # Add prefetch_batch_size parameter for MoS
+        parallelize_fragment_reads: bool = False,  # Parallelize fragment reads in MoS (cloud optimization)
     ):
         """Initialize the PrefetchBatchProcessor."""
         self.slaf_array = slaf_array
@@ -343,6 +349,7 @@ class PrefetchBatchProcessor:
         self.use_mixture_of_scanners = use_mixture_of_scanners
         self.n_scanners = n_scanners
         self.prefetch_batch_size = prefetch_batch_size
+        self.parallelize_fragment_reads = parallelize_fragment_reads
 
         # Validate MoS parameters
         if self.use_mixture_of_scanners:
@@ -551,6 +558,43 @@ class PrefetchBatchProcessor:
         if cells_processed > 0:
             self._timing_metrics["cells_processed"].append(cells_processed)
 
+    def _read_from_generator(
+        self, generator_idx: int
+    ) -> tuple[pl.DataFrame | None, int, bool]:
+        """
+        Read batches_per_chunk from a single generator.
+
+        Returns:
+            tuple: (generator_combined DataFrame, generator_idx, is_exhausted)
+        """
+        try:
+            # Read batches_per_chunk times from this generator
+            generator_batches = []
+            for _ in range(self.batches_per_chunk):
+                try:
+                    batch = next(self.fragment_generators[generator_idx])
+                    batch_df = pl.from_arrow(batch)
+                    generator_batches.append(batch_df)
+                except StopIteration:
+                    # This generator is exhausted
+                    return None, generator_idx, True
+
+            if not generator_batches:
+                # Generator was exhausted
+                return None, generator_idx, True
+
+            # Combine all batches from this generator
+            if len(generator_batches) > 1:
+                generator_combined = pl.concat(generator_batches)  # type: ignore
+            else:
+                generator_combined = generator_batches[0]
+
+            return generator_combined, generator_idx, False
+
+        except StopIteration:
+            # Mark this generator as exhausted
+            return None, generator_idx, True
+
     def load_prefetch_batch(self) -> PrefetchBatch:
         """
         Load and process a chunk of Lance batches into pre-tokenized sequences or raw data.
@@ -633,96 +677,104 @@ class PrefetchBatchProcessor:
 
                 # Collect batches from selected generators
                 batch_dfs = []
-                for generator_idx in selected_indices:
-                    try:
-                        # Read batches_per_chunk times from this generator to warm it up
-                        generator_batches = []
-                        for _ in range(self.batches_per_chunk):
+                generator_results: list[tuple[pl.DataFrame | None, int, bool]] = []
+
+                if self.parallelize_fragment_reads:
+                    # Parallel read: use ThreadPoolExecutor to read from all selected generators concurrently
+                    # This is critical for cloud scenarios where network latency dominates
+                    with ThreadPoolExecutor(
+                        max_workers=len(selected_indices)
+                    ) as executor:
+                        futures = {
+                            executor.submit(self._read_from_generator, gen_idx): gen_idx
+                            for gen_idx in selected_indices
+                        }
+                        for future in as_completed(futures):
                             try:
-                                batch = next(self.fragment_generators[generator_idx])
-                                batch_df = pl.from_arrow(batch)
-                                generator_batches.append(batch_df)
-                            except StopIteration:
-                                # This generator is exhausted
-                                self.generator_active[generator_idx] = False
-                                break
+                                result = future.result()
+                                generator_results.append(result)
+                            except Exception as e:
+                                logger.warning(f"Error reading from generator: {e}")
+                                # Mark generator as exhausted on error
+                                gen_idx = futures[future]
+                                self.generator_active[gen_idx] = False
+                else:
+                    # Sequential read: read from generators one at a time
+                    # This is better for local data where parallelization adds overhead
+                    for generator_idx in selected_indices:
+                        result = self._read_from_generator(generator_idx)
+                        generator_results.append(result)
 
-                        if not generator_batches:
-                            # Generator was exhausted, continue to next
-                            continue
-
-                        # Combine all batches from this generator
-                        if len(generator_batches) > 1:
-                            generator_combined = pl.concat(generator_batches)  # type: ignore
-                        else:
-                            generator_combined = generator_batches[0]
-
-                        # Handle incomplete cells from previous read
-                        if self.generator_last_cells[generator_idx] is not None:
-                            first_cell = generator_combined["cell_integer_id"].item(0)  # type: ignore
-                            expected_cell = self.generator_last_cells[generator_idx] + 1
-
-                            if first_cell == expected_cell:
-                                # Continuity detected - check if we can complete the last cell
-                                last_cell_id = self.generator_last_cells[generator_idx]
-                                if last_cell_id in self.partial_cell_data:
-                                    # STEP 1: Get the incomplete records for this cell
-                                    incomplete_records = self.partial_cell_data[
-                                        last_cell_id
-                                    ]
-
-                                    # STEP 2: Prepend incomplete records to the current batch
-                                    generator_combined = pl.concat(
-                                        [incomplete_records, generator_combined],
-                                        how="vertical",
-                                    )  # type: ignore
-
-                                    # STEP 3: Pop the completed cell from incomplete_cells
-                                    self.partial_cell_data.pop(last_cell_id)
-
-                                    if self.verbose and self.batch_id % 100 == 0:
-                                        print_prefetch(
-                                            f"Completed cell {last_cell_id} by prepending {len(incomplete_records)} records",
-                                            self.verbose,
-                                        )
-                            else:
-                                # Gap detected - check for zombie incomplete cells
-                                # Remove any incomplete cells for this generator that can't be completed
-                                keys_to_remove = []
-                                for cell_id in list(self.partial_cell_data.keys()):
-                                    if (
-                                        cell_id
-                                        <= self.generator_last_cells[generator_idx]
-                                    ):
-                                        keys_to_remove.append(cell_id)
-                                for key in keys_to_remove:
-                                    self.partial_cell_data.pop(key, None)
-
-                                if (
-                                    keys_to_remove
-                                    and self.verbose
-                                    and self.batch_id % 100 == 0
-                                ):
-                                    print_prefetch(
-                                        f"Cleaned up {len(keys_to_remove)} zombie incomplete cells due to gap",
-                                        self.verbose,
-                                    )
-
-                        # Update last cell for this generator
-                        if isinstance(generator_combined, pl.DataFrame):
-                            self.generator_last_cells[generator_idx] = (
-                                generator_combined.get_column("cell_integer_id").item(
-                                    -1
-                                )
-                            )  # type: ignore
-
-                        # Add to batch collection
-                        batch_dfs.append(generator_combined)
-
-                    except StopIteration:
-                        # Mark this generator as exhausted
+                # Process results and handle incomplete cells (sequential to maintain correctness)
+                for (
+                    generator_combined,
+                    generator_idx,
+                    is_exhausted,
+                ) in generator_results:
+                    if is_exhausted:
                         self.generator_active[generator_idx] = False
                         continue
+
+                    if generator_combined is None:
+                        continue
+
+                    # Handle incomplete cells from previous read
+                    last_cell_for_generator = self.generator_last_cells[generator_idx]
+                    if last_cell_for_generator is not None:
+                        first_cell = generator_combined["cell_integer_id"].item(0)  # type: ignore
+                        expected_cell = last_cell_for_generator + 1
+
+                        if first_cell == expected_cell:
+                            # Continuity detected - check if we can complete the last cell
+                            last_cell_id = last_cell_for_generator
+                            if last_cell_id in self.partial_cell_data:
+                                # STEP 1: Get the incomplete records for this cell
+                                incomplete_records = self.partial_cell_data[
+                                    last_cell_id
+                                ]
+
+                                # STEP 2: Prepend incomplete records to the current batch
+                                generator_combined = pl.concat(
+                                    [incomplete_records, generator_combined],
+                                    how="vertical",
+                                )  # type: ignore
+
+                                # STEP 3: Pop the completed cell from incomplete_cells
+                                self.partial_cell_data.pop(last_cell_id)
+
+                                if self.verbose and self.batch_id % 100 == 0:
+                                    print_prefetch(
+                                        f"Completed cell {last_cell_id} by prepending {len(incomplete_records)} records",
+                                        self.verbose,
+                                    )
+                        else:
+                            # Gap detected - check for zombie incomplete cells
+                            # Remove any incomplete cells for this generator that can't be completed
+                            keys_to_remove = []
+                            for cell_id in list(self.partial_cell_data.keys()):
+                                if cell_id <= last_cell_for_generator:
+                                    keys_to_remove.append(cell_id)
+                            for key in keys_to_remove:
+                                self.partial_cell_data.pop(key, None)
+
+                            if (
+                                keys_to_remove
+                                and self.verbose
+                                and self.batch_id % 100 == 0
+                            ):
+                                print_prefetch(
+                                    f"Cleaned up {len(keys_to_remove)} zombie incomplete cells due to gap",
+                                    self.verbose,
+                                )
+
+                    # Update last cell for this generator
+                    if isinstance(generator_combined, pl.DataFrame):
+                        self.generator_last_cells[generator_idx] = (
+                            generator_combined.get_column("cell_integer_id").item(-1)
+                        )  # type: ignore
+
+                    # Add to batch collection
+                    batch_dfs.append(generator_combined)
 
                 if not batch_dfs:
                     # All selected generators are exhausted, continue to next iteration
@@ -1366,6 +1418,10 @@ class SLAFIterableDataset(IterableDataset):
         verbose: Whether to print verbose output (default: True)
         batches_per_chunk: Number of Lance batches to load per chunk (default: 50)
         by_fragment: Whether to use fragment-based loading instead of batch-based loading (default: False)
+        parallelize_fragment_reads: Whether to parallelize fragment reads in MoS mode.
+                                   Critical for cloud scenarios where network latency dominates.
+                                   For local data, sequential reads are typically more efficient
+                                   as parallelization adds overhead. Default: False.
 
     Examples:
         >>> # Single epoch training
@@ -1409,6 +1465,7 @@ class SLAFIterableDataset(IterableDataset):
         use_mixture_of_scanners: bool = True,  # Default to True for MoS (was False)
         n_scanners: int = 16,  # Add n_scanners parameter for MoS
         prefetch_batch_size: int = 4194304,  # Add prefetch_batch_size parameter for MoS
+        parallelize_fragment_reads: bool = False,  # Parallelize fragment reads in MoS (cloud optimization)
     ):
         super().__init__()
         self.slaf_array = slaf_array
@@ -1425,6 +1482,9 @@ class SLAFIterableDataset(IterableDataset):
         self.raw_mode = raw_mode  # Add raw_mode attribute
         self.verbose = verbose  # Add verbose attribute
         self.by_fragment = by_fragment  # Add by_fragment attribute
+        self.parallelize_fragment_reads = (
+            parallelize_fragment_reads  # Add parallelize_fragment_reads attribute
+        )
 
         # Pre-allocate cell IDs buffer for better performance
         if TORCH_AVAILABLE:
@@ -1476,6 +1536,7 @@ class SLAFIterableDataset(IterableDataset):
             use_mixture_of_scanners=use_mixture_of_scanners,  # Pass MoS parameters
             n_scanners=n_scanners,  # Pass MoS parameters
             prefetch_batch_size=prefetch_batch_size,  # Pass MoS parameters
+            parallelize_fragment_reads=parallelize_fragment_reads,  # Pass parallelize_fragment_reads
         )
         self.prefetcher = AsyncPrefetcher(
             batch_processor=self.batch_processor,
