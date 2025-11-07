@@ -147,21 +147,69 @@ class SLAFTokenizer:
         self._setup_special_tokens()
 
     def _build_gene_vocabulary(self):
-        """Build gene vocabulary from SLAF var DataFrame."""
+        """Build gene vocabulary from SLAF var DataFrame or genes Lance table."""
         try:
-            var_df = self.slaf_array.var.reset_index()
+            # Try to use metadata if available
+            if self.slaf_array.is_metadata_ready():
+                var_df = self.slaf_array.var.reset_index()
 
-            # Check if we have a real SLAF array or a Mock object
-            if (
-                hasattr(var_df, "columns")
-                and "gene_integer_id" in var_df.columns
-                and "gene_id" in var_df.columns
-            ):
-                # Real SLAF array - build vocabulary from gene data
+                # Check if we have a real SLAF array or a Mock object
+                if (
+                    hasattr(var_df, "columns")
+                    and "gene_integer_id" in var_df.columns
+                    and "gene_id" in var_df.columns
+                ):
+                    # Real SLAF array - build vocabulary from gene data
+                    gene_vocab = {}
+
+                    # Use Polars native iteration
+                    for row in var_df.iter_rows(named=True):
+                        gene_id = row["gene_id"]
+                        gene_integer_id = row["gene_integer_id"]
+
+                        # Only include genes within vocab size limit
+                        if gene_integer_id < self.vocab_size:
+                            gene_vocab[gene_id] = gene_integer_id
+
+                    self.gene_vocab = gene_vocab
+                    # Account for the +4 offset used in tokenization
+                    self.token_to_gene = {v + 4: k for k, v in self.gene_vocab.items()}
+
+                    # Pre-build vectorized mapping array for fast lookup
+                    max_gene_id = (
+                        max(
+                            int(k) if isinstance(k, str) else k
+                            for k in self.gene_vocab.keys()
+                        )
+                        if self.gene_vocab
+                        else 0
+                    )
+                    self.vocab_mapping = np.full(max_gene_id + 1, -1, dtype=int)
+
+                    # Fill the mapping array once
+                    for gene_id, token_id in self.gene_vocab.items():
+                        try:
+                            gene_id_int = (
+                                int(gene_id) if isinstance(gene_id, str) else gene_id
+                            )
+                            self.vocab_mapping[gene_id_int] = token_id
+                        except (ValueError, TypeError):
+                            continue
+                    return
+
+            # If metadata not available, read directly from genes Lance table
+            # This is more efficient for cloud datasets where metadata loading is skipped
+            import polars as pl
+
+            genes_table = self.slaf_array.genes.to_table()
+            genes_df = pl.from_arrow(genes_table)
+
+            # Check if we have the required columns
+            if "gene_integer_id" in genes_df.columns and "gene_id" in genes_df.columns:
                 gene_vocab = {}
 
                 # Use Polars native iteration
-                for row in var_df.iter_rows(named=True):
+                for row in genes_df.iter_rows(named=True):
                     gene_id = row["gene_id"]
                     gene_integer_id = row["gene_integer_id"]
 
@@ -193,12 +241,13 @@ class SLAFTokenizer:
                         self.vocab_mapping[gene_id_int] = token_id
                     except (ValueError, TypeError):
                         continue
-            else:
-                # Mock object - create dummy vocabulary
-                self.gene_vocab = {f"gene_{i}": i for i in range(1000)}
-                # Account for the +4 offset used in tokenization
-                self.token_to_gene = {v + 4: k for k, v in self.gene_vocab.items()}
-                # No mapping array needed for mock objects
+                return
+
+            # Fallback: Mock object or missing columns
+            self.gene_vocab = {f"gene_{i}": i for i in range(1000)}
+            # Account for the +4 offset used in tokenization
+            self.token_to_gene = {v + 4: k for k, v in self.gene_vocab.items()}
+            # No mapping array needed for mock objects
 
         except Exception:
             # Fallback for testing or error cases
