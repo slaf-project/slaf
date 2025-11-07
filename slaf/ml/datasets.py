@@ -569,11 +569,17 @@ class PrefetchBatchProcessor:
         """
         try:
             # Read batches_per_chunk times from this generator
-            generator_batches = []
+            generator_batches: list[pl.DataFrame] = []
             for _ in range(self.batches_per_chunk):
                 try:
                     batch = next(self.fragment_generators[generator_idx])
-                    batch_df = pl.from_arrow(batch)
+                    batch_df_raw = pl.from_arrow(batch)
+                    # Ensure we have a DataFrame, not a Series
+                    if isinstance(batch_df_raw, pl.Series):
+                        raise TypeError(
+                            "Expected DataFrame but got Series from generator batch"
+                        )
+                    batch_df: pl.DataFrame = batch_df_raw
                     generator_batches.append(batch_df)
                 except StopIteration:
                     # This generator is exhausted
@@ -588,6 +594,10 @@ class PrefetchBatchProcessor:
                 generator_combined = pl.concat(generator_batches)  # type: ignore
             else:
                 generator_combined = generator_batches[0]
+
+            # Ensure we return a DataFrame, not a Series
+            if isinstance(generator_combined, pl.Series):
+                raise TypeError("Expected DataFrame but got Series from generator")
 
             return generator_combined, generator_idx, False
 
@@ -639,6 +649,10 @@ class PrefetchBatchProcessor:
             # Load data based on strategy
             load_start = time.time()
 
+            # Declare combined_df and batch_count before branches to avoid redefinition errors
+            combined_df: pl.DataFrame
+            batch_count: int
+
             if self.use_mixture_of_scanners:
                 # MoS approach: randomly sample from active fragment generators
 
@@ -676,7 +690,7 @@ class PrefetchBatchProcessor:
                     )
 
                 # Collect batches from selected generators
-                batch_dfs = []
+                mos_batch_dfs: list[pl.DataFrame] = []
                 generator_results: list[tuple[pl.DataFrame | None, int, bool]] = []
 
                 if self.parallelize_fragment_reads:
@@ -774,20 +788,28 @@ class PrefetchBatchProcessor:
                         )  # type: ignore
 
                     # Add to batch collection
-                    batch_dfs.append(generator_combined)
+                    mos_batch_dfs.append(generator_combined)
 
-                if not batch_dfs:
+                if not mos_batch_dfs:
                     # All selected generators are exhausted, continue to next iteration
                     continue
 
                 # Combine all batches
-                combined_df = pl.concat(batch_dfs, how="vertical")  # type: ignore
+                combined_df = pl.concat(mos_batch_dfs, how="vertical")  # type: ignore
+                batch_count = len(mos_batch_dfs)
 
             elif self.by_fragment:
                 # Fragment-based approach: load one fragment at a time
                 try:
                     fragment = next(self.fragment_iterator)
-                    combined_df = pl.from_arrow(fragment.to_table())
+                    combined_df_raw = pl.from_arrow(fragment.to_table())
+                    # Ensure we have a DataFrame, not a Series
+                    if isinstance(combined_df_raw, pl.Series):
+                        raise TypeError(
+                            "Expected DataFrame but got Series from fragment"
+                        )
+                    combined_df = combined_df_raw
+                    batch_count = 1  # One fragment
                 except StopIteration:
                     # Check if we should start a new epoch
                     if self.current_epoch + 1 < self.n_epochs:
@@ -802,11 +824,17 @@ class PrefetchBatchProcessor:
                         raise StopIteration("No more epochs available") from None
             else:
                 # Sequential approach: load multiple batches
-                batch_dfs = []
+                batch_dfs: list[pl.DataFrame] = []
                 for _ in range(self.batches_per_chunk):
                     try:
                         batch = next(self.batch_generator)
-                        batch_df = pl.from_arrow(batch)
+                        batch_df_raw = pl.from_arrow(batch)
+                        # Ensure we have a DataFrame, not a Series
+                        if isinstance(batch_df_raw, pl.Series):
+                            raise TypeError(
+                                "Expected DataFrame but got Series from batch"
+                            )
+                        batch_df: pl.DataFrame = batch_df_raw
                         batch_dfs.append(batch_df)
                     except StopIteration:
                         break
@@ -826,6 +854,7 @@ class PrefetchBatchProcessor:
 
                 # Combine all batches
                 combined_df = pl.concat(batch_dfs, how="vertical")  # type: ignore
+                batch_count = len(batch_dfs)
             load_time = time.time() - load_start
 
             # Record lance loading timing
@@ -840,10 +869,7 @@ class PrefetchBatchProcessor:
 
                 # Store timing info for consolidated report
                 self._last_load_time = load_time
-                if self.by_fragment:
-                    self._last_batch_dfs_count = 1  # One fragment
-                else:
-                    self._last_batch_dfs_count = len(batch_dfs)
+                self._last_batch_dfs_count = batch_count
                 self._last_total_rows = combined_df.shape[0]
                 self._last_memory_mb = memory_mb
 
