@@ -129,7 +129,7 @@ class SLAFArray:
             # For local paths, use os.path.join
             return os.path.join(base_path, *paths)
 
-    def __init__(self, slaf_path: str):
+    def __init__(self, slaf_path: str, load_metadata: bool = True):
         """
         Initialize SLAF array from a SLAF dataset directory.
 
@@ -137,6 +137,10 @@ class SLAFArray:
             slaf_path: Path to SLAF directory containing config.json and .lance files.
                        The directory should contain the dataset configuration and Lance tables.
                        Supports both local paths and cloud storage (S3, GCS, Azure, etc.).
+            load_metadata: If True, load cell and gene metadata (obs/var) in background.
+                          If False, skip metadata loading for faster initialization, especially
+                          useful for cloud datasets. Metadata can still be loaded on-demand when
+                          accessing obs/var properties. Default: True.
 
         Raises:
             FileNotFoundError: If the SLAF config file is not found at the specified path.
@@ -149,10 +153,17 @@ class SLAFArray:
             >>> print(f"Loaded dataset: {slaf_array.shape}")
             Loaded dataset: (2700, 32738)
 
-            >>> # Load from cloud storage
-            >>> slaf_array = SLAFArray("s3://bucket/data.slaf")
+            >>> # Load from cloud storage without metadata (faster initialization)
+            >>> slaf_array = SLAFArray("s3://bucket/data.slaf", load_metadata=False)
             >>> print(f"Cloud dataset: {slaf_array.shape}")
             Cloud dataset: (5000, 25000)
+            >>> print(f"Metadata loaded: {slaf_array.is_metadata_ready()}")
+            Metadata loaded: False
+
+            >>> # Load metadata on-demand
+            >>> slaf_array.wait_for_metadata()
+            >>> print(f"Metadata loaded: {slaf_array.is_metadata_ready()}")
+            Metadata loaded: True
 
             >>> # Error handling for missing directory
             >>> try:
@@ -166,6 +177,7 @@ class SLAFArray:
             slaf_path = str(slaf_path)
 
         self.slaf_path = slaf_path
+        self._load_metadata_enabled = load_metadata
 
         # Validate dataset exists
         if not self._path_exists(self.slaf_path):
@@ -196,8 +208,9 @@ class SLAFArray:
 
         self.row_mapper = RowIndexMapper(self)
 
-        # Start async metadata loading in background
-        self._start_async_metadata_loading()
+        # Start async metadata loading in background only if enabled
+        if self._load_metadata_enabled:
+            self._start_async_metadata_loading()
 
         # Display helpful initialization message
         self._display_initialization_message()
