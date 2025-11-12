@@ -2665,6 +2665,15 @@ class SLAFConverter:
         # Reset index to avoid __index_level_0__ column in Arrow table
         result_df = result_df.reset_index(drop=True)
 
+        # Sanitize column names: replace '.' with '_' for Lance compatibility
+        # Lance doesn't allow '.' in field names
+        column_mapping = {
+            col: col.replace(".", "_") for col in result_df.columns if "." in col
+        }
+        if column_mapping:
+            result_df = result_df.rename(columns=column_mapping)
+            logger.debug(f"Sanitized column names: {column_mapping}")
+
         table = pa.table(result_df)
 
         return table
