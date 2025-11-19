@@ -183,7 +183,7 @@ class scDatasetScalingBenchmark:
 
         try:
             from anndata.experimental import AnnCollection
-            from scdataset import scDataset
+            from scdataset import BlockShuffling, scDataset
             from torch.utils.data import DataLoader
         except ImportError:
             self.console.print(
@@ -193,12 +193,14 @@ class scDatasetScalingBenchmark:
 
         try:
             # Setup scDataset with current parameters
+            # Using BlockShuffling strategy (v0.2.0+ API)
             collection = AnnCollection([self.adata])
+            strategy = BlockShuffling(block_size=block_size)
 
             sc_dataset = scDataset(
-                data_collection=collection,
+                collection,  # First positional arg is data
+                strategy,  # Second positional arg is strategy
                 batch_size=self.batch_size,
-                block_size=block_size,
                 fetch_factor=fetch_factor,
                 fetch_transform=fetch_transform_adata,  # Use module-level callback
             )

@@ -13,6 +13,7 @@ Competitor Systems:
 - scDataset (arXiv:2506.01883)
 - BioNeMo SCDL (NVIDIA)
 - AnnDataLoader (scvi-tools)
+- annbatch (lamin/scverse)
 """
 
 import gc
@@ -58,11 +59,13 @@ class ExternalDataloaderBenchmark:
         h5ad_path: str,
         tiledb_path: str = None,
         scdl_path: str = None,
+        annbatch_path: str = None,
     ):
         self.slaf_path = slaf_path
         self.h5ad_path = h5ad_path
         self.tiledb_path = tiledb_path
         self.scdl_path = scdl_path
+        self.annbatch_path = annbatch_path
         self.console = Console()
 
         # Load SLAF array
@@ -130,6 +133,15 @@ class ExternalDataloaderBenchmark:
                 },  # No tokenization
                 "processes": 1,
                 "estimated_performance": 2000,  # cells/sec estimate from NVIDIA docs
+            },
+            "annbatch": {
+                "tier1": {"raw_mode": True, "batch_size": self.batch_size},
+                "tier2": {
+                    "raw_mode": True,
+                    "batch_size": self.batch_size,
+                },  # No tokenization
+                "processes": 1,
+                "estimated_performance": 1000000,  # cells/sec from annbatch docs
             },
         }
 
@@ -289,6 +301,15 @@ class ExternalDataloaderBenchmark:
                             actual_batch_size = self.batch_size  # Fallback
                     else:
                         actual_batch_size = self.batch_size  # Fallback
+                elif system_name == "annbatch":
+                    # annbatch: get batch size from AnnData object
+                    if hasattr(_batch, "to_adata"):
+                        adata = _batch.to_adata()
+                        actual_batch_size = adata.n_obs
+                        # Force data loading while we have the adata object
+                        _ = adata.X
+                    else:
+                        actual_batch_size = self.batch_size  # Fallback
                 else:
                     # External dataloaders: use configured batch size
                     # Note: External dataloaders may have different batch formats
@@ -297,12 +318,13 @@ class ExternalDataloaderBenchmark:
 
                 # Force actual data loading by accessing the data
                 # This is crucial for getting realistic throughput measurements
-                if hasattr(_batch, "X"):
-                    # scDataset returns AnnCollectionView objects
-                    _ = _batch.X  # Force data loading
-                elif isinstance(_batch, dict) and "X" in _batch:
-                    # AnnDataLoader returns dict with 'X' key
-                    _ = _batch["X"]  # Force data loading
+                if system_name != "annbatch":  # annbatch already handled above
+                    if hasattr(_batch, "X"):
+                        # scDataset returns AnnCollectionView objects
+                        _ = _batch.X  # Force data loading
+                    elif isinstance(_batch, dict) and "X" in _batch:
+                        # AnnDataLoader returns dict with 'X' key
+                        _ = _batch["X"]  # Force data loading
 
                 batch_end = time.time()
                 batch_time_ms = (batch_end - batch_start) * 1000
@@ -517,16 +539,19 @@ class ExternalDataloaderBenchmark:
         # Convert SLAF to AnnData for scDataset
         try:
             from anndata.experimental import AnnCollection
+            from scdataset import BlockShuffling
             from torch.utils.data import DataLoader
 
             # Use the shared AnnData object
             collection = AnnCollection([self.adata])
 
             # Create scDataset with optimal parameters from the paper
+            # Using BlockShuffling strategy (v0.2.0+ API)
+            strategy = BlockShuffling(block_size=8)
             sc_dataset = scDataset(
-                data_collection=collection,
+                collection,  # First positional arg is data
+                strategy,  # Second positional arg is strategy
                 batch_size=self.batch_size,
-                block_size=8,
                 fetch_factor=64,
                 fetch_transform=fetch_transform_adata,  # Use module-level callback
             )
@@ -960,6 +985,135 @@ class ExternalDataloaderBenchmark:
         # So we don't report it in tier 2
         return None
 
+    def benchmark_annbatch_tier1(self) -> ExternalBenchmarkResult | None:
+        """Benchmark annbatch in Tier 1 (raw data loading)."""
+
+        try:
+            from pathlib import Path
+
+            import anndata as ad
+            import zarr
+            from annbatch import ZarrSparseDataset
+        except ImportError:
+            self.console.print(
+                "[yellow]Warning: annbatch not available, skipping annbatch benchmark[/yellow]"
+            )
+            return None
+
+        self.console.print(
+            "\n[bold blue]Benchmarking annbatch - Tier 1 (Raw Data Loading)[/bold blue]"
+        )
+
+        # Setup annbatch dataloader
+        try:
+            if not self.annbatch_path:
+                self.console.print(
+                    "[yellow]Warning: annbatch path not provided, skipping annbatch benchmark[/yellow]"
+                )
+                return None
+
+            # Configure zarr to use zarrs-python for performance
+            # Import zarrs first to register the codec pipeline
+            try:
+                import zarrs  # noqa: F401
+
+                zarr.config.set({"codec_pipeline.path": "zarrs.ZarrsCodecPipeline"})
+            except (ImportError, Exception):
+                # Continue without zarrs if not available
+                self.console.print(
+                    "[yellow]Warning: zarrs-python not available. Performance may be reduced.[/yellow]"
+                )
+                pass
+
+            # Find all zarr files in the collection directory
+            collection_path = Path(self.annbatch_path)
+            zarr_files = list(collection_path.glob("dataset_*.zarr"))
+
+            if not zarr_files:
+                self.console.print(
+                    f"[yellow]Warning: No zarr files found in {self.annbatch_path}, skipping annbatch benchmark[/yellow]"
+                )
+                return None
+
+            # Create AnnData objects from zarr files
+            anndatas = [
+                ad.AnnData(
+                    X=ad.io.sparse_dataset(zarr.open(str(p))["X"]),
+                    obs=ad.io.read_elem(zarr.open(str(p))["obs"]),
+                )
+                for p in zarr_files
+            ]
+
+            # Create annbatch dataloader
+            # Using recommended parameters from annbatch docs
+            dataloader = ZarrSparseDataset(
+                batch_size=self.batch_size,
+                chunk_size=32,  # Number of rows to load sequentially
+                preload_nchunks=256,  # Number of contiguous chunks to preload
+                preload_to_gpu=False,
+                to_torch=True,
+            ).add_anndatas(
+                anndatas,
+                obs_keys=None,  # No specific obs keys needed for benchmark
+            )
+        except Exception as e:
+            self.console.print(f"[red]Error setting up annbatch: {e}[/red]")
+            import traceback
+
+            traceback.print_exc()
+            return None
+
+        # Warm up (increased for fair comparison)
+        self.console.print("Warming up...")
+        warmup_batches = 15  # Increased from 3 for fair comparison
+        for i, _batch in enumerate(dataloader):
+            if i >= warmup_batches:
+                break
+
+        # Benchmark with peak memory tracking
+        self.console.print("Running benchmark...")
+        warmup_duration = 10  # Skip first 10 seconds for fair comparison
+        measurement_duration = 30  # Then measure for 30 seconds
+
+        total_cells, batch_count, elapsed_time, peak_memory = (
+            self.benchmark_with_memory_tracking(
+                dataloader, warmup_duration + measurement_duration, "annbatch"
+            )
+        )
+
+        # Clean up the dataloader to stop background processing
+        del dataloader
+        gc.collect()
+
+        # Calculate metrics (using only measurement time, not warmup)
+        measurement_time = elapsed_time - warmup_duration
+        throughput_cells_per_sec = (
+            total_cells / measurement_time if measurement_time > 0 else 0
+        )
+
+        # Debug output
+        self.console.print(
+            f"  Debug: {total_cells} cells, {measurement_time:.2f}s measurement, {throughput_cells_per_sec:.0f} cells/sec"
+        )
+
+        return ExternalBenchmarkResult(
+            system_name="annbatch",
+            tier="tier1",
+            throughput_cells_per_sec=throughput_cells_per_sec,
+            memory_usage_gb=peak_memory,
+            output_type="raw",
+            processes=1,  # Single process
+            measurement_time=measurement_time,
+            total_cells=total_cells,
+        )
+
+    def benchmark_annbatch_tier2(self) -> ExternalBenchmarkResult | None:
+        """Benchmark annbatch in Tier 2 (GPU-ready output)."""
+
+        # annbatch only provides raw data, not GPU-ready output
+        # So we don't report it in tier 2
+        return None
+
     def run_benchmarks(self) -> list[ExternalBenchmarkResult]:
         """Run benchmarks for all external dataloaders."""
 
@@ -1045,6 +1199,18 @@ class ExternalDataloaderBenchmark:
                 results.append(scdl_tier2)
         except Exception as e:
             self.console.print(f"[red]Error benchmarking BioNeMo SCDL: {e}[/red]")
+
+        # Run annbatch benchmarks
+        try:
+            annbatch_tier1 = self.benchmark_annbatch_tier1()
+            if annbatch_tier1:
+                results.append(annbatch_tier1)
+
+            annbatch_tier2 = self.benchmark_annbatch_tier2()
+            if annbatch_tier2:
+                results.append(annbatch_tier2)
+        except Exception as e:
+            self.console.print(f"[red]Error benchmarking annbatch: {e}[/red]")
 
         return results
 
@@ -1159,9 +1325,10 @@ def main():
     h5ad_path = "../slaf-datasets/plate1_Tahoe100M.h5ad"
     tiledb_path = "../slaf-datasets/synthetic_50k_processed.tiledb"
     scdl_path = "../slaf-datasets/plate1_Tahoe100M.scdl"
+    annbatch_path = "../slaf-datasets/plate1_Tahoe100M_annbatch"
 
     benchmark = ExternalDataloaderBenchmark(
-        slaf_path, h5ad_path, tiledb_path, scdl_path
+        slaf_path, h5ad_path, tiledb_path, scdl_path, annbatch_path
     )
     results = benchmark.run_benchmarks()
     benchmark.print_results(results)
