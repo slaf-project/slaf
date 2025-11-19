@@ -212,32 +212,117 @@ print("Cell type analysis:")
 print(cell_type_analysis)
 ```
 
-## Lazy Evaluation with Scanpy Integration
+## Lazy Evaluation with Anndata Integration
 
-SLAF works seamlessly with Scanpy for familiar workflows with lazy evaluation:
+SLAF works seamlessly with Scanpy for familiar
+workflows with lazy evaluation:
 
 ```python
 from slaf.integrations.anndata import read_slaf
 
 # Load as lazy AnnData
 adata = read_slaf(slaf_path)
-
-print(f"✅ Loaded as LazyAnnData: {adata.shape[0]:,} cells × {adata.shape[1]:,} genes")
-print(f"   Type: {type(adata)}")
-print(f"   Expression matrix type: {type(adata.X)}")
-
-# Use familiar AnnData operations
-print(f"\nCell metadata: {adata.obs.columns.tolist()}")
-print(f"Gene metadata: {adata.var.columns.tolist()}")
+print(f"✅ Loaded: {adata.shape[0]:,} cells × "
+      f"{adata.shape[1]:,} genes")
 
 # Lazy slicing - no data loaded yet
 t_cells = adata[adata.obs.cell_type == "T_cell", :]
-print(f"\nT cells subset: {t_cells.shape}")
 
 # Only load data when you need it
 expression_matrix = t_cells.X.compute()
-print(f"Loaded expression matrix: {expression_matrix.shape}")
+print(f"Computed expression: {expression_matrix.shape}")
 ```
+
+## Lazy Scanpy Preprocessing
+
+SLAF provides lazy versions of scanpy preprocessing functions
+that work efficiently on large datasets:
+
+```python
+from slaf.integrations import scanpy as slaf_scanpy
+from slaf.integrations.anndata import read_slaf
+
+# Load as lazy AnnData
+adata = read_slaf(slaf_path)
+
+# Calculate QC metrics (lazy SQL aggregation)
+cell_qc, gene_qc = slaf_scanpy.pp.calculate_qc_metrics(
+    adata, inplace=False
+)
+print("Cell QC metrics:")
+print(cell_qc.head())
+
+# Filter cells (lazy - no data loaded)
+adata_filtered = slaf_scanpy.pp.filter_cells(
+    adata,
+    min_genes=200,
+    min_counts=1000,
+    inplace=False
+)
+print(f"After filtering: {adata_filtered.shape}")
+
+# Filter genes (lazy)
+adata_filtered = slaf_scanpy.pp.filter_genes(
+    adata_filtered,
+    min_cells=30,
+    inplace=False
+)
+print(f"After gene filtering: {adata_filtered.shape}")
+
+# Normalize total (lazy transformation)
+adata_norm = slaf_scanpy.pp.normalize_total(
+    adata_filtered,
+    target_sum=1e4,
+    inplace=False
+)
+
+# Apply log1p transformation (lazy)
+adata_log = slaf_scanpy.pp.log1p(
+    adata_norm, inplace=False
+)
+
+# Find highly variable genes (lazy SQL)
+hvg_stats = slaf_scanpy.pp.highly_variable_genes(
+    adata_log,
+    min_mean=0.0125,
+    max_mean=3,
+    min_disp=0.5,
+    inplace=False
+)
+print(f"Highly variable genes: {hvg_stats['highly_variable'].sum()}")
+
+# All operations are lazy - compute when needed
+expression = adata_log.X.compute()
+print(f"Computed expression: {expression.shape}")
+```
+
+### Chaining Transformations
+
+You can chain lazy transformations efficiently:
+
+```python
+# Build complete preprocessing pipeline
+adata_processed = slaf_scanpy.pp.normalize_total(
+    adata, target_sum=1e4, inplace=False
+)
+adata_processed = slaf_scanpy.pp.log1p(
+    adata_processed, inplace=False
+)
+
+# Slice after transformations
+subset = adata_processed[:1000, :500]
+
+# Compute only when needed
+result = subset.X.compute()
+print(f"Processed subset: {result.shape}")
+```
+
+### Key Benefits
+
+- **Memory Efficient**: Operations stored as instructions
+- **SQL Performance**: QC metrics use SQL aggregation
+- **Composable**: Chain transformations easily
+- **Lazy**: Compute only when you call `.compute()`
 
 ## Efficient Filtering
 

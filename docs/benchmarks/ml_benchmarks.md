@@ -52,6 +52,20 @@ We benchmarked different tokenization strategies to understand the performance i
 | Geneformer without percentile filtering | 6,494                  | 13,300,337              |
 | Raw mode (no tokenization)              | 22,323                 | N/A                     |
 
+**Tokenization Strategy Comparison:**
+
+```
+Throughput (cells/sec)
+─────────────────────────────────────────────────────────
+Raw mode              ████████████████████████ 22,323
+Geneformer (filter)   ███████ 6,999
+Geneformer (no filt)  ██████ 6,494
+scGPT (binning)       █████ 5,350
+scGPT (no binning)    █████ 5,157
+─────────────────────────────────────────────────────────
+                      0    5K   10K   15K   20K   25K
+```
+
 !!! success "Strategy Insights"
 
     - **Geneformer strategies** show ~30% higher throughput than scGPT strategies
@@ -68,6 +82,19 @@ Raw mode bypasses tokenization and returns Polars DataFrames that have the exact
 | 64         | 25,259                 | 765,957     | 30.3                 |
 | 128        | 28,079                 | 842,394     | 30.0                 |
 | 256        | 28,169                 | 850,146     | 30.2                 |
+
+**Raw Mode Batch Size Scaling:**
+
+```
+Throughput (cells/sec)
+─────────────────────────────────────────────────────────
+Batch 256    ████████████████████████████████ 28,169
+Batch 128    ██████████████████████████████ 28,079
+Batch 64     ███████████████████████████ 25,259
+Batch 32     ██████████████████████████ 23,783
+─────────────────────────────────────────────────────────
+             0    5K   10K   15K   20K   25K   30K
+```
 
 !!! success "Optimization Validation"
 
@@ -100,6 +127,19 @@ Tokenized mode provides pre-tokenized sequences ready for GPU training, demonstr
 | 64         | 7,147                  | 14,637,356              | 223,872     | 31.3                 |
 | 128        | 7,309                  | 14,969,420              | 224,663     | 30.7                 |
 | 256        | 7,269                  | 14,885,945              | 224,511     | 30.9                 |
+
+**Tokenized Mode Throughput Scaling:**
+
+```
+Throughput (tokens/sec, millions)
+─────────────────────────────────────────────────────────
+Batch 128    ████████████████████████████████ 14.97M
+Batch 256   ███████████████████████████████ 14.89M
+Batch 64    ███████████████████████████████ 14.64M
+Batch 32    ███████████████████████████████ 14.62M
+─────────────────────────────────────────────────────────
+             0    3M    6M    9M   12M   15M   18M
+```
 
 !!! success "Tokenization Efficiency"
 
@@ -169,13 +209,14 @@ We ran a test on 10,000 batches with a batch_size of 32 from a 5.4M cell dataset
 
 ### **Alternate Dataloaders**
 
-We compared SLAF against five state-of-the-art dataloaders:
+We compared SLAF against six state-of-the-art dataloaders:
 
-1. **[AnnLoader](https://anndata.readthedocs.io/en/latest/generated/anndata.experimental.AnnLoader.html)** - Experimental PyTorch DataLoader for AnnData objects from `anndata.experimental`
-2. **[AnnDataLoader](https://docs.scvi-tools.org/en/stable/api/reference/scvi.dataloaders.AnnDataLoader.html)** - From [scvi-tools](https://docs.scvi-tools.org/en/stable/index.html), designed for training variational autoencoder (VAE)-style models
-3. **[scDataset](https://github.com/Kidara/scDataset/tree/main)** - Recently released high-performance dataloader with multiprocessing support
-4. **[TileDB DataLoader](https://tiledbsoma.readthedocs.io/)** - An internal custom PyTorch DataLoader for TileDB SOMA experiments
-5. **[BioNeMo SCDL](https://docs.nvidia.com/bionemo-framework/2.0/user-guide/developer-guide/bionemo-scdl/bionemo-scdl-Overview/)** - NVIDIA's single-cell data loading framework for scalable training of foundation models
+1. **[annbatch](https://annbatch.readthedocs.io/en/stable/index.html)** - High-performance data loader for minibatching on-disk AnnData, co-developed by lamin and scverse
+2. **[AnnLoader](https://anndata.readthedocs.io/en/latest/generated/anndata.experimental.AnnLoader.html)** - Experimental PyTorch DataLoader for AnnData objects from `anndata.experimental`
+3. **[AnnDataLoader](https://docs.scvi-tools.org/en/stable/api/reference/scvi.dataloaders.AnnDataLoader.html)** - From [scvi-tools](https://docs.scvi-tools.org/en/stable/index.html), designed for training variational autoencoder (VAE)-style models
+4. **[scDataset](https://github.com/Kidara/scDataset/tree/main)** - Recently released high-performance dataloader with multiprocessing support
+5. **[TileDB DataLoader](https://tiledbsoma.readthedocs.io/)** - An internal custom PyTorch DataLoader for TileDB SOMA experiments
+6. **[BioNeMo SCDL](https://docs.nvidia.com/bionemo-framework/2.0/user-guide/developer-guide/bionemo-scdl/bionemo-scdl-Overview/)** - NVIDIA's single-cell data loading framework for scalable training of foundation models
 
 ### **Methodology**
 
@@ -192,24 +233,49 @@ This ensures fair and consistent performance comparisons across all dataloader s
 
 ### **Tier 1: Raw Data Loading Comparison**
 
-Raw data loading performance measures the base throughput of each system without any tokenization overhead.
+Raw data loading performance measures the base throughput of each system without any tokenization overhead. All benchmarks use `batch_size=64` for consistent comparison.
 
-| System            | Throughput (cells/sec) |
-| ----------------- | ---------------------- |
-| **SLAF**          | **24,587**             |
-| scDataset         | 9,550                  |
-| BioNeMo SCDL      | 3,101                  |
-| TileDB DataLoader | 518                    |
-| AnnDataLoader     | 422                    |
-| AnnLoader         | 239                    |
+| System                  | Throughput (cells/sec) |
+| ----------------------- | ---------------------- |
+| **annbatch**            | **68,867**             |
+| **SLAF**                | **22,399**             |
+| BioNeMo SCDL            | 2,976                  |
+| scDataset               | 2,550                  |
+| TileDB DataLoader (MoS) | 601                    |
+| AnnDataLoader           | 411                    |
+| AnnLoader               | 251                    |
+
+**Throughput Comparison Chart:**
+
+```
+Throughput (cells/sec)
+─────────────────────────────────────────────────────────
+annbatch          ████████████████████████████████████ 68,867
+SLAF              ████████████ 22,399
+BioNeMo SCDL      ██ 2,976
+scDataset         ██ 2,550
+TileDB (MoS)      █ 601
+AnnDataLoader      █ 411
+AnnLoader          █ 251
+─────────────────────────────────────────────────────────
+                  0   10K   20K   30K   40K   50K   60K   70K
+```
 
 !!! success "SOTA Performance"
 
-    SLAF achieves **2.6x higher throughput** than scDataset, **7.9x higher throughput** than BioNeMo SCDL, **47.5x higher throughput** than TileDB DataLoader, **58.3x higher throughput** than AnnDataLoader, and **102.9x higher throughput** than AnnLoader in raw data loading.
+    SLAF achieves **8.8x higher throughput** than scDataset, **7.5x higher throughput** than BioNeMo SCDL, **37.3x higher throughput** than TileDB DataLoader, **54.5x higher throughput** than AnnDataLoader, and **89.2x higher throughput** than AnnLoader in raw data loading.
+
+!!! info "annbatch Performance Analysis"
+
+    annbatch demonstrates exceptional raw data loading performance, achieving **68,867 cells/sec**—**3.1x higher** than SLAF's throughput. This performance advantage stems from fundamental storage format differences: annbatch uses **CSC (Compressed Sparse Column)** format via zarr, which is optimized specifically for row-wise batch loading operations common in ML training workflows.
+
+    SLAF, in contrast, uses **COO (Coordinate)** format, which provides superior flexibility across multiple use cases. This design choice reflects SLAF's broader mission: to serve as a single unified format that efficiently supports (1) low-latency cell and gene queries, (2) batch processing operations, and (3) ML training workloads—all from the same stored representation without data duplication. The COO format enables SLAF to maintain a "store once, query in place" philosophy across these diverse workloads, trading some raw loading throughput for greater versatility and query performance.
+
+    For users whose primary use case is high-throughput ML training on pre-shuffled datasets, annbatch's CSC-based approach provides excellent performance. For users requiring a single format that supports both training and analytical queries, SLAF's COO-based architecture offers a more balanced solution.
 
 !!! info "scDataset Performance Analysis"
 
-    Our comprehensive benchmarks reveal that scDataset can achieve excellent performance with proper parameter tuning. We observed **9,550 cells/sec** with optimized parameters, which is **4.8x higher** than the paper's reported ~2,000 cells/sec, even without using multiprocessing. Note that these are completely different systems though (M1 Max vs NVIDIA DGX CPU).
+    Our comprehensive benchmarks reveal that scDataset achieves **2,550 cells/sec** with optimized parameters (`block_size=8`, `fetch_factor=64`). This performance is consistent with the system's design, though lower than our initial expectations. Note that these benchmarks use different hardware (M1 Max) than the scDataset paper's reported results (NVIDIA DGX CPU), which may account for some performance differences.
 
     However, we found significant limitations with multiprocessing due to pickling issues with h5py-backed AnnData objects. See our [detailed scDataset benchmarks](scdataset_benchmarks.md) for complete analysis including parameter scaling and multiprocessing limitations.
 

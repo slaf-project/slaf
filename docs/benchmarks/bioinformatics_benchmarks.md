@@ -24,6 +24,32 @@ These benchmarks demonstrate SLAF's performance advantages in three key areas:
 - **OS**: macOS 13.6.1
 - **Python**: 3.12.0
 
+### **Performance Summary Across All Categories**
+
+**SLAF vs h5ad Speedup:**
+
+```
+Speedup (x faster)
+─────────────────────────────────────────────────────────
+Cell Filtering     ████████████████████████████████████ 92.3x
+Gene Filtering     ████████████████ 17.3x
+Expression Queries █████████ 9.5x
+─────────────────────────────────────────────────────────
+                    0   20   40   60   80  100  120
+```
+
+**SLAF vs TileDB Speedup:**
+
+```
+Speedup (x faster)
+─────────────────────────────────────────────────────────
+Cell Filtering     ████ 9.4x
+Gene Filtering     ████████ 8.6x
+Expression Queries █ 0.9x (competitive)
+─────────────────────────────────────────────────────────
+                    0    2    4    6    8   10   12
+```
+
 ## **Cell Filtering Benchmarks**
 
 Cell filtering is a fundamental operation in single-cell analysis, used for quality control, cell type selection, and data subsetting.
@@ -48,6 +74,17 @@ Cell filtering is a fundamental operation in single-cell analysis, used for qual
 - **SLAF vs h5ad**: **92.3x faster**
 - **SLAF vs TileDB**: **9.4x faster**
 - **Memory Usage**: SLAF uses 115.7x less memory than h5ad
+
+**Cell Filtering Performance Summary:**
+
+```
+Speedup (x faster)
+─────────────────────────────────────────────────────────
+SLAF vs h5ad        ████████████████████████████████████ 92.3x
+SLAF vs TileDB      ████ 9.4x
+─────────────────────────────────────────────────────────
+                    0   20   40   60   80  100  120
+```
 
 ### **Key Insights**
 
@@ -82,6 +119,17 @@ Gene filtering operations are essential for feature selection, quality control, 
 - **SLAF vs h5ad**: **17.3x faster**
 - **SLAF vs TileDB**: **8.6x faster**
 - **Memory Usage**: SLAF uses 2.2x less memory than h5ad
+
+**Gene Filtering Performance Summary:**
+
+```
+Speedup (x faster)
+─────────────────────────────────────────────────────────
+SLAF vs h5ad        ████████████████ 17.3x
+SLAF vs TileDB      ████████ 8.6x
+─────────────────────────────────────────────────────────
+                    0    5   10   15   20   25   30
+```
 
 ### **Key Insights**
 
@@ -118,6 +166,17 @@ Expression queries retrieve specific expression data for cells or genes, support
 - **SLAF vs h5ad**: **9.5x faster**
 - **SLAF vs TileDB**: **0.9x faster**
 - **Memory Usage**: SLAF uses 154.6x less memory than h5ad
+
+**Expression Queries Performance Summary:**
+
+```
+Speedup (x faster)
+─────────────────────────────────────────────────────────
+SLAF vs h5ad        █████████ 9.5x
+SLAF vs TileDB      █ 0.9x (competitive)
+─────────────────────────────────────────────────────────
+                    0    2    4    6    8   10   12
+```
 
 ### **Key Insights**
 
