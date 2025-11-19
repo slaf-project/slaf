@@ -267,11 +267,11 @@ AnnLoader          █ 251
 
 !!! info "annbatch Performance Analysis"
 
-    annbatch demonstrates exceptional raw data loading performance, achieving **68,867 cells/sec**—**3.1x higher** than SLAF's throughput. This performance advantage stems from fundamental storage format differences: annbatch uses **CSC (Compressed Sparse Column)** format via zarr, which is optimized specifically for row-wise batch loading operations common in ML training workflows.
+    annbatch demonstrates exceptional raw data loading performance, achieving **68,867 cells/sec**—**3.1x higher** than SLAF's throughput. This performance advantage stems from fundamental storage format differences: annbatch uses **CSR (Compressed Sparse Row)** format via zarr, which is optimized specifically for row-wise batch loading operations common in ML training workflows.
 
     SLAF, in contrast, uses **COO (Coordinate)** format, which provides superior flexibility across multiple use cases. This design choice reflects SLAF's broader mission: to serve as a single unified format that efficiently supports (1) low-latency cell and gene queries, (2) batch processing operations, and (3) ML training workloads—all from the same stored representation without data duplication. The COO format enables SLAF to maintain a "store once, query in place" philosophy across these diverse workloads, trading some raw loading throughput for greater versatility and query performance.
 
-    For users whose primary use case is high-throughput ML training on pre-shuffled datasets, annbatch's CSC-based approach provides excellent performance. For users requiring a single format that supports both training and analytical queries, SLAF's COO-based architecture offers a more balanced solution.
+    For users whose primary use case is high-throughput ML training on pre-shuffled datasets, annbatch's CSR-based approach provides excellent performance. For users requiring a single format that supports both training and analytical queries, SLAF's COO-based architecture offers a more balanced solution.
 
 !!! info "scDataset Performance Analysis"
 
