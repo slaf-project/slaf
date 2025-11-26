@@ -307,8 +307,11 @@ class DistributedSLAFDataLoader:
         # Create queue object for the dataloader
         queue = modal.Queue.from_name(queue_name, create_if_missing=True)
 
-        # Create dataloader with queue object (framework-agnostic)
-        self.dataloader = DistributedDataLoader(queue)
+        # Create dataloader with queue object and batch_size (framework-agnostic)
+        # Default to return_tensors=True to match SLAFDataLoader behavior
+        self.dataloader = DistributedDataLoader(
+            queue, batch_size=batch_size, return_tensors=True
+        )
         self.worker_handles = worker_handles
         self.queue_name = queue_name  # Store queue name for external access
         self.partial_groups_kv_name = (
