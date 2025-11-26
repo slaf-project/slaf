@@ -3,6 +3,7 @@ Generic worker implementation for distributed dataloading.
 
 """
 
+import pickle
 import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -285,9 +286,24 @@ def prefetch_worker(
                             continue
 
                         # Put each sample separately to the queue
-                        # No size checking needed - individual samples should be small
+                        # Check and print size for debugging
                         for sample in samples:
                             try:
+                                # Check sample size
+                                sample_size = len(pickle.dumps(sample))
+                                max_size = 1024 * 1024  # 1024 KiB
+
+                                if sample_size > max_size:
+                                    print(
+                                        f"[{worker_id}] WARNING: Sample size {sample_size:,} bytes ({sample_size / 1024:.2f} KiB) "
+                                        f"exceeds queue limit {max_size:,} bytes ({max_size / 1024:.2f} KiB)"
+                                    )
+                                elif sample_size > 1024:
+                                    print(
+                                        f"[{worker_id}] INFO: Sample size {sample_size:,} bytes ({sample_size / 1024:.2f} KiB) "
+                                        f"(limit: {max_size / 1024:.2f} KiB)"
+                                    )
+
                                 queue.put(sample)
                                 total_batches += 1
                             except Exception as e:
