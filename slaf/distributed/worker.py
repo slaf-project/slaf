@@ -39,11 +39,22 @@ def prefetch_worker(
     Returns:
         Dictionary with worker metrics
     """
+    print(f"[{worker_id}] Starting worker with {len(partition_indices)} partitions")
+    print(
+        f"[{worker_id}] Partitions: {partition_indices[:10]}{'...' if len(partition_indices) > 10 else ''}"
+    )
+
     # Import data source (generic)
     from slaf.distributed.data_source import LanceDataSource
 
     if data_source_config["type"] == "lance":
+        print(
+            f"[{worker_id}] Creating LanceDataSource for: {data_source_config['path']}"
+        )
         data_source = LanceDataSource(data_source_config["path"])
+        print(
+            f"[{worker_id}] DataSource created, partition count: {data_source.get_partition_count()}"
+        )
     else:
         raise ValueError(f"Unknown data source type: {data_source_config['type']}")
 
@@ -228,7 +239,12 @@ def prefetch_worker(
     total_rows = 0
     epochs = processor_config.get("n_epochs", 1)
 
+    print(
+        f"[{worker_id}] Starting processing: {epochs} epochs, {len(partition_indices)} partitions"
+    )
+
     for epoch in range(epochs):
+        print(f"[{worker_id}] Starting epoch {epoch + 1}/{epochs}")
         # Reset reader active status for new epoch
         reader_active = dict.fromkeys(partition_indices, True)
         partition_readers = {}  # Reset readers for new epoch
@@ -271,6 +287,12 @@ def prefetch_worker(
                         queue.put(result)
                         total_batches += 1
                         total_rows += rows
+
+                        # Log first few batches for debugging
+                        if total_batches <= 3:
+                            print(
+                                f"[{worker_id}] Sent batch {total_batches} to queue (rows: {rows})"
+                            )
 
                         # Check max_batches limit
                         if max_batches is not None and total_batches >= max_batches:
