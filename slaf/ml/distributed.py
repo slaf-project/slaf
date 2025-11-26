@@ -44,6 +44,7 @@ app = modal.App("slaf-distributed-dataloader")
     cpu=8,
     memory=32768,  # 32 GB per worker
     timeout=3600,
+    secrets=[modal.Secret.from_name("s3-credentials")],
 )
 def distributed_prefetch_worker(
     worker_id: str,
@@ -254,19 +255,54 @@ class DistributedSLAFDataLoader:
         worker_function.hydrate()
 
         worker_handles = []
+        print(f"Spawning {len(assignments)} workers...")
         for worker_id, assignment in assignments.items():
-            handle = worker_function.spawn(
-                worker_id=worker_id,
-                partition_indices=assignment.partition_indices,
-                data_source_config=data_source_config,
-                processor_config=processor_config,
-                queue_name=queue_name,
-                n_scanners=n_scanners,
-                batches_per_partition=batches_per_partition,
-                prefetch_batch_size=prefetch_batch_size,
-                partial_groups_kv_name=partial_groups_kv_name,
+            print(
+                f"  Spawning worker {worker_id} with {len(assignment.partition_indices)} partitions"
             )
-            worker_handles.append(handle)
+            try:
+                handle = worker_function.spawn(
+                    worker_id=worker_id,
+                    partition_indices=assignment.partition_indices,
+                    data_source_config=data_source_config,
+                    processor_config=processor_config,
+                    queue_name=queue_name,
+                    n_scanners=n_scanners,
+                    batches_per_partition=batches_per_partition,
+                    prefetch_batch_size=prefetch_batch_size,
+                    partial_groups_kv_name=partial_groups_kv_name,
+                )
+                worker_handles.append(handle)
+                print(
+                    f"  ✅ Worker {worker_id} spawned successfully (handle: {handle})"
+                )
+            except Exception as e:
+                print(f"  ❌ Error spawning worker {worker_id}: {e}")
+                import traceback
+
+                traceback.print_exc()
+                raise
+
+        print(f"✅ All {len(worker_handles)} workers spawned successfully")
+        print(f"Queue name: {queue_name}")
+        print(f"KV store name: {partial_groups_kv_name}")
+
+        # Check worker status after a short delay
+        import time
+
+        print("Waiting 5 seconds for workers to initialize...")
+        time.sleep(5)
+
+        # Try to get worker status (non-blocking check)
+        for worker_id, handle in zip(assignments.keys(), worker_handles, strict=True):
+            try:
+                # Try to get result with timeout=0.1 (non-blocking)
+                # This will raise if worker hasn't started or has an error
+                result = handle.get(timeout=0.1)
+                print(f"  Worker {worker_id} completed: {result}")
+            except Exception:
+                # Expected - workers are still running
+                print(f"  Worker {worker_id} status: running (expected)")
 
         # Create queue object for the dataloader
         queue = modal.Queue.from_name(queue_name, create_if_missing=True)
