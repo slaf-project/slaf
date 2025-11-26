@@ -188,7 +188,7 @@ class BatchProcessor:
         raw_batches: list[pl.DataFrame],  # Raw tabular data with schema columns
         epoch: int = 0,
         partition_id: int | None = None,  # Optional partition ID for boundary tracking
-    ) -> dict[str, Any]:
+    ) -> list[dict[str, Any]]:
         """
         Process raw batches through pipeline: Boundary Handling → Shuffle → Window → Tokenize.
 
@@ -198,7 +198,9 @@ class BatchProcessor:
             partition_id: Optional partition/reader ID for tracking boundaries across partitions
 
         Returns:
-            Dictionary with processed batch (format depends on tokenizer)
+            List of sample dictionaries (one per group). Each sample contains:
+            - For tokenized: input_ids, attention_mask, group_key
+            - For raw: grouped (DataFrame), group_key
         """
         # Combine raw batches
         combined_df = pl.concat(raw_batches, how="vertical")
@@ -210,9 +212,9 @@ class BatchProcessor:
             partition_id=partition_id,
         )
 
-        # If no complete groups, return empty result (partial groups will be handled in next batch)
+        # If no complete groups, return empty list (partial groups will be handled in next batch)
         if len(complete_df) == 0:
-            return {"empty": True}
+            return []  # Return empty list instead of {"empty": True}
 
         # Apply shuffle (if provided) - shuffles groups
         if self.shuffle:
@@ -261,15 +263,66 @@ class BatchProcessor:
                 )
 
         # Apply tokenizer (if provided)
+        group_key_out = self.schema.group_key_out or self.schema.group_key
+        group_keys = grouped[group_key_out].to_list()
+
         if self.tokenizer:
-            result = self.tokenizer(grouped, self.schema)
+            # Tokenize all groups at once
+            tokenized = self.tokenizer(grouped, self.schema)
+            # Split into individual samples (one per group)
+            # tokenized has input_ids and attention_mask as lists/tensors
+            input_ids = tokenized["input_ids"]
+            attention_mask = tokenized["attention_mask"]
+
+            # Convert to list of samples using list comprehension (vectorized)
+            # Handle both list/tensor and scalar cases
+            is_indexable = hasattr(input_ids, "__getitem__") and hasattr(
+                attention_mask, "__getitem__"
+            )
+
+            if is_indexable:
+                # Vectorized: create all samples at once
+                samples = [
+                    {
+                        "input_ids": input_ids[idx],
+                        "attention_mask": attention_mask[idx],
+                        "group_key": group_key,
+                        **{
+                            key: (
+                                value[idx]
+                                if hasattr(value, "__getitem__") and len(value) > idx
+                                else value
+                            )
+                            for key, value in tokenized.items()
+                            if key not in ["input_ids", "attention_mask"]
+                        },
+                    }
+                    for idx, group_key in enumerate(group_keys)
+                ]
+            else:
+                # Scalar case: all groups share the same tokenized output
+                sample_base = {
+                    "input_ids": input_ids,
+                    "attention_mask": attention_mask,
+                    **{
+                        key: value
+                        for key, value in tokenized.items()
+                        if key not in ["input_ids", "attention_mask"]
+                    },
+                }
+                samples = [
+                    {**sample_base, "group_key": group_key} for group_key in group_keys
+                ]
         else:
-            # Return raw grouped data
-            group_key_out = self.schema.group_key_out or self.schema.group_key
-            result = {
-                "grouped": grouped,
-                "group_keys": grouped[group_key_out].to_list(),
-            }
+            # Return raw grouped data - split into individual samples
+            # Use Polars group_by to split efficiently (vectorized)
+            samples = [
+                {
+                    "grouped": grouped.filter(pl.col(group_key_out) == group_key),
+                    "group_key": group_key,
+                }
+                for group_key in group_keys
+            ]
 
         self.batch_id += 1
-        return result
+        return samples  # Return list of samples instead of single dict

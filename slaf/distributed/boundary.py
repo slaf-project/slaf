@@ -229,9 +229,9 @@ class GroupBoundaryHandler:
                 # Key format: f"{partition_id}:{group_id}"
                 key = f"{partition_id}:{group_id}"
 
-                # Store in KV (with TTL to prevent stale data accumulation)
-                # Modal Dict supports TTL - set to reasonable value (e.g., 1 hour)
-                self.partial_groups_kv.put(key, arrow_table, ttl=3600)
+                # Store in KV store
+                # Note: Modal Dict entries expire after 7 days of inactivity automatically
+                self.partial_groups_kv.put(key, arrow_table)
             except Exception as e:
                 # Log error but continue (don't fail worker)
                 print(f"Error storing partial group in KV store: {e}")
