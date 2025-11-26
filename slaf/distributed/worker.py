@@ -3,7 +3,6 @@ Generic worker implementation for distributed dataloading.
 
 """
 
-import pickle
 import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -269,41 +268,36 @@ def prefetch_worker(
                     for part_idx in sampled_partitions
                 }
 
+                # Batch multiple partition results before processing
+                # Collect results as they complete, then process in batches
+                pending_results = []
+                batch_size = min(4, len(sampled_partitions))  # Process in batches of 4
+
                 for future in as_completed(futures):
                     partition_idx, batch_dfs, is_exhausted, rows = future.result()
+                    pending_results.append((partition_idx, batch_dfs, rows))
 
-                    if batch_dfs:
-                        # Process batch through pipeline
-                        # Returns list of samples (one per group)
-                        samples = processor.process_batch(
-                            batch_dfs,
-                            epoch=epoch,
-                            partition_id=partition_idx,
-                        )
+                    # Process when we have enough results
+                    if len(pending_results) >= batch_size:
+                        # Process all pending results at once
+                        all_samples = []
+                        total_pending_rows = 0
 
-                        # Skip if no samples (empty batch)
-                        if not samples:
-                            continue
+                        for part_idx, batch_dfs, part_rows in pending_results:
+                            if batch_dfs:
+                                # Process batch through pipeline
+                                # Returns list of samples (one per group)
+                                samples = processor.process_batch(
+                                    batch_dfs,
+                                    epoch=epoch,
+                                    partition_id=part_idx,
+                                )
+                                all_samples.extend(samples)
+                                total_pending_rows += part_rows
 
-                        # Put each sample separately to the queue
-                        # Check and print size for debugging
-                        for sample in samples:
+                        # Put all samples to queue (vectorized)
+                        for sample in all_samples:
                             try:
-                                # Check sample size
-                                sample_size = len(pickle.dumps(sample))
-                                max_size = 1024 * 1024  # 1024 KiB
-
-                                if sample_size > max_size:
-                                    print(
-                                        f"[{worker_id}] WARNING: Sample size {sample_size:,} bytes ({sample_size / 1024:.2f} KiB) "
-                                        f"exceeds queue limit {max_size:,} bytes ({max_size / 1024:.2f} KiB)"
-                                    )
-                                elif sample_size > 1024:
-                                    print(
-                                        f"[{worker_id}] INFO: Sample size {sample_size:,} bytes ({sample_size / 1024:.2f} KiB) "
-                                        f"(limit: {max_size / 1024:.2f} KiB)"
-                                    )
-
                                 queue.put(sample)
                                 total_batches += 1
                             except Exception as e:
@@ -312,12 +306,13 @@ def prefetch_worker(
                                 )
                                 # Continue with next sample
 
-                        total_rows += rows
+                        total_rows += total_pending_rows
+                        pending_results.clear()  # Clear processed results
 
                         # Log first few batches for debugging
                         if total_batches <= 3:
                             print(
-                                f"[{worker_id}] Sent batch {total_batches} to queue (rows: {rows})"
+                                f"[{worker_id}] Sent {len(all_samples)} samples to queue (rows: {total_pending_rows})"
                             )
 
                         # Check max_batches limit
@@ -328,6 +323,40 @@ def prefetch_worker(
                                 "rows_processed": total_rows,
                                 "status": "completed",
                             }
+
+                # Process any remaining results after all futures complete
+                if pending_results:
+                    all_samples = []
+                    total_pending_rows = 0
+
+                    for part_idx, batch_dfs, part_rows in pending_results:
+                        if batch_dfs:
+                            samples = processor.process_batch(
+                                batch_dfs,
+                                epoch=epoch,
+                                partition_id=part_idx,
+                            )
+                            all_samples.extend(samples)
+                            total_pending_rows += part_rows
+
+                    # Put all samples to queue
+                    for sample in all_samples:
+                        try:
+                            queue.put(sample)
+                            total_batches += 1
+                        except Exception as e:
+                            print(f"[{worker_id}] Error putting sample to queue: {e}")
+
+                    total_rows += total_pending_rows
+
+                    # Check max_batches limit
+                    if max_batches is not None and total_batches >= max_batches:
+                        return {
+                            "worker_id": worker_id,
+                            "batches_produced": total_batches,
+                            "rows_processed": total_rows,
+                            "status": "completed",
+                        }
 
     # Send end-of-epoch marker
     queue.put({"end_of_epoch": True})
