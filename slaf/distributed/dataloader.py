@@ -7,13 +7,12 @@ batch_size samples to form a training batch.
 All GPUs in the cluster can concurrently read from the same FIFO queue,
 making it directly compatible with DDP or FSDP code.
 
-Uses multithreading to read from queue concurrently for better performance.
+Uses get_many for efficient batch reads from the queue.
 
-Framework-agnostic - accepts any queue-like object with get() method.
+Framework-agnostic - accepts any queue-like object with get_many() method.
 """
 
 from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 
@@ -41,29 +40,26 @@ class DistributedDataLoader:
         self,
         queue: Any,
         batch_size: int = 32,
-        n_queue_readers: int = 4,
         return_tensors: bool = True,
     ):
         """
         Initialize distributed dataloader.
 
         Args:
-            queue: Queue-like object with get(timeout) method
+            queue: Queue-like object with get_many() method
             batch_size: Number of samples to collect per training batch
-            n_queue_readers: Number of concurrent threads to read from queue (default: 4)
             return_tensors: If True, return torch.Tensor objects (matches SLAFDataLoader).
                           If False, return Python lists/objects. Default: True.
         """
         self.queue = queue
         self.batch_size = batch_size
-        self.n_queue_readers = n_queue_readers
         self.return_tensors = return_tensors
 
     def __iter__(self) -> Iterator[dict[str, Any]]:
         """
         Iterate over batches from the queue.
 
-        Collects batch_size samples from the queue using multithreaded reads
+        Collects batch_size samples from the queue using get_many (single round trip)
         and reshapes them directly into a training batch.
 
         Yields:
@@ -74,105 +70,113 @@ class DistributedDataLoader:
         """
         stop_iteration = False
 
-        with ThreadPoolExecutor(max_workers=self.n_queue_readers) as executor:
-            while not stop_iteration:
-                # Submit batch_size concurrent read tasks
-                futures = [
-                    executor.submit(self.queue.get, timeout=30.0)
-                    for _ in range(self.batch_size)
+        while not stop_iteration:
+            # Use get_many for batch_size samples (single round trip)
+            # This is much more efficient than multiple get() calls
+            try:
+                samples = self.queue.get_many(
+                    n_values=self.batch_size, block=True, timeout=30.0
+                )
+            except TimeoutError:
+                stop_iteration = True
+                break
+            except Exception as e:
+                print(f"Error reading from queue: {e}")
+                continue
+
+            if not samples:
+                stop_iteration = True
+                break
+
+            # Check for end-of-epoch marker
+            end_of_epoch_samples = [
+                s for s in samples if s is not None and s.get("end_of_epoch", False)
+            ]
+            if end_of_epoch_samples:
+                stop_iteration = True
+                # Filter out end-of-epoch markers
+                samples = [
+                    s
+                    for s in samples
+                    if s is not None and not s.get("end_of_epoch", False)
                 ]
-
-                # Get all results at once (vectorized)
-                try:
-                    samples = [f.result() for f in futures]
-                except TimeoutError:
-                    stop_iteration = True
-                    break
-                except Exception as e:
-                    print(f"Error reading from queue: {e}")
-                    continue
-
-                # Check for end-of-epoch marker
-                if any(s is None or s.get("end_of_epoch", False) for s in samples):
-                    stop_iteration = True
-                    # Filter out end-of-epoch markers
-                    samples = [
-                        s
-                        for s in samples
-                        if s is not None and not s.get("end_of_epoch", False)
-                    ]
-                    if not samples:
-                        break
-
-                # Reshape directly into batch format (no separate combine function)
                 if not samples:
-                    continue
+                    break
 
-                # Check format and reshape accordingly
-                if "input_ids" in samples[0] and "attention_mask" in samples[0]:
-                    # Tokenized format - matches SLAFDataLoader output
-                    if self.return_tensors:
-                        try:
-                            import torch
+            # Yield batch
+            if samples:
+                yield from self._format_batch(samples)
 
-                            input_ids = torch.stack(
-                                [
-                                    (
-                                        s["input_ids"]
-                                        if isinstance(s["input_ids"], torch.Tensor)
-                                        else torch.tensor(s["input_ids"])
-                                    )
-                                    for s in samples
-                                ]
-                            )
-                            attention_mask = torch.stack(
-                                [
-                                    (
-                                        s["attention_mask"]
-                                        if isinstance(s["attention_mask"], torch.Tensor)
-                                        else torch.tensor(s["attention_mask"])
-                                    )
-                                    for s in samples
-                                ]
-                            )
-                            # Convert group_key to cell_ids (torch.Tensor) to match SLAFDataLoader
-                            cell_ids = torch.tensor(
-                                [s.get("group_key", 0) for s in samples]
-                            )
+    def _format_batch(self, samples: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+        """
+        Format samples into a training batch.
 
-                            yield {
-                                "input_ids": input_ids,
-                                "attention_mask": attention_mask,
-                                "cell_ids": cell_ids,  # Matches SLAFDataLoader format
-                                **{
-                                    key: [s[key] for s in samples]
-                                    for key in samples[0].keys()
-                                    if key
-                                    not in ["input_ids", "attention_mask", "group_key"]
-                                },
-                            }
-                        except ImportError:
-                            # PyTorch not available - fall back to lists
-                            yield {
-                                "input_ids": [s["input_ids"] for s in samples],
-                                "attention_mask": [
-                                    s["attention_mask"] for s in samples
-                                ],
-                                "cell_ids": [s.get("group_key", 0) for s in samples],
-                            }
-                    else:
-                        # Return Python objects (lists)
-                        yield {
-                            "input_ids": [s["input_ids"] for s in samples],
-                            "attention_mask": [s["attention_mask"] for s in samples],
-                            "cell_ids": [s.get("group_key", 0) for s in samples],
-                        }
-                elif "grouped" in samples[0]:
-                    # Raw format - return list of DataFrames
+        Optimized tensor stacking - pre-extracts lists then stacks once.
+        """
+        if not samples:
+            return
+
+        # Check format and reshape accordingly
+        if "input_ids" in samples[0] and "attention_mask" in samples[0]:
+            # Tokenized format - matches SLAFDataLoader output
+            if self.return_tensors:
+                try:
+                    import torch
+
+                    # Optimized: extract all tensors first, then stack once
+                    # This is faster than stacking one-by-one
+                    input_ids_list = [
+                        (
+                            s["input_ids"]
+                            if isinstance(s["input_ids"], torch.Tensor)
+                            else torch.tensor(s["input_ids"])
+                        )
+                        for s in samples
+                    ]
+                    attention_mask_list = [
+                        (
+                            s["attention_mask"]
+                            if isinstance(s["attention_mask"], torch.Tensor)
+                            else torch.tensor(s["attention_mask"])
+                        )
+                        for s in samples
+                    ]
+
+                    input_ids = torch.stack(input_ids_list)
+                    attention_mask = torch.stack(attention_mask_list)
+                    # Convert group_key to cell_ids (torch.Tensor) to match SLAFDataLoader
+                    cell_ids = torch.tensor([s.get("group_key", 0) for s in samples])
+
                     yield {
-                        "grouped": [s["grouped"] for s in samples],
-                        "group_keys": [s.get("group_key") for s in samples],
+                        "input_ids": input_ids,
+                        "attention_mask": attention_mask,
+                        "cell_ids": cell_ids,  # Matches SLAFDataLoader format
+                        **{
+                            key: [s[key] for s in samples]
+                            for key in samples[0].keys()
+                            if key not in ["input_ids", "attention_mask", "group_key"]
+                        },
                     }
-                else:
-                    # Unknown format - return as-is
-                    yield {"samples": samples}
+                except ImportError:
+                    # PyTorch not available - fall back to lists
+                    yield {
+                        "input_ids": [s["input_ids"] for s in samples],
+                        "attention_mask": [s["attention_mask"] for s in samples],
+                        "cell_ids": [s.get("group_key", 0) for s in samples],
+                    }
+            else:
+                # Return Python objects (lists)
+                yield {
+                    "input_ids": [s["input_ids"] for s in samples],
+                    "attention_mask": [s["attention_mask"] for s in samples],
+                    "cell_ids": [s.get("group_key", 0) for s in samples],
+                }
+        elif "grouped" in samples[0]:
+            # Raw format - return list of DataFrames
+            yield {
+                "grouped": [s["grouped"] for s in samples],
+                "group_keys": [s.get("group_key") for s in samples],
+            }
+        else:
+            # Unknown format - return as-is
+            yield {"samples": samples}
