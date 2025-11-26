@@ -3,11 +3,13 @@ Generic Group Boundary Handler for distributed dataloading.
 
 Handles tracking and merging of groups that span partition boundaries.
 
-Supports cross-worker boundary merging via Modal Dict (KV store):
+Supports cross-worker boundary merging via KV store-like object:
 - When a worker finishes a partition, it stores partial groups in a shared KV store
 - When a worker starts a partition, it checks the KV store for matching partial groups
 - Partial groups are matched based on partition adjacency and group continuity
 - Uses key format: f"{partition_id}:{group_id}" for efficient lookups
+
+Framework-agnostic - accepts any KV store-like object with get, put, and pop methods.
 """
 
 from typing import TYPE_CHECKING, Any
@@ -15,8 +17,6 @@ from typing import TYPE_CHECKING, Any
 import polars as pl
 
 if TYPE_CHECKING:
-    import modal
-
     from slaf.distributed.processor import DataSchema
 
 
@@ -36,7 +36,7 @@ class GroupBoundaryHandler:
         self,
         schema: "DataSchema",
         continuity_check: str = "sequential",
-        partial_groups_kv: "modal.Dict | None" = None,
+        partial_groups_kv: Any | None = None,
     ):
         """
         Initialize boundary handler.
@@ -48,9 +48,11 @@ class GroupBoundaryHandler:
                              - "sequential": Groups are sequential integers (last_group + 1 = next_first_group)
                              - "ordered": Groups are ordered but not necessarily sequential
                              - "none": No continuity checking (assume groups are complete within partitions)
-            partial_groups_kv: Optional Modal Dict (KV store) for cross-worker partial group sharing.
+            partial_groups_kv: Optional KV store-like object for cross-worker partial group sharing.
                               If provided, enables boundary merging across workers.
+                              Must have methods: get(key), put(key, value, ttl=None), pop(key, default=None)
                               Keys are formatted as f"{partition_id}:{group_id}".
+                              Framework-agnostic - works with Modal Dict, Redis, or any KV store.
         """
         self.schema = schema
         self.continuity_check = continuity_check
