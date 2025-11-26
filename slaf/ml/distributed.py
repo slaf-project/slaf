@@ -1,0 +1,196 @@
+"""
+SLAF-specific distributed dataloader.
+
+Composes generic distributed components with SLAF-specific logic.
+"""
+
+from typing import Any
+
+import modal
+
+from slaf.core.slaf import SLAFArray
+from slaf.distributed.coordinator import Coordinator
+
+# Import generic distributed components
+from slaf.distributed.data_source import LanceDataSource
+from slaf.distributed.dataloader import DistributedDataLoader
+from slaf.distributed.processor import DataSchema
+from slaf.distributed.worker import prefetch_worker
+
+# Import SLAF-specific components (for type hints and adapters)
+from slaf.ml.aggregators import Window
+from slaf.ml.samplers import Shuffle
+from slaf.ml.tokenizers import SLAFTokenizer
+
+# Configure Modal image
+image = (
+    modal.Image.debian_slim(python_version="3.12")
+    .apt_install("build-essential", "python3-dev", "git")
+    .pip_install(["torch", "polars", "pyarrow", "numpy", "psutil"])
+    .run_commands(
+        "pip install git+https://github.com/slaf-project/slaf.git@distributed_dataloader#egg=slafdb"
+    )
+)
+
+# Set image in worker module (worker.py exports app and function)
+prefetch_worker._function._image = image
+
+
+class DistributedSLAFDataLoader:
+    """
+    SLAF-specific distributed dataloader.
+
+    Composes generic distributed components with SLAF-specific configuration.
+    """
+
+    def __init__(
+        self,
+        slaf_array: SLAFArray,
+        tokenizer_type: str = "geneformer",
+        window: Window | None = None,
+        shuffle: Shuffle | None = None,
+        tokenizer: SLAFTokenizer | None = None,
+        n_workers: int = 64,
+        n_scanners: int = 16,
+        prefetch_batch_size: int = 4_194_304,
+        batches_per_partition: int = 32,
+        batch_size: int = 32,
+        max_genes: int = 1024,
+        vocab_size: int = 50000,
+        n_expression_bins: int = 10,
+        n_epochs: int = 1,
+        raw_mode: bool = False,
+        seed: int = 42,
+        queue_name: str | None = None,
+        **window_kwargs: Any,
+    ):
+        """
+        Initialize distributed SLAF dataloader.
+
+        Args:
+            slaf_array: SLAFArray instance containing the data
+            tokenizer_type: Tokenization strategy ("geneformer", "scgpt", or "raw")
+                           If "raw", raw_mode is automatically enabled
+            window: Window function instance (optional, created automatically if None)
+            shuffle: Shuffle function instance (optional, created automatically if None)
+            tokenizer: SLAFTokenizer instance (optional, created automatically from tokenizer_type if None)
+            n_workers: Number of Modal workers
+            n_scanners: Number of scanners per worker (for MoS)
+            prefetch_batch_size: Batch size for reading from partitions
+            batches_per_partition: Number of batches to read per partition before processing
+            batch_size: Training batch size (not used in distributed mode, kept for compatibility)
+            max_genes: Maximum genes per cell after window function
+            vocab_size: Vocabulary size for tokenizer
+            n_expression_bins: Number of expression bins for scGPT
+            n_epochs: Number of epochs to process
+            raw_mode: If True, return raw data without tokenization
+            seed: Random seed for reproducibility
+            queue_name: Name of Modal Queue (auto-generated if None)
+            **window_kwargs: Additional window function parameters
+        """
+        # Handle raw_mode
+        if tokenizer_type == "raw":
+            raw_mode = True
+            tokenizer = None
+        elif raw_mode:
+            tokenizer = None
+
+        # Create tokenizer if not provided and not in raw mode
+        if tokenizer is None and not raw_mode:
+            tokenizer = SLAFTokenizer(
+                slaf_array=slaf_array,
+                tokenizer_type=tokenizer_type,
+                vocab_size=vocab_size,
+                n_expression_bins=n_expression_bins,
+            )
+        # Create data source
+        lance_path = f"{slaf_array.slaf_path}/expression.lance"
+        data_source = LanceDataSource(lance_path)
+
+        # Create coordinator
+        coordinator = Coordinator(data_source, n_workers)
+        assignments = coordinator.assign_partitions(seed=seed)
+
+        # Create queue
+        if queue_name is None:
+            queue_name = f"slaf-dataloader-{id(slaf_array)}"
+        modal.Queue.from_name(queue_name, create_if_missing=True)
+
+        # Prepare configs for workers
+        data_source_config = {
+            "type": "lance",
+            "path": lance_path,
+        }
+
+        # Data schema for SLAF (maps generic schema to SLAF column names)
+        schema = DataSchema(
+            group_key="cell_integer_id",  # Group by cell
+            item_key="gene_integer_id",  # Items are genes
+            value_key="value",  # Values are expression
+            group_key_out="cell_integer_id",  # Output keeps same group key
+            item_list_key="gene_sequence",  # Aggregated gene list
+            value_list_key="expr_sequence",  # Aggregated expression list (for scGPT)
+        )
+
+        processor_config = {
+            "schema": {
+                "group_key": schema.group_key,
+                "item_key": schema.item_key,
+                "value_key": schema.value_key,
+                "group_key_out": schema.group_key_out,
+                "item_list_key": schema.item_list_key,
+                "value_list_key": schema.value_list_key,
+            },
+            # Window factory config (module path in config, not hardcoded)
+            # For now, we'll use None and let the worker use the default Window
+            # TODO: Add factory functions to slaf.ml.aggregators and slaf.ml.samplers
+            "window_factory": None,  # Will use default Window from slaf.distributed
+            "shuffle_factory": None,  # Will use default Shuffle from slaf.distributed
+            "max_items": max_genes,  # Generic name
+            "seed": seed,
+            "n_epochs": n_epochs,
+            "window_kwargs": window_kwargs,
+            "continuity_check": "sequential",  # How to detect continuity between partitions
+            "enable_cross_worker_boundary_merging": True,  # Enable cross-worker merging via KV store
+        }
+
+        # Tokenizer factory config (for dynamic import in worker)
+        # Only include tokenizer if not in raw mode
+        if tokenizer and not raw_mode:
+            processor_config["tokenizer_factory"] = {
+                "module": "slaf.ml.tokenizers",
+                "class": "SLAFTokenizer",
+                "kwargs": {
+                    # Serialize tokenizer config (vocab size, etc.)
+                    # Tokenizer instance itself can't be serialized
+                    "tokenizer_type": tokenizer.tokenizer_type.value,
+                    "vocab_size": tokenizer.vocab_size,
+                    "n_expression_bins": tokenizer.n_expression_bins,
+                },
+            }
+        else:
+            # Raw mode - no tokenizer
+            processor_config["tokenizer_factory"] = None
+
+        # Spawn workers
+        worker_handles = []
+        for worker_id, assignment in assignments.items():
+            handle = prefetch_worker.spawn(
+                worker_id=worker_id,
+                partition_indices=assignment.partition_indices,
+                data_source_config=data_source_config,
+                processor_config=processor_config,
+                queue_name=queue_name,
+                n_scanners=n_scanners,
+                batches_per_partition=batches_per_partition,
+                prefetch_batch_size=prefetch_batch_size,
+            )
+            worker_handles.append(handle)
+
+        # Create dataloader
+        self.dataloader = DistributedDataLoader(queue_name)
+        self.worker_handles = worker_handles
+
+    def __iter__(self):
+        """Iterate over batches."""
+        return iter(self.dataloader)
