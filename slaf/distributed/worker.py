@@ -1,35 +1,26 @@
 """
-Generic Modal worker function for distributed dataloading.
+Generic worker implementation for distributed dataloading.
 
-Dynamically imports processors at runtime to avoid circular dependencies.
 """
 
 import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-import modal
 import polars as pl
 
-# Generic app name (not SLAF-specific)
-app = modal.App("distributed-dataloader")
 
-
-@app.function(
-    cpu=8,
-    memory=32768,  # 32 GB per worker
-    timeout=3600,
-)
 def prefetch_worker(
     worker_id: str,
     partition_indices: list[int],
     data_source_config: dict[str, Any],
     processor_config: dict[str, Any],
-    queue_name: str,
+    queue: Any,  # Modal Queue or any queue-like object
     n_scanners: int = 8,
     batches_per_partition: int = 32,
     prefetch_batch_size: int = 262144,
     max_batches: int | None = None,
+    partial_groups_kv: Any | None = None,  # Modal Dict or any KV store-like object
 ) -> dict[str, Any]:
     """
     Worker function - imports processors dynamically to avoid circular deps.
@@ -162,15 +153,8 @@ def prefetch_worker(
     # Create processor with data schema
     schema = DataSchema(**processor_config["schema"])
 
-    # Create partial groups KV store for cross-worker boundary merging
-    partial_groups_kv = None
-    if processor_config.get("enable_cross_worker_boundary_merging", False):
-        partial_groups_kv_name = f"{queue_name}-partial-groups"
-        partial_groups_kv = modal.Dict.from_name(
-            partial_groups_kv_name, create_if_missing=True
-        )
-
     # Create boundary handler with KV store support
+    # partial_groups_kv is passed as a parameter (created by caller)
     from slaf.distributed.boundary import GroupBoundaryHandler
 
     boundary_handler = GroupBoundaryHandler(
@@ -191,8 +175,7 @@ def prefetch_worker(
         **processor_config.get("window_kwargs", {}),
     )
 
-    # Get Modal Queue
-    queue = modal.Queue.from_name(queue_name, create_if_missing=False)
+    # Queue is passed as a parameter (created by caller)
 
     # Initialize partition readers (lazy - created on-demand)
     partition_readers: dict[int, Any] = {}
