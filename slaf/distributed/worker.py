@@ -284,10 +284,12 @@ def prefetch_worker(
                     if batch_dfs:
                         # Process batch through pipeline immediately (maintains partition state)
                         # Returns list of samples (one per group)
+                        # Pass is_exhausted so boundary handler knows if partition is done
                         samples = processor.process_batch(
                             batch_dfs,
                             epoch=epoch,
                             partition_id=partition_idx,
+                            is_partition_exhausted=is_exhausted,
                         )
                         all_samples_batch.extend(samples)
                         total_rows += rows
