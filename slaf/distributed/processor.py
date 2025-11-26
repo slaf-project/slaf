@@ -188,6 +188,7 @@ class BatchProcessor:
         raw_batches: list[pl.DataFrame],  # Raw tabular data with schema columns
         epoch: int = 0,
         partition_id: int | None = None,  # Optional partition ID for boundary tracking
+        is_partition_exhausted: bool = False,  # If True, all groups in this batch are complete
     ) -> list[dict[str, Any]]:
         """
         Process raw batches through pipeline: Boundary Handling → Shuffle → Window → Tokenize.
@@ -206,10 +207,12 @@ class BatchProcessor:
         combined_df = pl.concat(raw_batches, how="vertical")
 
         # Handle group boundaries: merge partial groups and track new partials
+        # Pass is_partition_exhausted to boundary handler
         complete_df, self.partial_groups = self.boundary_handler.merge_partial_data(
             self.partial_groups,
             combined_df,
             partition_id=partition_id,
+            is_partition_exhausted=is_partition_exhausted,
         )
 
         # If no complete groups, return empty list (partial groups will be handled in next batch)
