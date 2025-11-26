@@ -268,52 +268,68 @@ def prefetch_worker(
                     for part_idx in sampled_partitions
                 }
 
-                # Batch multiple partition results before processing
-                # Collect results as they complete, then process in batches
-                pending_results = []
-                batch_size = min(4, len(sampled_partitions))  # Process in batches of 4
+                # Process each partition result as it completes (maintains sequential processing per partition)
+                # Collect samples from all partitions, then batch put_many for efficiency
+                all_samples_batch = []
+                completed_futures = 0
 
                 for future in as_completed(futures):
                     partition_idx, batch_dfs, is_exhausted, rows = future.result()
-                    pending_results.append((partition_idx, batch_dfs, rows))
+                    completed_futures += 1
 
-                    # Process when we have enough results
-                    if len(pending_results) >= batch_size:
-                        # Process all pending results at once
-                        all_samples = []
-                        total_pending_rows = 0
+                    # Mark partition as inactive if exhausted
+                    if is_exhausted:
+                        reader_active[partition_idx] = False
 
-                        for part_idx, batch_dfs, part_rows in pending_results:
-                            if batch_dfs:
-                                # Process batch through pipeline
-                                # Returns list of samples (one per group)
-                                samples = processor.process_batch(
-                                    batch_dfs,
-                                    epoch=epoch,
-                                    partition_id=part_idx,
-                                )
-                                all_samples.extend(samples)
-                                total_pending_rows += part_rows
+                    if batch_dfs:
+                        # Process batch through pipeline immediately (maintains partition state)
+                        # Returns list of samples (one per group)
+                        samples = processor.process_batch(
+                            batch_dfs,
+                            epoch=epoch,
+                            partition_id=partition_idx,
+                        )
+                        all_samples_batch.extend(samples)
+                        total_rows += rows
 
-                        # Put all samples to queue (vectorized)
-                        for sample in all_samples:
-                            try:
-                                queue.put(sample)
-                                total_batches += 1
-                            except Exception as e:
-                                print(
-                                    f"[{worker_id}] Error putting sample to queue: {e}"
-                                )
-                                # Continue with next sample
+                        # Debug: log first few batches
+                        if total_batches == 0 and len(samples) > 0:
+                            print(
+                                f"[{worker_id}] Got {len(samples)} samples from partition {partition_idx} (rows: {rows}, total_samples: {len(all_samples_batch)})"
+                            )
+                        elif total_batches == 0 and len(samples) == 0 and rows > 0:
+                            print(
+                                f"[{worker_id}] WARNING: Processed {rows} rows from partition {partition_idx} but got 0 samples (likely all partial groups)"
+                            )
 
-                        total_rows += total_pending_rows
-                        pending_results.clear()  # Clear processed results
+                    # Batch put_many when we have enough samples or all futures complete
+                    # This maintains queue efficiency while preserving partition processing order
+                    all_futures_complete = completed_futures >= len(sampled_partitions)
+                    if len(all_samples_batch) >= 100 or (
+                        all_futures_complete and len(all_samples_batch) > 0
+                    ):
+                        try:
+                            queue.put_many(all_samples_batch)
+                            total_batches += len(all_samples_batch)
+                        except Exception as e:
+                            print(f"[{worker_id}] Error putting samples to queue: {e}")
+                            # Fallback: try individual puts if batch fails
+                            for sample in all_samples_batch:
+                                try:
+                                    queue.put(sample)
+                                    total_batches += 1
+                                except Exception as e2:
+                                    print(
+                                        f"[{worker_id}] Error putting individual sample: {e2}"
+                                    )
 
                         # Log first few batches for debugging
                         if total_batches <= 3:
                             print(
-                                f"[{worker_id}] Sent {len(all_samples)} samples to queue (rows: {total_pending_rows})"
+                                f"[{worker_id}] Sent {len(all_samples_batch)} samples to queue"
                             )
+
+                        all_samples_batch.clear()  # Clear after putting
 
                         # Check max_batches limit
                         if max_batches is not None and total_batches >= max_batches:
@@ -324,39 +340,22 @@ def prefetch_worker(
                                 "status": "completed",
                             }
 
-                # Process any remaining results after all futures complete
-                if pending_results:
-                    all_samples = []
-                    total_pending_rows = 0
-
-                    for part_idx, batch_dfs, part_rows in pending_results:
-                        if batch_dfs:
-                            samples = processor.process_batch(
-                                batch_dfs,
-                                epoch=epoch,
-                                partition_id=part_idx,
-                            )
-                            all_samples.extend(samples)
-                            total_pending_rows += part_rows
-
-                    # Put all samples to queue
-                    for sample in all_samples:
-                        try:
-                            queue.put(sample)
-                            total_batches += 1
-                        except Exception as e:
-                            print(f"[{worker_id}] Error putting sample to queue: {e}")
-
-                    total_rows += total_pending_rows
-
-                    # Check max_batches limit
-                    if max_batches is not None and total_batches >= max_batches:
-                        return {
-                            "worker_id": worker_id,
-                            "batches_produced": total_batches,
-                            "rows_processed": total_rows,
-                            "status": "completed",
-                        }
+                # Put any remaining samples
+                if all_samples_batch:
+                    try:
+                        queue.put_many(all_samples_batch)
+                        total_batches += len(all_samples_batch)
+                    except Exception as e:
+                        print(f"[{worker_id}] Error putting samples to queue: {e}")
+                        # Fallback: try individual puts if batch fails
+                        for sample in all_samples_batch:
+                            try:
+                                queue.put(sample)
+                                total_batches += 1
+                            except Exception as e2:
+                                print(
+                                    f"[{worker_id}] Error putting individual sample: {e2}"
+                                )
 
     # Send end-of-epoch marker
     queue.put({"end_of_epoch": True})
