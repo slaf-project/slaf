@@ -282,6 +282,14 @@ class BatchProcessor:
 
             if is_indexable:
                 # Vectorized: create all samples at once
+                # Pre-extract keys to avoid repeated iteration
+                other_keys = [
+                    key
+                    for key in tokenized.keys()
+                    if key not in ["input_ids", "attention_mask"]
+                ]
+                other_values = [tokenized[key] for key in other_keys]
+
                 samples = [
                     {
                         "input_ids": input_ids[idx],
@@ -293,8 +301,7 @@ class BatchProcessor:
                                 if hasattr(value, "__getitem__") and len(value) > idx
                                 else value
                             )
-                            for key, value in tokenized.items()
-                            if key not in ["input_ids", "attention_mask"]
+                            for key, value in zip(other_keys, other_values, strict=True)
                         },
                     }
                     for idx, group_key in enumerate(group_keys)
@@ -315,14 +322,24 @@ class BatchProcessor:
                 ]
         else:
             # Return raw grouped data - split into individual samples
-            # Use Polars group_by to split efficiently (vectorized)
-            samples = [
-                {
-                    "grouped": grouped.filter(pl.col(group_key_out) == group_key),
-                    "group_key": group_key,
-                }
-                for group_key in group_keys
-            ]
+            # Use partition_by for efficient splitting (vectorized)
+            # This is more efficient than filtering per group
+            if len(group_keys) > 0:
+                # Use partition_by to split DataFrame by group_key efficiently
+                # This creates a dict mapping group_key -> DataFrame
+                partitioned = grouped.partition_by(
+                    group_key_out, as_dict=True, maintain_order=True
+                )
+                samples = [
+                    {
+                        "grouped": partitioned.get(group_key, pl.DataFrame()),
+                        "group_key": group_key,
+                    }
+                    for group_key in group_keys
+                    if group_key in partitioned
+                ]
+            else:
+                samples = []
 
         self.batch_id += 1
         return samples  # Return list of samples instead of single dict
