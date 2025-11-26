@@ -273,19 +273,29 @@ def prefetch_worker(
 
                     if batch_dfs:
                         # Process batch through pipeline
-                        result = processor.process_batch(
+                        # Returns list of samples (one per group)
+                        samples = processor.process_batch(
                             batch_dfs,
                             epoch=epoch,
                             partition_id=partition_idx,
                         )
 
-                        # Skip empty batches
-                        if result.get("empty", False):
+                        # Skip if no samples (empty batch)
+                        if not samples:
                             continue
 
-                        # Send to queue
-                        queue.put(result)
-                        total_batches += 1
+                        # Put each sample separately to the queue
+                        # No size checking needed - individual samples should be small
+                        for sample in samples:
+                            try:
+                                queue.put(sample)
+                                total_batches += 1
+                            except Exception as e:
+                                print(
+                                    f"[{worker_id}] Error putting sample to queue: {e}"
+                                )
+                                # Continue with next sample
+
                         total_rows += rows
 
                         # Log first few batches for debugging
