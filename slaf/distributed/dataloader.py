@@ -1,32 +1,41 @@
 """
-Generic distributed dataloader that reads from Modal Queue.
+Generic distributed dataloader that reads from a queue-like object.
 
-Simple iterator that reads batches from a Modal Queue.
+Simple iterator that reads batches from a queue.
 All GPUs in the cluster can concurrently read from the same FIFO queue,
 making it directly compatible with DDP or FSDP code.
+
+Framework-agnostic - accepts any queue-like object with get() method.
 """
 
 from collections.abc import Iterator
 from typing import Any
 
-import modal
-
 
 class DistributedDataLoader:
     """
-    Generic distributed dataloader that reads from Modal Queue.
+    Generic distributed dataloader that reads from a queue-like object.
 
     The queue is a FIFO queue, and all GPUs in the cluster concurrently
     read from it within their respective training loops. This is directly
     compatible with DDP or FSDP code.
 
+    Framework-agnostic - works with any queue-like object that has:
+    - get(timeout: float) -> Any | None method
+    - Raises TimeoutError when timeout is reached
+
     Args:
-        queue_name: Name of the Modal Queue to read from
+        queue: Queue-like object to read batches from (e.g., Modal Queue)
     """
 
-    def __init__(self, queue_name: str):
-        self.queue_name = queue_name
-        self.queue = modal.Queue.from_name(queue_name, create_if_missing=False)
+    def __init__(self, queue: Any):
+        """
+        Initialize distributed dataloader.
+
+        Args:
+            queue: Queue-like object with get(timeout) method
+        """
+        self.queue = queue
 
     def __iter__(self) -> Iterator[dict[str, Any]]:
         """
