@@ -15,14 +15,13 @@ from slaf.distributed.coordinator import Coordinator
 from slaf.distributed.data_source import LanceDataSource
 from slaf.distributed.dataloader import DistributedDataLoader
 from slaf.distributed.processor import DataSchema
-from slaf.distributed.worker import prefetch_worker
 
 # Import SLAF-specific components (for type hints and adapters)
 from slaf.ml.aggregators import Window
 from slaf.ml.samplers import Shuffle
 from slaf.ml.tokenizers import SLAFTokenizer
 
-# Configure Modal image
+# Configure Modal image for SLAF workers
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("build-essential", "python3-dev", "git")
@@ -32,8 +31,62 @@ image = (
     )
 )
 
-# Set image in worker module (worker.py exports app and function)
-prefetch_worker._function._image = image
+# Create SLAF-specific Modal app
+app = modal.App("slaf-distributed-dataloader")
+
+
+@app.function(
+    image=image,
+    cpu=8,
+    memory=32768,  # 32 GB per worker
+    timeout=3600,
+)
+def distributed_prefetch_worker(
+    worker_id: str,
+    partition_indices: list[int],
+    data_source_config: dict[str, Any],
+    processor_config: dict[str, Any],
+    queue_name: str,
+    n_scanners: int = 8,
+    batches_per_partition: int = 32,
+    prefetch_batch_size: int = 262144,
+    max_batches: int | None = None,
+    partial_groups_kv_name: str | None = None,
+) -> dict[str, Any]:
+    """
+    SLAF-specific Modal worker function with SLAF image.
+
+    This function wraps the framework-agnostic worker implementation and
+    handles all Modal-specific setup (Queue, KV store, etc.).
+    """
+    from slaf.distributed.worker import prefetch_worker
+
+    # Create Modal Queue
+    queue = modal.Queue.from_name(queue_name, create_if_missing=False)
+
+    # Create Modal Dict for cross-worker boundary merging if enabled
+    partial_groups_kv = None
+    if (
+        processor_config.get("enable_cross_worker_boundary_merging", False)
+        and partial_groups_kv_name
+    ):
+        partial_groups_kv = modal.Dict.from_name(
+            partial_groups_kv_name, create_if_missing=True
+        )
+
+    # Call the framework-agnostic implementation
+    return prefetch_worker(
+        worker_id=worker_id,
+        partition_indices=partition_indices,
+        data_source_config=data_source_config,
+        processor_config=processor_config,
+        queue=queue,
+        n_scanners=n_scanners,
+        batches_per_partition=batches_per_partition,
+        prefetch_batch_size=prefetch_batch_size,
+        max_batches=max_batches,
+        partial_groups_kv=partial_groups_kv,
+    )
 
 
 class DistributedSLAFDataLoader:
@@ -111,10 +164,13 @@ class DistributedSLAFDataLoader:
         coordinator = Coordinator(data_source, n_workers)
         assignments = coordinator.assign_partitions(seed=seed)
 
-        # Create queue
+        # Create queue and KV store
         if queue_name is None:
             queue_name = f"slaf-dataloader-{id(slaf_array)}"
         modal.Queue.from_name(queue_name, create_if_missing=True)
+
+        # Create KV store for cross-worker boundary merging
+        partial_groups_kv_name = f"{queue_name}-partial-groups"
 
         # Prepare configs for workers
         data_source_config = {
@@ -175,7 +231,7 @@ class DistributedSLAFDataLoader:
         # Spawn workers
         worker_handles = []
         for worker_id, assignment in assignments.items():
-            handle = prefetch_worker.spawn(
+            handle = distributed_prefetch_worker.spawn(
                 worker_id=worker_id,
                 partition_indices=assignment.partition_indices,
                 data_source_config=data_source_config,
@@ -184,6 +240,7 @@ class DistributedSLAFDataLoader:
                 n_scanners=n_scanners,
                 batches_per_partition=batches_per_partition,
                 prefetch_batch_size=prefetch_batch_size,
+                partial_groups_kv_name=partial_groups_kv_name,
             )
             worker_handles.append(handle)
 
