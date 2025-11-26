@@ -32,6 +32,10 @@ image = (
 )
 
 # Create SLAF-specific Modal app
+# IMPORTANT: This app must be deployed before use:
+#   modal deploy slaf/ml/distributed.py
+# This makes it a persistent deployed app that can be invoked from other Modal functions.
+# See: https://modal.com/docs/guide/apps#deployed-apps
 app = modal.App("slaf-distributed-dataloader")
 
 
@@ -229,9 +233,23 @@ class DistributedSLAFDataLoader:
             processor_config["tokenizer_factory"] = None
 
         # Spawn workers
+        # NOTE: The app must be deployed before spawning workers:
+        #   modal deploy slaf/ml/distributed.py
+        # Or ensure the app is running when called from another Modal function.
+        # We cannot use app.run() here because we may be inside another Modal function.
+        # Reference the deployed function by name to avoid hydration issues
+        # when called from another Modal app
+        # The app must be deployed first: modal deploy slaf/ml/distributed.py
+        worker_function = modal.Function.from_name(
+            "slaf-distributed-dataloader", "distributed_prefetch_worker"
+        )
+        # Explicitly hydrate the function to ensure it's synchronized with the Modal server
+        # This is needed when referencing a function from a deployed app
+        worker_function.hydrate()
+
         worker_handles = []
         for worker_id, assignment in assignments.items():
-            handle = distributed_prefetch_worker.spawn(
+            handle = worker_function.spawn(
                 worker_id=worker_id,
                 partition_indices=assignment.partition_indices,
                 data_source_config=data_source_config,
