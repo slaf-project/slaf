@@ -66,7 +66,8 @@ def distributed_prefetch_worker(
     from slaf.distributed.worker import prefetch_worker
 
     # Create Modal Queue
-    queue = modal.Queue.from_name(queue_name, create_if_missing=False)
+    # Use create_if_missing=True to ensure queue exists (it should be created in __init__)
+    queue = modal.Queue.from_name(queue_name, create_if_missing=True)
 
     # Create Modal Dict for cross-worker boundary merging if enabled
     partial_groups_kv = None
@@ -174,6 +175,7 @@ class DistributedSLAFDataLoader:
         modal.Queue.from_name(queue_name, create_if_missing=True)
 
         # Create KV store for cross-worker boundary merging
+        # We'll create it after processor_config is defined, but the name is deterministic
         partial_groups_kv_name = f"{queue_name}-partial-groups"
 
         # Prepare configs for workers
@@ -213,6 +215,10 @@ class DistributedSLAFDataLoader:
             "continuity_check": "sequential",  # How to detect continuity between partitions
             "enable_cross_worker_boundary_merging": True,  # Enable cross-worker merging via KV store
         }
+
+        # Create the KV dict to ensure it exists before workers try to access it
+        if processor_config.get("enable_cross_worker_boundary_merging", True):
+            modal.Dict.from_name(partial_groups_kv_name, create_if_missing=True)
 
         # Tokenizer factory config (for dynamic import in worker)
         # Only include tokenizer if not in raw mode
@@ -262,9 +268,16 @@ class DistributedSLAFDataLoader:
             )
             worker_handles.append(handle)
 
-        # Create dataloader
-        self.dataloader = DistributedDataLoader(queue_name)
+        # Create queue object for the dataloader
+        queue = modal.Queue.from_name(queue_name, create_if_missing=True)
+
+        # Create dataloader with queue object (framework-agnostic)
+        self.dataloader = DistributedDataLoader(queue)
         self.worker_handles = worker_handles
+        self.queue_name = queue_name  # Store queue name for external access
+        self.partial_groups_kv_name = (
+            partial_groups_kv_name  # Store KV store name for external access
+        )
 
     def __iter__(self):
         """Iterate over batches."""
