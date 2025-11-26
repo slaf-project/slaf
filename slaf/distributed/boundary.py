@@ -93,7 +93,10 @@ class GroupBoundaryHandler:
             return False
 
     def track_partial_groups(
-        self, batch: pl.DataFrame, partition_id: int | None = None
+        self,
+        batch: pl.DataFrame,
+        partition_id: int | None = None,
+        is_partition_exhausted: bool = False,
     ) -> tuple[pl.DataFrame, dict[Any, pl.DataFrame]]:
         """
         Track partial groups in a batch and return complete groups.
@@ -101,6 +104,8 @@ class GroupBoundaryHandler:
         Args:
             batch: Input DataFrame
             partition_id: Optional partition/reader ID for tracking
+            is_partition_exhausted: If True, all groups in this batch are complete
+                                  (partition is exhausted, so no more data coming)
 
         Returns:
             Tuple of (complete_groups_df, partial_groups_dict)
@@ -118,6 +123,10 @@ class GroupBoundaryHandler:
         # Get all unique group IDs
         unique_groups = batch[group_key].unique().sort()
         if len(unique_groups) == 0:
+            return batch, {}
+
+        # If partition is exhausted, all groups are complete
+        if is_partition_exhausted:
             return batch, {}
 
         # Last group might be incomplete (spans partition boundary)
@@ -262,6 +271,7 @@ class GroupBoundaryHandler:
         partial_data: dict[Any, pl.DataFrame],
         new_batch: pl.DataFrame,
         partition_id: int | None = None,
+        is_partition_exhausted: bool = False,
     ) -> tuple[pl.DataFrame, dict[Any, pl.DataFrame]]:
         """
         Merge partial group data with new batch when continuity is detected.
@@ -320,7 +330,7 @@ class GroupBoundaryHandler:
 
         # Track new partial groups from this batch
         complete_groups, new_partial = self.track_partial_groups(
-            merged_batch, partition_id
+            merged_batch, partition_id, is_partition_exhausted=is_partition_exhausted
         )
         remaining_partial.update(new_partial)
 
