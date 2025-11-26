@@ -4,6 +4,7 @@ SLAF-specific distributed dataloader.
 Composes generic distributed components with SLAF-specific logic.
 """
 
+from datetime import datetime
 from typing import Any
 
 import modal
@@ -36,6 +37,7 @@ image = (
     # Separate layer for git install - only this rebuilds when branch updates
     .run_commands(
         "pip install git+https://github.com/slaf-project/slaf.git@distributed_dataloader#egg=slafdb",
+        f"echo 'Image built at {datetime.now().strftime('%Y%m%d-%H%M%S')}'",  # Force rebuild - timestamp changes
     )
 )
 
