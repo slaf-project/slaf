@@ -130,6 +130,7 @@ class DistributedSLAFDataLoader:
         n_epochs: int = 1,
         raw_mode: bool = False,
         return_tensors: bool = True,
+        prefetch_factor: int = 4,
         seed: int = 42,
         queue_name: str | None = None,
         **window_kwargs: Any,
@@ -157,6 +158,10 @@ class DistributedSLAFDataLoader:
             return_tensors: If True, return torch.Tensor objects (matches SLAFDataLoader).
                           If False, return Python lists/objects (matches Hugging Face).
                           Default: True.
+            prefetch_factor: Number of concurrent threads for queue.get_many() calls.
+                           Each thread makes independent get_many() calls, allowing true parallelism.
+                           Higher values use more memory but improve throughput when network I/O is the bottleneck.
+                           Default: 4 (4 concurrent threads).
             seed: Random seed for reproducibility
             queue_name: Name of Modal Queue (auto-generated if None)
             **window_kwargs: Additional window function parameters
@@ -303,7 +308,7 @@ class DistributedSLAFDataLoader:
         # Create dataloader with queue object and batch_size (framework-agnostic)
         # Enable concurrent prefetching with multiple threads making concurrent get_many() calls
         # This is like having multiple consumers in the same process, allowing true parallelism
-        # prefetch_factor=4 means 4 threads, each making concurrent queue.get_many() calls
+        # prefetch_factor controls number of threads, each making concurrent queue.get_many() calls
         # Enable diagnostics for bottleneck analysis
         # Note: queue_prefetch_multiplier doesn't help when latency scales with sample size
         # The bottleneck is data transfer time, not per-call overhead
@@ -311,7 +316,7 @@ class DistributedSLAFDataLoader:
             queue,
             batch_size=batch_size,
             return_tensors=return_tensors,
-            prefetch_factor=4,  # Use 4 concurrent threads for queue.get_many() calls
+            prefetch_factor=prefetch_factor,  # Number of concurrent threads for queue.get_many() calls
             enable_diagnostics=True,  # Enable diagnostics for bottleneck analysis
             queue_prefetch_multiplier=1,  # Set to 1 since latency scales with sample size, not per-call
         )
