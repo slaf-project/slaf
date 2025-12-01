@@ -129,6 +129,7 @@ class DistributedSLAFDataLoader:
         n_expression_bins: int = 10,
         n_epochs: int = 1,
         raw_mode: bool = False,
+        return_tensors: bool = True,
         seed: int = 42,
         queue_name: str | None = None,
         **window_kwargs: Any,
@@ -153,6 +154,9 @@ class DistributedSLAFDataLoader:
             n_expression_bins: Number of expression bins for scGPT
             n_epochs: Number of epochs to process
             raw_mode: If True, return raw data without tokenization
+            return_tensors: If True, return torch.Tensor objects (matches SLAFDataLoader).
+                          If False, return Python lists/objects (matches Hugging Face).
+                          Default: True.
             seed: Random seed for reproducibility
             queue_name: Name of Modal Queue (auto-generated if None)
             **window_kwargs: Additional window function parameters
@@ -297,9 +301,13 @@ class DistributedSLAFDataLoader:
         queue = modal.Queue.from_name(queue_name, create_if_missing=True)
 
         # Create dataloader with queue object and batch_size (framework-agnostic)
-        # Default to return_tensors=True to match SLAFDataLoader behavior
+        # Prefetching disabled by default (prefetch_factor=0) - enable if formatting is CPU-bound
+        # For raw mode, formatting is fast (just extracting DataFrames), so prefetching adds overhead
         self.dataloader = DistributedDataLoader(
-            queue, batch_size=batch_size, return_tensors=True
+            queue,
+            batch_size=batch_size,
+            return_tensors=return_tensors,
+            prefetch_factor=0,
         )
         self.worker_handles = worker_handles
         self.queue_name = queue_name  # Store queue name for external access
