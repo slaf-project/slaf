@@ -62,22 +62,23 @@ class DistributedDataLoader:
         self.batch_size = batch_size
         self.return_tensors = return_tensors
         self.prefetch_factor = prefetch_factor
+        self._use_prefetching = prefetch_factor > 0
 
-        # Internal queue for prefetched formatted batches
-        self._prefetch_queue: Queue[dict[str, Any] | None] = Queue(
-            maxsize=prefetch_factor
-        )
+        # Internal queue for prefetched formatted batches (only if prefetching enabled)
+        if self._use_prefetching:
+            self._prefetch_queue: Queue[dict[str, Any] | None] = Queue(
+                maxsize=prefetch_factor
+            )
         self._worker_thread: threading.Thread | None = None
         self._should_stop = False
         self._stop_iteration = False
 
     def __iter__(self) -> Iterator[dict[str, Any]]:
         """
-        Iterate over batches from the queue with background prefetching.
+        Iterate over batches from the queue.
 
-        Uses a background thread to prefetch and format batches while the main
-        thread consumes pre-formatted batches. This overlaps queue I/O and tensor
-        operations for better throughput.
+        If prefetch_factor > 0, uses background prefetching to overlap I/O and formatting.
+        Otherwise, processes batches synchronously (lower memory, simpler).
 
         Yields:
             Dictionary with processed batch data (matches SLAFDataLoader format):
@@ -85,35 +86,76 @@ class DistributedDataLoader:
             - attention_mask: Boolean mask for valid tokens (torch.Tensor if return_tensors=True, else list)
             - cell_ids: Cell integer IDs (torch.Tensor if return_tensors=True, else list)
         """
-        # Start background prefetching thread
-        self._should_stop = False
-        self._stop_iteration = False
-        self._worker_thread = threading.Thread(
-            target=self._prefetch_worker, daemon=True
-        )
-        self._worker_thread.start()
+        if self._use_prefetching:
+            # Use background prefetching
+            self._should_stop = False
+            self._stop_iteration = False
+            self._worker_thread = threading.Thread(
+                target=self._prefetch_worker, daemon=True
+            )
+            self._worker_thread.start()
 
-        try:
-            while True:
+            try:
+                while True:
+                    try:
+                        # Get prefetched formatted batch (non-blocking with timeout)
+                        batch = self._prefetch_queue.get(timeout=1.0)
+                        if batch is None:  # Stop iteration marker
+                            break
+                        yield batch
+                    except Empty:
+                        # Check if worker thread is still alive
+                        if (
+                            not self._worker_thread.is_alive()
+                            and self._prefetch_queue.empty()
+                        ):
+                            break
+                        continue
+            finally:
+                # Signal worker to stop and wait for it
+                self._should_stop = True
+                if self._worker_thread and self._worker_thread.is_alive():
+                    self._worker_thread.join(timeout=2.0)
+        else:
+            # Synchronous mode (no prefetching) - simpler and lower memory
+            stop_iteration = False
+
+            while not stop_iteration:
+                # Use get_many for batch_size samples (single round trip)
                 try:
-                    # Get prefetched formatted batch (non-blocking with timeout)
-                    batch = self._prefetch_queue.get(timeout=1.0)
-                    if batch is None:  # Stop iteration marker
-                        break
-                    yield batch
-                except Empty:
-                    # Check if worker thread is still alive
-                    if (
-                        not self._worker_thread.is_alive()
-                        and self._prefetch_queue.empty()
-                    ):
-                        break
+                    samples = self.queue.get_many(
+                        n_values=self.batch_size, block=True, timeout=30.0
+                    )
+                except TimeoutError:
+                    stop_iteration = True
+                    break
+                except Exception as e:
+                    print(f"Error reading from queue: {e}")
                     continue
-        finally:
-            # Signal worker to stop and wait for it
-            self._should_stop = True
-            if self._worker_thread and self._worker_thread.is_alive():
-                self._worker_thread.join(timeout=2.0)
+
+                if not samples:
+                    stop_iteration = True
+                    break
+
+                # Check for end-of-epoch marker and filter in single pass
+                filtered_samples = []
+                for s in samples:
+                    if s is not None:
+                        if s.get("end_of_epoch", False):
+                            stop_iteration = True
+                        else:
+                            filtered_samples.append(s)
+
+                if stop_iteration:
+                    if not filtered_samples:
+                        break
+                    samples = filtered_samples
+                else:
+                    samples = filtered_samples if filtered_samples else samples
+
+                # Yield batch (format synchronously)
+                if samples:
+                    yield from self._format_batch(samples)
 
     def _prefetch_worker(self):
         """Background worker thread that prefetches and formats batches."""
@@ -170,7 +212,7 @@ class DistributedDataLoader:
         """
         Format samples into a training batch.
 
-        Optimized tensor stacking - pre-extracts lists then stacks once.
+        Optimized tensor stacking - single pass extraction, batch operations.
         """
         if not samples:
             return
@@ -182,39 +224,47 @@ class DistributedDataLoader:
                 try:
                     import torch
 
-                    # Optimized: extract all tensors first, then stack once
-                    # This is faster than stacking one-by-one
-                    input_ids_list = [
-                        (
-                            s["input_ids"]
-                            if isinstance(s["input_ids"], torch.Tensor)
-                            else torch.tensor(s["input_ids"])
-                        )
-                        for s in samples
-                    ]
-                    attention_mask_list = [
-                        (
-                            s["attention_mask"]
-                            if isinstance(s["attention_mask"], torch.Tensor)
-                            else torch.tensor(s["attention_mask"])
-                        )
-                        for s in samples
-                    ]
+                    # Optimized: assume samples are already tensors (from tokenizer)
+                    # Workers return tensors from SLAFTokenizer.tokenize(), so skip type checking
+                    # Single pass extraction with minimal overhead
+                    batch_size = len(samples)
 
+                    # Pre-allocate lists for stacking (faster than list comprehension with checks)
+                    input_ids_list = [None] * batch_size
+                    attention_mask_list = [None] * batch_size
+                    cell_ids_list = [0] * batch_size
+
+                    # Single pass: extract all data
+                    for i, s in enumerate(samples):
+                        input_ids_list[i] = s["input_ids"]
+                        attention_mask_list[i] = s["attention_mask"]
+                        cell_ids_list[i] = s.get("group_key", 0)
+
+                    # Stack tensors in single operations (very fast)
                     input_ids = torch.stack(input_ids_list)
                     attention_mask = torch.stack(attention_mask_list)
-                    # Convert group_key to cell_ids (torch.Tensor) to match SLAFDataLoader
-                    cell_ids = torch.tensor([s.get("group_key", 0) for s in samples])
+                    cell_ids = torch.tensor(cell_ids_list, dtype=torch.long)
+
+                    # Extract other keys only if they exist (avoid unnecessary iteration)
+                    first_sample = samples[0]
+                    extra_keys = [
+                        key
+                        for key in first_sample.keys()
+                        if key not in ["input_ids", "attention_mask", "group_key"]
+                    ]
+                    if extra_keys:
+                        # Only iterate if there are other keys
+                        extra_data = {
+                            key: [s[key] for s in samples] for key in extra_keys
+                        }
+                    else:
+                        extra_data = {}
 
                     yield {
                         "input_ids": input_ids,
                         "attention_mask": attention_mask,
                         "cell_ids": cell_ids,  # Matches SLAFDataLoader format
-                        **{
-                            key: [s[key] for s in samples]
-                            for key in samples[0].keys()
-                            if key not in ["input_ids", "attention_mask", "group_key"]
-                        },
+                        **extra_data,
                     }
                 except ImportError:
                     # PyTorch not available - fall back to lists
@@ -232,9 +282,16 @@ class DistributedDataLoader:
                 }
         elif "grouped" in samples[0]:
             # Raw format - return list of DataFrames
+            # Optimized: single pass extraction
+            batch_size = len(samples)
+            grouped_list: list[Any] = [None] * batch_size
+            group_keys_list: list[Any] = [0] * batch_size
+            for i, s in enumerate(samples):
+                grouped_list[i] = s["grouped"]
+                group_keys_list[i] = s.get("group_key", 0)
             yield {
-                "grouped": [s["grouped"] for s in samples],
-                "group_keys": [s.get("group_key") for s in samples],
+                "grouped": grouped_list,
+                "group_keys": group_keys_list,
             }
         else:
             # Unknown format - return as-is
