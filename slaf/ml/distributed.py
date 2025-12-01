@@ -63,7 +63,7 @@ def distributed_prefetch_worker(
     processor_config: dict[str, Any],
     queue_name: str,
     n_scanners: int = 8,
-    batches_per_partition: int = 32,
+    prefetch_batch_count: int = 32,
     prefetch_batch_size: int = 262144,
     max_batches: int | None = None,
     partial_groups_kv_name: str | None = None,
@@ -98,7 +98,7 @@ def distributed_prefetch_worker(
         processor_config=processor_config,
         queue=queue,
         n_scanners=n_scanners,
-        batches_per_partition=batches_per_partition,
+        prefetch_batch_count=prefetch_batch_count,
         prefetch_batch_size=prefetch_batch_size,
         max_batches=max_batches,
         partial_groups_kv=partial_groups_kv,
@@ -122,7 +122,7 @@ class DistributedSLAFDataLoader:
         n_workers: int = 64,
         n_scanners: int = 16,
         prefetch_batch_size: int = 4_194_304,
-        batches_per_partition: int = 32,
+        prefetch_batch_count: int = 32,
         batch_size: int = 32,
         max_genes: int = 1024,
         vocab_size: int = 50000,
@@ -131,6 +131,7 @@ class DistributedSLAFDataLoader:
         raw_mode: bool = False,
         return_tensors: bool = True,
         prefetch_factor: int = 4,
+        queue_timeout: float = 1.0,
         seed: int = 42,
         queue_name: str | None = None,
         **window_kwargs: Any,
@@ -140,28 +141,34 @@ class DistributedSLAFDataLoader:
 
         Args:
             slaf_array: SLAFArray instance containing the data
-            tokenizer_type: Tokenization strategy ("geneformer", "scgpt", or "raw")
+            tokenizer_type [PRODUCER]: Tokenization strategy ("geneformer", "scgpt", or "raw")
                            If "raw", raw_mode is automatically enabled
-            window: Window function instance (optional, created automatically if None)
-            shuffle: Shuffle function instance (optional, created automatically if None)
-            tokenizer: SLAFTokenizer instance (optional, created automatically from tokenizer_type if None)
-            n_workers: Number of Modal workers
-            n_scanners: Number of scanners per worker (for MoS)
-            prefetch_batch_size: Batch size for reading from partitions
-            batches_per_partition: Number of batches to read per partition before processing
-            batch_size: Training batch size (not used in distributed mode, kept for compatibility)
-            max_genes: Maximum genes per cell after window function
-            vocab_size: Vocabulary size for tokenizer
+            window [PRODUCER]: Window function instance (optional, created automatically if None)
+            shuffle [PRODUCER]: Shuffle function instance (optional, created automatically if None)
+            tokenizer [PRODUCER]: SLAFTokenizer instance (optional, created automatically from tokenizer_type if None)
+            n_workers: [PRODUCER] Number of Modal workers (producer-side parallelism)
+            n_scanners: [PRODUCER] Number of scanners per worker (for Mixture of Scanners)
+            prefetch_batch_size: [PRODUCER] Number of rows per generator read (batch size for reading from partitions)
+            prefetch_batch_count: [PRODUCER] Number of generator reads per partition before processing.
+                                 Controls chunk size: each chunk contains prefetch_batch_size * prefetch_batch_count rows.
+                                 Higher values reduce processing overhead but increase memory per chunk.
+            batch_size: [CONSUMER] Training batch size (number of samples per batch)
+            max_genes [PRODUCER]: Maximum genes per cell after window function
+            vocab_size [PRODUCER]: Vocabulary size for tokenizer
             n_expression_bins: Number of expression bins for scGPT
-            n_epochs: Number of epochs to process
-            raw_mode: If True, return raw data without tokenization
-            return_tensors: If True, return torch.Tensor objects (matches SLAFDataLoader).
+            n_epochs [PRODUCER]: Number of e   pochs to process
+            raw_mode [PRODUCER]: If True, return raw data without tokenization
+            return_tensors: [CONSUMER] If True, return torch.Tensor objects (matches SLAFDataLoader).
                           If False, return Python lists/objects (matches Hugging Face).
                           Default: True.
-            prefetch_factor: Number of concurrent threads for queue.get_many() calls.
+            prefetch_factor: [CONSUMER] Number of concurrent threads for queue.get_many() calls.
                            Each thread makes independent get_many() calls, allowing true parallelism.
                            Higher values use more memory but improve throughput when network I/O is the bottleneck.
                            Default: 4 (4 concurrent threads).
+            queue_timeout: [CONSUMER] Timeout in seconds for queue.get_many() calls.
+                          Higher values allow longer waits when queue is empty (useful for slow producers).
+                          Lower values fail faster (useful for detecting end-of-data quickly).
+                          Default: 1.0 seconds.
             seed: Random seed for reproducibility
             queue_name: Name of Modal Queue (auto-generated if None)
             **window_kwargs: Additional window function parameters
@@ -287,7 +294,7 @@ class DistributedSLAFDataLoader:
                     processor_config=processor_config,
                     queue_name=queue_name,
                     n_scanners=n_scanners,
-                    batches_per_partition=batches_per_partition,
+                    prefetch_batch_count=prefetch_batch_count,
                     prefetch_batch_size=prefetch_batch_size,
                     partial_groups_kv_name=partial_groups_kv_name,
                 )
@@ -310,15 +317,13 @@ class DistributedSLAFDataLoader:
         # This is like having multiple consumers in the same process, allowing true parallelism
         # prefetch_factor controls number of threads, each making concurrent queue.get_many() calls
         # Enable diagnostics for bottleneck analysis
-        # Note: queue_prefetch_multiplier doesn't help when latency scales with sample size
-        # The bottleneck is data transfer time, not per-call overhead
         self.dataloader = DistributedDataLoader(
             queue,
             batch_size=batch_size,
             return_tensors=return_tensors,
             prefetch_factor=prefetch_factor,  # Number of concurrent threads for queue.get_many() calls
             enable_diagnostics=True,  # Enable diagnostics for bottleneck analysis
-            queue_prefetch_multiplier=1,  # Set to 1 since latency scales with sample size, not per-call
+            queue_timeout=queue_timeout,  # Timeout for queue operations
         )
         self.worker_handles = worker_handles
         self.queue_name = queue_name  # Store queue name for external access
