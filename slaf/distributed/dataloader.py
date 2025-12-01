@@ -49,6 +49,7 @@ class DistributedDataLoader:
         return_tensors: bool = True,
         prefetch_factor: int = 8,
         enable_diagnostics: bool = False,
+        queue_prefetch_multiplier: int = 1,
     ):
         """
         Initialize distributed dataloader.
@@ -63,6 +64,10 @@ class DistributedDataLoader:
                            Default: 2 (similar to PyTorch DataLoader).
             enable_diagnostics: If True, collect timing statistics for bottleneck analysis.
                               Default: False.
+            queue_prefetch_multiplier: Multiplier for queue.get_many() n_values to reduce
+                                     network round-trips. E.g., if batch_size=32 and
+                                     queue_prefetch_multiplier=4, we request 128 samples
+                                     per queue call. Default: 1 (no prefetching).
         """
         self.queue = queue
         self.batch_size = batch_size
@@ -70,6 +75,9 @@ class DistributedDataLoader:
         self.prefetch_factor = prefetch_factor
         self._use_prefetching = prefetch_factor > 0
         self.enable_diagnostics = enable_diagnostics
+        self.queue_prefetch_multiplier = queue_prefetch_multiplier
+        # Calculate how many samples to request per queue call
+        self._queue_batch_size = batch_size * queue_prefetch_multiplier
 
         # Internal queue for prefetched formatted batches (only if prefetching enabled)
         if self._use_prefetching:
@@ -140,11 +148,12 @@ class DistributedDataLoader:
             stop_iteration = False
 
             while not stop_iteration:
-                # Use get_many for batch_size samples (single round trip)
+                # Use get_many with prefetch multiplier to reduce network round-trips
+                # Request more samples than batch_size to amortize network latency
                 queue_start = time.time() if self.enable_diagnostics else None
                 try:
                     samples = self.queue.get_many(
-                        n_values=self.batch_size, block=True, timeout=30.0
+                        n_values=self._queue_batch_size, block=True, timeout=30.0
                     )
                 except TimeoutError:
                     stop_iteration = True
@@ -181,23 +190,32 @@ class DistributedDataLoader:
                 if self.enable_diagnostics and filter_start:
                     self._diagnostics["filter_time"] += time.time() - filter_start
 
-                # Yield batch (format synchronously)
+                # Yield batches (format synchronously)
+                # If we got more samples than batch_size, yield multiple batches
                 if samples:
                     format_start = time.time() if self.enable_diagnostics else None
-                    for batch in self._format_batch(samples):
-                        yield batch
+                    # Process samples in chunks of batch_size
+                    for i in range(0, len(samples), self.batch_size):
+                        batch_samples = samples[i : i + self.batch_size]
+                        if batch_samples:
+                            for batch in self._format_batch(batch_samples):
+                                yield batch
                     if self.enable_diagnostics and format_start:
                         self._diagnostics["format_time"] += time.time() - format_start
-                        self._diagnostics["format_count"] += 1
-                        self._diagnostics["total_batches"] += 1
+                        batches_produced = (
+                            len(samples) + self.batch_size - 1
+                        ) // self.batch_size
+                        self._diagnostics["format_count"] += batches_produced
+                        self._diagnostics["total_batches"] += batches_produced
 
     def _prefetch_worker(self):
         """Background worker thread that prefetches and formats batches."""
         while not self._should_stop:
             try:
                 # Get samples from queue (this is the I/O operation)
+                # Use prefetch multiplier to reduce network round-trips
                 samples = self.queue.get_many(
-                    n_values=self.batch_size, block=True, timeout=1.0
+                    n_values=self._queue_batch_size, block=True, timeout=1.0
                 )
             except TimeoutError:
                 # Queue timeout - check if we should continue
@@ -230,16 +248,23 @@ class DistributedDataLoader:
                 # Filter None values only
                 samples = [s for s in samples if s is not None]
 
-            # Format batch (this is the CPU-bound operation)
+            # Format batches (this is the CPU-bound operation)
+            # If we got more samples than batch_size, format multiple batches
             if samples:
-                # Format batch and put in prefetch queue
-                for formatted_batch in self._format_batch(samples):
+                # Process samples in chunks of batch_size
+                for i in range(0, len(samples), self.batch_size):
+                    batch_samples = samples[i : i + self.batch_size]
+                    if batch_samples:
+                        # Format batch and put in prefetch queue
+                        for formatted_batch in self._format_batch(batch_samples):
+                            if self._should_stop:
+                                break
+                            try:
+                                self._prefetch_queue.put(formatted_batch, timeout=1.0)
+                            except Exception:
+                                # Queue full or timeout - continue anyway
+                                break
                     if self._should_stop:
-                        break
-                    try:
-                        self._prefetch_queue.put(formatted_batch, timeout=1.0)
-                    except Exception:
-                        # Queue full or timeout - continue anyway
                         break
 
     def _format_batch(self, samples: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
