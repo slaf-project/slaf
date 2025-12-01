@@ -91,7 +91,7 @@ class DistributedDataLoader:
         self._should_stop = False
         self._stop_iteration = False
 
-        # Diagnostic statistics
+        # Diagnostic statistics (thread-safe with lock for multi-threaded access)
         if self.enable_diagnostics:
             self._diagnostics = {
                 "queue_get_time": 0.0,
@@ -102,6 +102,7 @@ class DistributedDataLoader:
                 "format_count": 0,
                 "start_time": time.time(),
             }
+            self._diagnostics_lock = threading.Lock()  # Lock for thread-safe updates
 
     def __iter__(self) -> Iterator[dict[str, Any]]:
         """
@@ -223,6 +224,7 @@ class DistributedDataLoader:
     def _prefetch_worker(self):
         """Background worker thread that prefetches and formats batches."""
         while not self._should_stop:
+            queue_start = time.time() if self.enable_diagnostics else None
             try:
                 # Get samples from queue (this is the I/O operation)
                 # Use prefetch multiplier to reduce network round-trips
@@ -238,12 +240,19 @@ class DistributedDataLoader:
                 print(f"Error reading from queue: {e}")
                 continue
 
+            if self.enable_diagnostics and queue_start:
+                queue_time = time.time() - queue_start
+                with self._diagnostics_lock:
+                    self._diagnostics["queue_get_time"] += queue_time
+                    self._diagnostics["queue_get_count"] += 1
+
             if not samples:
                 # Queue is empty - signal end of iteration
                 self._prefetch_queue.put(None)
                 break
 
             # Check for end-of-epoch marker and filter efficiently
+            filter_start = time.time() if self.enable_diagnostics else None
             # Use any() with generator for early exit, then filter
             if any(s is not None and s.get("end_of_epoch", False) for s in samples):
                 self._stop_iteration = True
@@ -260,10 +269,17 @@ class DistributedDataLoader:
                 # Filter None values only
                 samples = [s for s in samples if s is not None]
 
+            if self.enable_diagnostics and filter_start:
+                filter_time = time.time() - filter_start
+                with self._diagnostics_lock:
+                    self._diagnostics["filter_time"] += filter_time
+
             # Format batches (this is the CPU-bound operation)
+            format_start = time.time() if self.enable_diagnostics else None
             # If we got more samples than batch_size, format multiple batches
             if samples:
                 # Process samples in chunks of batch_size
+                batches_produced = 0
                 for i in range(0, len(samples), self.batch_size):
                     batch_samples = samples[i : i + self.batch_size]
                     if batch_samples:
@@ -273,11 +289,19 @@ class DistributedDataLoader:
                                 break
                             try:
                                 self._prefetch_queue.put(formatted_batch, timeout=1.0)
+                                batches_produced += 1
                             except Exception:
                                 # Queue full or timeout - continue anyway
                                 break
                     if self._should_stop:
                         break
+
+                if self.enable_diagnostics and format_start:
+                    format_time = time.time() - format_start
+                    with self._diagnostics_lock:
+                        self._diagnostics["format_time"] += format_time
+                        self._diagnostics["format_count"] += batches_produced
+                        self._diagnostics["total_batches"] += batches_produced
 
     def _format_batch(self, samples: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
         """
