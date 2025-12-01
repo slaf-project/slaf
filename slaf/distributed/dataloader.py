@@ -49,25 +49,26 @@ class DistributedDataLoader:
         return_tensors: bool = True,
         prefetch_factor: int = 8,
         enable_diagnostics: bool = False,
-        queue_prefetch_multiplier: int = 1,
+        queue_timeout: float = 1.0,
     ):
         """
-        Initialize distributed dataloader.
+        Initialize distributed dataloader (consumer-side).
 
         Args:
-            queue: Queue-like object with get_many() method
-            batch_size: Number of samples to collect per training batch
-            return_tensors: If True, return torch.Tensor objects (matches SLAFDataLoader).
+            queue: Queue-like object with get_many() method (consumer-side)
+            batch_size: [CONSUMER] Number of samples to collect per training batch
+            return_tensors: [CONSUMER] If True, return torch.Tensor objects (matches SLAFDataLoader).
                           If False, return Python lists/objects. Default: True.
-            prefetch_factor: Number of batches to prefetch in background thread.
-                           Higher values use more memory but improve throughput.
-                           Default: 2 (similar to PyTorch DataLoader).
-            enable_diagnostics: If True, collect timing statistics for bottleneck analysis.
+            prefetch_factor: [CONSUMER] Number of concurrent threads for queue.get_many() calls.
+                           Each thread makes independent get_many() calls, allowing true parallelism.
+                           Higher values use more memory but improve throughput when network I/O is the bottleneck.
+                           Default: 8 (8 concurrent threads).
+            enable_diagnostics: [CONSUMER] If True, collect timing statistics for bottleneck analysis.
                               Default: False.
-            queue_prefetch_multiplier: Multiplier for queue.get_many() n_values to reduce
-                                     network round-trips. E.g., if batch_size=32 and
-                                     queue_prefetch_multiplier=4, we request 128 samples
-                                     per queue call. Default: 1 (no prefetching).
+            queue_timeout: [CONSUMER] Timeout in seconds for queue.get_many() calls.
+                          Higher values allow longer waits when queue is empty (useful for slow producers).
+                          Lower values fail faster (useful for detecting end-of-data quickly).
+                          Default: 1.0 seconds.
         """
         self.queue = queue
         self.batch_size = batch_size
@@ -75,9 +76,7 @@ class DistributedDataLoader:
         self.prefetch_factor = prefetch_factor
         self._use_prefetching = prefetch_factor > 0
         self.enable_diagnostics = enable_diagnostics
-        self.queue_prefetch_multiplier = queue_prefetch_multiplier
-        # Calculate how many samples to request per queue call
-        self._queue_batch_size = batch_size * queue_prefetch_multiplier
+        self.queue_timeout = queue_timeout
 
         # Internal queue for prefetched formatted batches (only if prefetching enabled)
         if self._use_prefetching:
@@ -161,12 +160,11 @@ class DistributedDataLoader:
             stop_iteration = False
 
             while not stop_iteration:
-                # Use get_many with prefetch multiplier to reduce network round-trips
-                # Request more samples than batch_size to amortize network latency
+                # Get samples from queue synchronously
                 queue_start = time.time() if self.enable_diagnostics else None
                 try:
                     samples = self.queue.get_many(
-                        n_values=self._queue_batch_size, block=True, timeout=30.0
+                        n_values=self.batch_size, block=True, timeout=self.queue_timeout
                     )
                 except TimeoutError:
                     stop_iteration = True
@@ -227,9 +225,8 @@ class DistributedDataLoader:
             queue_start = time.time() if self.enable_diagnostics else None
             try:
                 # Get samples from queue (this is the I/O operation)
-                # Use prefetch multiplier to reduce network round-trips
                 samples = self.queue.get_many(
-                    n_values=self._queue_batch_size, block=True, timeout=1.0
+                    n_values=self.batch_size, block=True, timeout=self.queue_timeout
                 )
             except TimeoutError:
                 # Queue timeout - check if we should continue

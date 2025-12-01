@@ -17,7 +17,7 @@ def prefetch_worker(
     processor_config: dict[str, Any],
     queue: Any,  # Modal Queue or any queue-like object
     n_scanners: int = 8,
-    batches_per_partition: int = 32,
+    prefetch_batch_count: int = 32,
     prefetch_batch_size: int = 262144,
     max_batches: int | None = None,
     partial_groups_kv: Any | None = None,  # Modal Dict or any KV store-like object
@@ -30,11 +30,14 @@ def prefetch_worker(
         partition_indices: List of partition indices assigned to this worker
         data_source_config: Configuration for data source (type, path, etc.)
         processor_config: Configuration for batch processor (schema, window, shuffle, etc.)
-        queue_name: Name of Modal Queue to write batches to
-        n_scanners: Number of generators to sample simultaneously per worker
-        batches_per_partition: Number of batches to read per partition before processing
-        prefetch_batch_size: Batch size for reading from partitions
+        queue: Queue-like object to write samples to (producer-side)
+        n_scanners: [PRODUCER] Number of generators to sample simultaneously per worker
+        prefetch_batch_count: [PRODUCER] Number of generator reads per partition before processing.
+                             Controls chunk size: each chunk contains prefetch_batch_size * prefetch_batch_count rows.
+                             Higher values reduce processing overhead but increase memory per chunk.
+        prefetch_batch_size: [PRODUCER] Number of rows per generator read (batch size for reading from partitions)
         max_batches: Maximum number of batches to produce (for testing)
+        partial_groups_kv: KV store-like object for cross-worker partial group merging
 
     Returns:
         Dictionary with worker metrics
@@ -258,7 +261,7 @@ def prefetch_worker(
             with ThreadPoolExecutor(max_workers=n_scanners) as executor:
                 futures = {
                     executor.submit(
-                        read_from_partition, part_idx, batches_per_partition
+                        read_from_partition, part_idx, prefetch_batch_count
                     ): part_idx
                     for part_idx in sampled_partitions
                 }
