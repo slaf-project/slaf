@@ -14,6 +14,7 @@ Framework-agnostic - accepts any queue-like object with get_many() method.
 """
 
 import threading
+import time
 from collections.abc import Iterator
 from queue import Empty, Queue
 from typing import Any
@@ -47,6 +48,7 @@ class DistributedDataLoader:
         batch_size: int = 32,
         return_tensors: bool = True,
         prefetch_factor: int = 8,
+        enable_diagnostics: bool = False,
     ):
         """
         Initialize distributed dataloader.
@@ -59,12 +61,15 @@ class DistributedDataLoader:
             prefetch_factor: Number of batches to prefetch in background thread.
                            Higher values use more memory but improve throughput.
                            Default: 2 (similar to PyTorch DataLoader).
+            enable_diagnostics: If True, collect timing statistics for bottleneck analysis.
+                              Default: False.
         """
         self.queue = queue
         self.batch_size = batch_size
         self.return_tensors = return_tensors
         self.prefetch_factor = prefetch_factor
         self._use_prefetching = prefetch_factor > 0
+        self.enable_diagnostics = enable_diagnostics
 
         # Internal queue for prefetched formatted batches (only if prefetching enabled)
         if self._use_prefetching:
@@ -74,6 +79,20 @@ class DistributedDataLoader:
         self._worker_thread: threading.Thread | None = None
         self._should_stop = False
         self._stop_iteration = False
+
+        # Diagnostic statistics
+        if self.enable_diagnostics:
+            import time
+
+            self._diagnostics = {
+                "queue_get_time": 0.0,
+                "format_time": 0.0,
+                "filter_time": 0.0,
+                "total_batches": 0,
+                "queue_get_count": 0,
+                "format_count": 0,
+                "start_time": time.time(),
+            }
 
     def __iter__(self) -> Iterator[dict[str, Any]]:
         """
@@ -124,6 +143,7 @@ class DistributedDataLoader:
 
             while not stop_iteration:
                 # Use get_many for batch_size samples (single round trip)
+                queue_start = time.time() if self.enable_diagnostics else None
                 try:
                     samples = self.queue.get_many(
                         n_values=self.batch_size, block=True, timeout=30.0
@@ -135,11 +155,18 @@ class DistributedDataLoader:
                     print(f"Error reading from queue: {e}")
                     continue
 
+                if self.enable_diagnostics and queue_start:
+                    import time
+
+                    self._diagnostics["queue_get_time"] += time.time() - queue_start
+                    self._diagnostics["queue_get_count"] += 1
+
                 if not samples:
                     stop_iteration = True
                     break
 
                 # Check for end-of-epoch marker and filter efficiently
+                filter_start = time.time() if self.enable_diagnostics else None
                 # Use any() with generator for early exit, then filter
                 if any(s is not None and s.get("end_of_epoch", False) for s in samples):
                     stop_iteration = True
@@ -155,9 +182,22 @@ class DistributedDataLoader:
                     # Filter None values only
                     samples = [s for s in samples if s is not None]
 
+                if self.enable_diagnostics and filter_start:
+                    import time
+
+                    self._diagnostics["filter_time"] += time.time() - filter_start
+
                 # Yield batch (format synchronously)
                 if samples:
-                    yield from self._format_batch(samples)
+                    format_start = time.time() if self.enable_diagnostics else None
+                    for batch in self._format_batch(samples):
+                        yield batch
+                    if self.enable_diagnostics and format_start:
+                        import time
+
+                        self._diagnostics["format_time"] += time.time() - format_start
+                        self._diagnostics["format_count"] += 1
+                        self._diagnostics["total_batches"] += 1
 
     def _prefetch_worker(self):
         """Background worker thread that prefetches and formats batches."""
@@ -306,3 +346,54 @@ class DistributedDataLoader:
         else:
             # Unknown format - return as-is
             yield {"samples": samples}
+
+    def get_diagnostics(self) -> dict[str, Any]:
+        """
+        Get diagnostic statistics for bottleneck analysis.
+
+        Returns:
+            Dictionary with timing statistics:
+            - queue_get_time: Total time spent in queue.get_many() (seconds)
+            - format_time: Total time spent formatting batches (seconds)
+            - filter_time: Total time spent filtering samples (seconds)
+            - total_batches: Total number of batches produced
+            - queue_get_count: Number of queue.get_many() calls
+            - format_count: Number of format operations
+            - elapsed_time: Total elapsed time (seconds)
+            - avg_queue_get_time: Average time per queue.get_many() call (ms)
+            - avg_format_time: Average time per format operation (ms)
+            - queue_get_pct: Percentage of time spent in queue operations
+            - format_pct: Percentage of time spent formatting
+        """
+        if not self.enable_diagnostics:
+            return {"error": "Diagnostics not enabled"}
+
+        elapsed = time.time() - self._diagnostics["start_time"]
+        diag = self._diagnostics.copy()
+        diag["elapsed_time"] = elapsed
+
+        if diag["queue_get_count"] > 0:
+            diag["avg_queue_get_time"] = (
+                diag["queue_get_time"] / diag["queue_get_count"]
+            ) * 1000  # ms
+        else:
+            diag["avg_queue_get_time"] = 0.0
+
+        if diag["format_count"] > 0:
+            diag["avg_format_time"] = (
+                diag["format_time"] / diag["format_count"]
+            ) * 1000  # ms
+        else:
+            diag["avg_format_time"] = 0.0
+
+        total_time = diag["queue_get_time"] + diag["format_time"] + diag["filter_time"]
+        if total_time > 0:
+            diag["queue_get_pct"] = (diag["queue_get_time"] / total_time) * 100
+            diag["format_pct"] = (diag["format_time"] / total_time) * 100
+            diag["filter_pct"] = (diag["filter_time"] / total_time) * 100
+        else:
+            diag["queue_get_pct"] = 0.0
+            diag["format_pct"] = 0.0
+            diag["filter_pct"] = 0.0
+
+        return diag
