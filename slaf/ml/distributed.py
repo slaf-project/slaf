@@ -304,12 +304,15 @@ class DistributedSLAFDataLoader:
         # Prefetching disabled by default (prefetch_factor=0) - enable if formatting is CPU-bound
         # For raw mode, formatting is fast (just extracting DataFrames), so prefetching adds overhead
         # Enable diagnostics for bottleneck analysis
+        # Use queue_prefetch_multiplier=4 to reduce network round-trips (request 4x batch_size per queue call)
+        # This helps when network latency is the bottleneck (as shown by diagnostics)
         self.dataloader = DistributedDataLoader(
             queue,
             batch_size=batch_size,
             return_tensors=return_tensors,
             prefetch_factor=0,
             enable_diagnostics=True,  # Enable diagnostics for bottleneck analysis
+            queue_prefetch_multiplier=4,  # Request 4x batch_size per queue call to reduce network latency
         )
         self.worker_handles = worker_handles
         self.queue_name = queue_name  # Store queue name for external access
