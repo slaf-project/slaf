@@ -76,6 +76,11 @@ class GroupBoundaryHandler:
         Returns:
             True if batches are continuous (same group), False otherwise
         """
+        # First check if it's the same group spanning the boundary
+        # This handles the case where a group spans multiple batches
+        if last_group_id == first_group_id:
+            return True
+
         if self.continuity_check == "sequential":
             # Sequential: check if first_group = last_group + 1
             # Assumes group_key is integer and groups are sequential
@@ -135,6 +140,20 @@ class GroupBoundaryHandler:
         # Split into complete and partial
         complete_groups = batch.filter(pl.col(group_key) != last_group_id)
         partial_group = batch.filter(pl.col(group_key) == last_group_id)
+
+        # Debug: log when we get unexpected results (0 complete groups with multiple groups)
+        if len(complete_groups) == 0 and len(unique_groups) > 1:
+            print(
+                f"[DEBUG track_partial] partition {partition_id}: "
+                f"n_unique_groups={len(unique_groups)}, "
+                f"last_group_id={last_group_id} (type: {type(last_group_id)}), "
+                f"complete_groups_rows={len(complete_groups)}, "
+                f"partial_group_rows={len(partial_group)}, "
+                f"batch_total_rows={len(batch)}, "
+                f"is_partition_exhausted={is_partition_exhausted}, "
+                f"first_5_groups={unique_groups[:5].to_list() if len(unique_groups) >= 5 else unique_groups.to_list()}, "
+                f"last_5_groups={unique_groups[-5:].to_list() if len(unique_groups) >= 5 else unique_groups.to_list()}"
+            )
 
         # Store partial group
         partial_dict = {}

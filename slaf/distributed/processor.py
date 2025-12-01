@@ -206,6 +206,22 @@ class BatchProcessor:
         # Combine raw batches
         combined_df = pl.concat(raw_batches, how="vertical")
 
+        # Debug: log DataFrame info before boundary handling
+        if len(combined_df) > 0 and partition_id is not None:
+            group_key = self.schema.group_key
+            unique_groups = combined_df[group_key].unique().sort()
+            n_groups = len(unique_groups)
+            # Only log first few times to avoid spam
+            if self.batch_id < 3:
+                print(
+                    f"[DEBUG partition {partition_id}] Combined {len(raw_batches)} batches: "
+                    f"{len(combined_df)} rows, {n_groups} unique groups, "
+                    f"first_group={unique_groups[0] if n_groups > 0 else 'N/A'}, "
+                    f"last_group={unique_groups[-1] if n_groups > 0 else 'N/A'}, "
+                    f"is_partition_exhausted={is_partition_exhausted}, "
+                    f"partial_groups_before={list(self.partial_groups.keys())}"
+                )
+
         # Handle group boundaries: merge partial groups and track new partials
         # Pass is_partition_exhausted to boundary handler
         complete_df, self.partial_groups = self.boundary_handler.merge_partial_data(
@@ -214,6 +230,19 @@ class BatchProcessor:
             partition_id=partition_id,
             is_partition_exhausted=is_partition_exhausted,
         )
+
+        # Debug: log after boundary handling
+        if len(combined_df) > 0 and len(complete_df) == 0 and partition_id is not None:
+            group_key = self.schema.group_key
+            unique_groups = combined_df[group_key].unique().sort()
+            if self.batch_id < 3:
+                print(
+                    f"[DEBUG partition {partition_id}] WARNING: {len(combined_df)} rows, "
+                    f"{len(unique_groups)} groups in combined_df, "
+                    f"but 0 complete groups after boundary handling. "
+                    f"Partial groups after: {list(self.partial_groups.keys())}, "
+                    f"is_partition_exhausted={is_partition_exhausted}"
+                )
 
         # If no complete groups, return empty list (partial groups will be handled in next batch)
         if len(complete_df) == 0:
@@ -330,16 +359,17 @@ class BatchProcessor:
             if len(group_keys) > 0:
                 # Use partition_by to split DataFrame by group_key efficiently
                 # This creates a dict mapping group_key -> DataFrame
+                # Note: partition_by returns tuple keys (even for single column)
                 partitioned = grouped.partition_by(
                     group_key_out, as_dict=True, maintain_order=True
                 )
                 samples = [
                     {
-                        "grouped": partitioned.get(group_key, pl.DataFrame()),
+                        "grouped": partitioned.get((group_key,), pl.DataFrame()),
                         "group_key": group_key,
                     }
                     for group_key in group_keys
-                    if group_key in partitioned
+                    if (group_key,) in partitioned
                 ]
             else:
                 samples = []
