@@ -18,6 +18,8 @@ from collections.abc import Iterator
 from queue import Empty, Queue
 from typing import Any
 
+import polars as pl
+
 
 class DistributedDataLoader:
     """
@@ -137,21 +139,21 @@ class DistributedDataLoader:
                     stop_iteration = True
                     break
 
-                # Check for end-of-epoch marker and filter in single pass
-                filtered_samples = []
-                for s in samples:
-                    if s is not None:
-                        if s.get("end_of_epoch", False):
-                            stop_iteration = True
-                        else:
-                            filtered_samples.append(s)
-
-                if stop_iteration:
+                # Check for end-of-epoch marker and filter efficiently
+                # Use any() with generator for early exit, then filter
+                if any(s is not None and s.get("end_of_epoch", False) for s in samples):
+                    stop_iteration = True
+                    filtered_samples = [
+                        s
+                        for s in samples
+                        if s is not None and not s.get("end_of_epoch", False)
+                    ]
                     if not filtered_samples:
                         break
                     samples = filtered_samples
                 else:
-                    samples = filtered_samples if filtered_samples else samples
+                    # Filter None values only
+                    samples = [s for s in samples if s is not None]
 
                 # Yield batch (format synchronously)
                 if samples:
@@ -179,22 +181,22 @@ class DistributedDataLoader:
                 self._prefetch_queue.put(None)
                 break
 
-            # Check for end-of-epoch marker and filter in single pass
-            filtered_samples = []
-            for s in samples:
-                if s is not None:
-                    if s.get("end_of_epoch", False):
-                        self._stop_iteration = True
-                    else:
-                        filtered_samples.append(s)
-
-            if self._stop_iteration:
+            # Check for end-of-epoch marker and filter efficiently
+            # Use any() with generator for early exit, then filter
+            if any(s is not None and s.get("end_of_epoch", False) for s in samples):
+                self._stop_iteration = True
+                filtered_samples = [
+                    s
+                    for s in samples
+                    if s is not None and not s.get("end_of_epoch", False)
+                ]
                 if not filtered_samples:
                     self._prefetch_queue.put(None)
                     break
                 samples = filtered_samples
             else:
-                samples = filtered_samples if filtered_samples else samples
+                # Filter None values only
+                samples = [s for s in samples if s is not None]
 
             # Format batch (this is the CPU-bound operation)
             if samples:
@@ -245,7 +247,7 @@ class DistributedDataLoader:
                     attention_mask = torch.stack(attention_mask_list)
                     cell_ids = torch.tensor(cell_ids_list, dtype=torch.long)
 
-                    # Extract other keys only if they exist (avoid unnecessary iteration)
+                    # Extract other keys only if they exist (use Polars for efficiency)
                     first_sample = samples[0]
                     extra_keys = [
                         key
@@ -253,9 +255,12 @@ class DistributedDataLoader:
                         if key not in ["input_ids", "attention_mask", "group_key"]
                     ]
                     if extra_keys:
-                        # Only iterate if there are other keys
+                        # Use Polars DataFrame for efficient column extraction
+                        df = pl.DataFrame(samples)
                         extra_data = {
-                            key: [s[key] for s in samples] for key in extra_keys
+                            key: df[key].to_list()
+                            for key in extra_keys
+                            if key in df.columns
                         }
                     else:
                         extra_data = {}
@@ -274,11 +279,16 @@ class DistributedDataLoader:
                         "cell_ids": [s.get("group_key", 0) for s in samples],
                     }
             else:
-                # Return Python objects (lists)
+                # Return Python objects (lists) - use Polars DataFrame for efficiency
+                df = pl.DataFrame(samples)
                 yield {
-                    "input_ids": [s["input_ids"] for s in samples],
-                    "attention_mask": [s["attention_mask"] for s in samples],
-                    "cell_ids": [s.get("group_key", 0) for s in samples],
+                    "input_ids": df["input_ids"].to_list(),
+                    "attention_mask": df["attention_mask"].to_list(),
+                    "cell_ids": (
+                        df.get_column("group_key").fill_null(0).to_list()
+                        if "group_key" in df.columns
+                        else [0] * len(samples)
+                    ),
                 }
         elif "grouped" in samples[0]:
             # Raw format - return list of DataFrames
