@@ -84,7 +84,10 @@ class DistributedDataLoader:
             self._prefetch_queue: Queue[dict[str, Any] | None] = Queue(
                 maxsize=prefetch_factor
             )
-        self._worker_thread: threading.Thread | None = None
+        # Use multiple worker threads for concurrent queue.get_many() calls
+        # This is like having multiple consumers in the same process
+        # Number of threads = prefetch_factor (each thread can have one get_many() in flight)
+        self._worker_threads: list[threading.Thread] = []
         self._should_stop = False
         self._stop_iteration = False
 
@@ -114,13 +117,21 @@ class DistributedDataLoader:
             - cell_ids: Cell integer IDs (torch.Tensor if return_tensors=True, else list)
         """
         if self._use_prefetching:
-            # Use background prefetching
+            # Use multiple background threads for concurrent queue.get_many() calls
+            # Each thread makes independent get_many() calls, allowing true parallelism
             self._should_stop = False
             self._stop_iteration = False
-            self._worker_thread = threading.Thread(
-                target=self._prefetch_worker, daemon=True
-            )
-            self._worker_thread.start()
+
+            # Create multiple worker threads (one per prefetch_factor)
+            # Each thread can have one get_many() call in flight concurrently
+            num_threads = max(1, self.prefetch_factor)
+            self._worker_threads = []
+            for i in range(num_threads):
+                thread = threading.Thread(
+                    target=self._prefetch_worker, daemon=True, name=f"prefetch-{i}"
+                )
+                thread.start()
+                self._worker_threads.append(thread)
 
             try:
                 while True:
@@ -131,18 +142,19 @@ class DistributedDataLoader:
                             break
                         yield batch
                     except Empty:
-                        # Check if worker thread is still alive
-                        if (
-                            not self._worker_thread.is_alive()
-                            and self._prefetch_queue.empty()
-                        ):
+                        # Check if all worker threads are done
+                        alive_threads = [
+                            t for t in self._worker_threads if t.is_alive()
+                        ]
+                        if not alive_threads and self._prefetch_queue.empty():
                             break
                         continue
             finally:
-                # Signal worker to stop and wait for it
+                # Signal all workers to stop and wait for them
                 self._should_stop = True
-                if self._worker_thread and self._worker_thread.is_alive():
-                    self._worker_thread.join(timeout=2.0)
+                for thread in self._worker_threads:
+                    if thread.is_alive():
+                        thread.join(timeout=2.0)
         else:
             # Synchronous mode (no prefetching) - simpler and lower memory
             stop_iteration = False
