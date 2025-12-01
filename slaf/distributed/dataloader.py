@@ -156,8 +156,6 @@ class DistributedDataLoader:
                     continue
 
                 if self.enable_diagnostics and queue_start:
-                    import time
-
                     self._diagnostics["queue_get_time"] += time.time() - queue_start
                     self._diagnostics["queue_get_count"] += 1
 
@@ -183,8 +181,6 @@ class DistributedDataLoader:
                     samples = [s for s in samples if s is not None]
 
                 if self.enable_diagnostics and filter_start:
-                    import time
-
                     self._diagnostics["filter_time"] += time.time() - filter_start
 
                 # Yield batch (format synchronously)
@@ -193,8 +189,6 @@ class DistributedDataLoader:
                     for batch in self._format_batch(samples):
                         yield batch
                     if self.enable_diagnostics and format_start:
-                        import time
-
                         self._diagnostics["format_time"] += time.time() - format_start
                         self._diagnostics["format_count"] += 1
                         self._diagnostics["total_batches"] += 1
