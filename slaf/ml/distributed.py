@@ -301,18 +301,19 @@ class DistributedSLAFDataLoader:
         queue = modal.Queue.from_name(queue_name, create_if_missing=True)
 
         # Create dataloader with queue object and batch_size (framework-agnostic)
-        # Prefetching disabled by default (prefetch_factor=0) - enable if formatting is CPU-bound
-        # For raw mode, formatting is fast (just extracting DataFrames), so prefetching adds overhead
+        # Enable concurrent prefetching with multiple threads making concurrent get_many() calls
+        # This is like having multiple consumers in the same process, allowing true parallelism
+        # prefetch_factor=4 means 4 threads, each making concurrent queue.get_many() calls
         # Enable diagnostics for bottleneck analysis
-        # Use queue_prefetch_multiplier=4 to reduce network round-trips (request 4x batch_size per queue call)
-        # This helps when network latency is the bottleneck (as shown by diagnostics)
+        # Note: queue_prefetch_multiplier doesn't help when latency scales with sample size
+        # The bottleneck is data transfer time, not per-call overhead
         self.dataloader = DistributedDataLoader(
             queue,
             batch_size=batch_size,
             return_tensors=return_tensors,
-            prefetch_factor=0,
+            prefetch_factor=4,  # Use 4 concurrent threads for queue.get_many() calls
             enable_diagnostics=True,  # Enable diagnostics for bottleneck analysis
-            queue_prefetch_multiplier=4,  # Request 4x batch_size per queue call to reduce network latency
+            queue_prefetch_multiplier=1,  # Set to 1 since latency scales with sample size, not per-call
         )
         self.worker_handles = worker_handles
         self.queue_name = queue_name  # Store queue name for external access
