@@ -39,11 +39,6 @@ def prefetch_worker(
     Returns:
         Dictionary with worker metrics
     """
-    print(f"[{worker_id}] Starting worker with {len(partition_indices)} partitions")
-    print(
-        f"[{worker_id}] Partitions: {partition_indices[:10]}{'...' if len(partition_indices) > 10 else ''}"
-    )
-
     # Import data source (generic)
     from slaf.distributed.data_source import LanceDataSource
 
@@ -294,16 +289,6 @@ def prefetch_worker(
                         all_samples_batch.extend(samples)
                         total_rows += rows
 
-                        # Debug: log first few batches
-                        if total_batches == 0 and len(samples) > 0:
-                            print(
-                                f"[{worker_id}] Got {len(samples)} samples from partition {partition_idx} (rows: {rows}, total_samples: {len(all_samples_batch)})"
-                            )
-                        elif total_batches == 0 and len(samples) == 0 and rows > 0:
-                            print(
-                                f"[{worker_id}] WARNING: Processed {rows} rows from partition {partition_idx} but got 0 samples (likely all partial groups)"
-                            )
-
                     # Batch put_many when we have enough samples or all futures complete
                     # This maintains queue efficiency while preserving partition processing order
                     all_futures_complete = completed_futures >= len(sampled_partitions)
@@ -324,12 +309,6 @@ def prefetch_worker(
                                     print(
                                         f"[{worker_id}] Error putting individual sample: {e2}"
                                     )
-
-                        # Log first few batches for debugging
-                        if total_batches <= 3:
-                            print(
-                                f"[{worker_id}] Sent {len(all_samples_batch)} samples to queue"
-                            )
 
                         all_samples_batch.clear()  # Clear after putting
 

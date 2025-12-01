@@ -49,21 +49,11 @@ class Window:
         # Filter to top N items per group
         filtered = ranked.filter(pl.col("rank") <= max_items)
 
-        # Aggregate into lists
-        grouped = filtered.group_by(schema.group_key).agg(
-            [
-                pl.col(schema.item_key).alias(schema.item_list_key),
-            ]
-        )
-
-        # Optionally include value list
+        # Aggregate into lists (items and optionally values in single group_by)
+        agg_exprs = [pl.col(schema.item_key).alias(schema.item_list_key)]
         if schema.value_list_key:
-            grouped = grouped.with_columns(
-                [
-                    filtered.group_by(schema.group_key).agg(
-                        [pl.col(schema.value_key).alias(schema.value_list_key)]
-                    )[schema.value_list_key]
-                ]
-            )
+            agg_exprs.append(pl.col(schema.value_key).alias(schema.value_list_key))
+
+        grouped = filtered.group_by(schema.group_key).agg(agg_exprs)
 
         return grouped

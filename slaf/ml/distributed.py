@@ -293,27 +293,6 @@ class DistributedSLAFDataLoader:
                 traceback.print_exc()
                 raise
 
-        print(f"✅ All {len(worker_handles)} workers spawned successfully")
-        print(f"Queue name: {queue_name}")
-        print(f"KV store name: {partial_groups_kv_name}")
-
-        # Check worker status after a short delay
-        import time
-
-        print("Waiting 5 seconds for workers to initialize...")
-        time.sleep(5)
-
-        # Try to get worker status (non-blocking check)
-        for worker_id, handle in zip(assignments.keys(), worker_handles, strict=True):
-            try:
-                # Try to get result with timeout=0.1 (non-blocking)
-                # This will raise if worker hasn't started or has an error
-                result = handle.get(timeout=0.1)
-                print(f"  Worker {worker_id} completed: {result}")
-            except Exception:
-                # Expected - workers are still running
-                print(f"  Worker {worker_id} status: running (expected)")
-
         # Create queue object for the dataloader
         queue = modal.Queue.from_name(queue_name, create_if_missing=True)
 
