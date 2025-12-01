@@ -82,8 +82,6 @@ class DistributedDataLoader:
 
         # Diagnostic statistics
         if self.enable_diagnostics:
-            import time
-
             self._diagnostics = {
                 "queue_get_time": 0.0,
                 "format_time": 0.0,
