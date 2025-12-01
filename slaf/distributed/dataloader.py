@@ -44,7 +44,7 @@ class DistributedDataLoader:
         queue: Any,
         batch_size: int = 32,
         return_tensors: bool = True,
-        prefetch_factor: int = 2,
+        prefetch_factor: int = 8,
     ):
         """
         Initialize distributed dataloader.
