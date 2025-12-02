@@ -186,7 +186,12 @@ class GroupBoundaryHandler:
                     partial_data = self.partial_groups_kv.get(key)
                     if partial_data is not None:
                         # Found matching partial group! Convert back to DataFrame
-                        return pl.from_arrow(partial_data)
+                        result = pl.from_arrow(partial_data)
+                        # Ensure we return a DataFrame, not a Series
+                        if isinstance(result, pl.DataFrame):
+                            return result
+                        # If it's a Series, convert to DataFrame
+                        return result.to_frame()
                 except (ValueError, TypeError):
                     # first_group_id is not an integer, can't check sequential
                     pass
@@ -207,7 +212,12 @@ class GroupBoundaryHandler:
                             if self.check_continuity(
                                 check_group_id, first_group_id, None
                             ):
-                                return pl.from_arrow(partial_data)
+                                result = pl.from_arrow(partial_data)
+                                # Ensure we return a DataFrame, not a Series
+                                if isinstance(result, pl.DataFrame):
+                                    return result
+                                # If it's a Series, convert to DataFrame
+                                return result.to_frame()
                 except (ValueError, TypeError):
                     # Can't convert to int, skip ordered check
                     pass

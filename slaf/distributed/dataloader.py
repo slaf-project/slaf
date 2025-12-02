@@ -322,8 +322,9 @@ class DistributedDataLoader:
                     batch_size = len(samples)
 
                     # Pre-allocate lists for stacking (faster than list comprehension with checks)
-                    input_ids_list = [None] * batch_size
-                    attention_mask_list = [None] * batch_size
+                    # Type: ignore because we know these will be filled with tensors
+                    input_ids_list: list[Any] = [None] * batch_size
+                    attention_mask_list: list[Any] = [None] * batch_size
                     cell_ids_list = [0] * batch_size
 
                     # Single pass: extract all data
@@ -333,8 +334,9 @@ class DistributedDataLoader:
                         cell_ids_list[i] = s.get("group_key", 0)
 
                     # Stack tensors in single operations (very fast)
-                    input_ids = torch.stack(input_ids_list)
-                    attention_mask = torch.stack(attention_mask_list)
+                    # Type: ignore because we know the lists contain tensors after the loop
+                    input_ids = torch.stack(input_ids_list)  # type: ignore[arg-type]
+                    attention_mask = torch.stack(attention_mask_list)  # type: ignore[arg-type]
                     cell_ids = torch.tensor(cell_ids_list, dtype=torch.long)
 
                     # Extract other keys only if they exist (use Polars for efficiency)
