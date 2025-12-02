@@ -37,6 +37,10 @@ class Shuffle:
         Returns:
             Shuffled DataFrame
         """
+        # Handle empty DataFrame
+        if len(df) == 0:
+            return df
+
         # Partition by group_key (fast for pre-sorted data)
         chunks = df.partition_by(schema.group_key, as_dict=False)
 
