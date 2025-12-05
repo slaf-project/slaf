@@ -1,3 +1,4 @@
+import gc
 import tempfile
 from pathlib import Path
 
@@ -340,7 +341,10 @@ def tiny_slaf(temp_dir, tiny_adata):
     slaf_path = Path(temp_dir) / "tiny_test_dataset.slaf"
     converter.convert_anndata(tiny_adata, str(slaf_path))
 
-    return SLAFArray(str(slaf_path))
+    slaf_array = SLAFArray(str(slaf_path))
+    # Wait for background metadata loading to complete to avoid cleanup issues
+    slaf_array.wait_for_metadata()
+    return slaf_array
 
 
 @pytest.fixture
@@ -353,7 +357,10 @@ def small_slaf(temp_dir, small_adata):
     slaf_path = Path(temp_dir) / "small_test_dataset.slaf"
     converter.convert_anndata(small_adata, str(slaf_path))
 
-    return SLAFArray(str(slaf_path))
+    slaf_array = SLAFArray(str(slaf_path))
+    # Wait for background metadata loading to complete to avoid cleanup issues
+    slaf_array.wait_for_metadata()
+    return slaf_array
 
 
 @pytest.fixture
@@ -822,3 +829,21 @@ def slaf_with_var_columns(temp_dir):
 
     # Return SLAFArray instance
     return SLAFArray(str(slaf_dir), load_metadata=False)
+
+
+@pytest.fixture(autouse=True)
+def wait_for_background_threads():
+    """Ensure all background threads complete before test cleanup to avoid logging errors."""
+    yield
+    # After each test, wait for any SLAFArray background threads to complete
+    # This prevents loguru from trying to write to closed file handles
+    gc.collect()  # Force garbage collection to find any remaining SLAFArray instances
+    # Find all SLAFArray instances and wait for their metadata threads
+    for obj in gc.get_objects():
+        if isinstance(obj, SLAFArray):
+            if (
+                hasattr(obj, "_metadata_thread")
+                and obj._metadata_thread
+                and obj._metadata_thread.is_alive()
+            ):
+                obj.wait_for_metadata(timeout=1.0)  # Short timeout to avoid hanging

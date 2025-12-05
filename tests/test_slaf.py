@@ -1,3 +1,5 @@
+import json
+import os
 import threading
 import time
 
@@ -714,6 +716,8 @@ class TestSLAFArray:
         converter.convert(str(h5ad_path), str(output_path_new))
 
         slaf_array_new = SLAFArray(str(output_path_new))
+        # Wait for background metadata loading to complete before capturing output
+        slaf_array_new.wait_for_metadata()
 
         # Capture info output for new format
         import io
@@ -744,4 +748,311 @@ class TestSLAFArray:
         output_path_old = tmp_path / "test_old.slaf"
         output_path_old.mkdir(exist_ok=True)
 
-        # Copy Lance files
+        # Copy Lance datasets (they are directories, not files)
+        import shutil
+
+        for lance_dir in output_path_new.glob("*.lance"):
+            if lance_dir.is_dir():
+                shutil.copytree(
+                    lance_dir, output_path_old / lance_dir.name, dirs_exist_ok=True
+                )
+
+        # Write old config
+        with open(output_path_old / "config.json", "w") as f:
+            json.dump(config_old, f)
+
+        slaf_array_old = SLAFArray(str(output_path_old))
+        # Wait for background metadata loading to complete before capturing output
+        slaf_array_old.wait_for_metadata()
+
+        # Capture info output for old format
+        captured_output = io.StringIO()
+        sys.stdout = captured_output
+        slaf_array_old.info()
+        sys.stdout = sys.__stdout__
+        old_format_output = captured_output.getvalue()
+
+        # Verify old format output (should still work but may compute on the fly)
+        assert "Expression records:" in old_format_output
+
+    def test_is_hf_path(self):
+        """Test _is_hf_path method"""
+        slaf_array = SLAFArray.__new__(SLAFArray)  # Create instance without __init__
+
+        # Test HuggingFace paths
+        assert slaf_array._is_hf_path("hf://datasets/username/repo-name")
+        assert slaf_array._is_hf_path("hf://datasets/username/repo-name/path/to/slaf")
+
+        # Test non-HuggingFace paths
+        assert not slaf_array._is_hf_path("s3://bucket/path")
+        assert not slaf_array._is_hf_path("/local/path")
+        assert not slaf_array._is_hf_path("gs://bucket/path")
+
+    def test_parse_hf_path(self):
+        """Test _parse_hf_path method"""
+        slaf_array = SLAFArray.__new__(SLAFArray)
+
+        # Test base path
+        repo_id, file_path = slaf_array._parse_hf_path(
+            "hf://datasets/username/repo-name"
+        )
+        assert repo_id == "username/repo-name"
+        assert file_path == ""
+
+        # Test path with subdirectory
+        repo_id, file_path = slaf_array._parse_hf_path(
+            "hf://datasets/username/repo-name/path/to/slaf"
+        )
+        assert repo_id == "username/repo-name"
+        assert file_path == "path/to/slaf"
+
+        # Test path with file
+        repo_id, file_path = slaf_array._parse_hf_path(
+            "hf://datasets/username/repo-name/path/to/slaf/config.json"
+        )
+        assert repo_id == "username/repo-name"
+        assert file_path == "path/to/slaf/config.json"
+
+        # Test invalid paths
+        with pytest.raises(ValueError, match="Not a HuggingFace path"):
+            slaf_array._parse_hf_path("s3://bucket/path")
+
+        with pytest.raises(ValueError, match="Invalid HuggingFace path"):
+            slaf_array._parse_hf_path("hf://datasets/repo")
+
+    def test_download_hf_file_mocked(self, tmp_path, monkeypatch):
+        """Test _download_hf_file with mocked huggingface_hub"""
+        slaf_array = SLAFArray.__new__(SLAFArray)
+        slaf_array._cache_dir = None
+
+        # Mock hf_hub_download
+        def mock_hf_hub_download(repo_id, filename, repo_type, cache_dir=None):
+            # Create a temporary file to simulate downloaded file
+            local_file = (
+                tmp_path / f"{repo_id.replace('/', '_')}_{filename.replace('/', '_')}"
+            )
+            local_file.parent.mkdir(parents=True, exist_ok=True)
+            local_file.write_text('{"test": "data"}')
+            return str(local_file)
+
+        # Patch the import
+        import slaf.core.slaf as slaf_module
+
+        monkeypatch.setattr(slaf_module, "hf_hub_download", mock_hf_hub_download)
+        monkeypatch.setattr(slaf_module, "HF_HUB_AVAILABLE", True)
+
+        # Test downloading config.json
+        hf_path = "hf://datasets/username/repo-name/path/to/slaf"
+        local_path = slaf_array._download_hf_file(hf_path, "config.json")
+
+        assert local_path is not None
+        assert "config.json" in local_path
+        assert os.path.exists(local_path)
+
+        # Test downloading with full path
+        hf_path_full = "hf://datasets/username/repo-name/path/to/slaf/config.json"
+        local_path2 = slaf_array._download_hf_file(hf_path_full)
+
+        assert local_path2 is not None
+        assert os.path.exists(local_path2)
+
+    def test_path_exists_hf_mocked(self, tmp_path, monkeypatch):
+        """Test _path_exists for HuggingFace paths with mocked download"""
+        slaf_array = SLAFArray.__new__(SLAFArray)
+        slaf_array._cache_dir = None
+
+        # Mock hf_hub_download to succeed
+        def mock_hf_hub_download(repo_id, filename, repo_type, cache_dir=None):
+            local_file = (
+                tmp_path / f"{repo_id.replace('/', '_')}_{filename.replace('/', '_')}"
+            )
+            local_file.parent.mkdir(parents=True, exist_ok=True)
+            local_file.write_text('{"array_shape": [10, 5]}')
+            return str(local_file)
+
+        import slaf.core.slaf as slaf_module
+
+        monkeypatch.setattr(slaf_module, "hf_hub_download", mock_hf_hub_download)
+        monkeypatch.setattr(slaf_module, "HF_HUB_AVAILABLE", True)
+
+        # Test that path exists
+        hf_path = "hf://datasets/username/repo-name/path/to/slaf"
+        assert slaf_array._path_exists(hf_path) is True
+
+        # Test that path doesn't exist (mock raises exception)
+        def mock_hf_hub_download_fail(repo_id, filename, repo_type, cache_dir=None):
+            raise FileNotFoundError("File not found")
+
+        monkeypatch.setattr(slaf_module, "hf_hub_download", mock_hf_hub_download_fail)
+        assert slaf_array._path_exists(hf_path) is False
+
+    def test_open_file_hf_mocked(self, tmp_path, monkeypatch):
+        """Test _open_file for HuggingFace paths with mocked download"""
+        slaf_array = SLAFArray.__new__(SLAFArray)
+        slaf_array._cache_dir = None
+        slaf_array._cached_config_path = None
+
+        # Create a test config file
+        config_file = tmp_path / "config.json"
+        config_file.write_text('{"array_shape": [10, 5]}')
+
+        # Mock hf_hub_download
+        def mock_hf_hub_download(repo_id, filename, repo_type, cache_dir=None):
+            return str(config_file)
+
+        import slaf.core.slaf as slaf_module
+
+        monkeypatch.setattr(slaf_module, "hf_hub_download", mock_hf_hub_download)
+        monkeypatch.setattr(slaf_module, "HF_HUB_AVAILABLE", True)
+
+        # Test opening config.json
+        hf_path = "hf://datasets/username/repo-name/path/to/slaf/config.json"
+        with slaf_array._open_file(hf_path) as f:
+            content = json.load(f)
+            assert content["array_shape"] == [10, 5]
+
+        # Test that cached path is stored
+        assert slaf_array._cached_config_path == str(config_file)
+
+        # Test opening again (should use cached path)
+        with slaf_array._open_file(hf_path) as f:
+            content = json.load(f)
+            assert content["array_shape"] == [10, 5]
+
+    def test_hf_path_join(self):
+        """Test _join_path for HuggingFace paths"""
+        slaf_array = SLAFArray.__new__(SLAFArray)
+
+        # Test joining HuggingFace paths
+        base = "hf://datasets/username/repo-name/path/to/slaf"
+        result = slaf_array._join_path(base, "config.json")
+        assert result == "hf://datasets/username/repo-name/path/to/slaf/config.json"
+
+        result2 = slaf_array._join_path(base, "subdir", "file.json")
+        assert (
+            result2 == "hf://datasets/username/repo-name/path/to/slaf/subdir/file.json"
+        )
+
+    def test_hf_initialization_mocked(self, tmp_path, monkeypatch):
+        """Test SLAFArray initialization with HuggingFace path (mocked)"""
+        import json
+
+        # Create a local test dataset structure
+        test_slaf_dir = tmp_path / "test_slaf"
+        test_slaf_dir.mkdir()
+
+        # Create config
+        config = {
+            "array_shape": [10, 5],
+            "tables": {
+                "cells": "cells.lance",
+                "genes": "genes.lance",
+                "expression": "expression.lance",
+            },
+        }
+        with open(test_slaf_dir / "config.json", "w") as f:
+            json.dump(config, f)
+
+        # Create minimal Lance datasets
+        import lance
+        import pyarrow as pa
+
+        cells_data = {
+            "cell_id": [f"cell_{i}" for i in range(10)],
+            "cell_integer_id": list(range(10)),
+        }
+        genes_data = {
+            "gene_id": [f"gene_{i}" for i in range(5)],
+            "gene_integer_id": list(range(5)),
+        }
+
+        lance.write_dataset(cells_data, test_slaf_dir / "cells.lance")
+        lance.write_dataset(genes_data, test_slaf_dir / "genes.lance")
+
+        expression_schema = pa.schema(
+            [
+                pa.field("cell_integer_id", pa.int32()),
+                pa.field("gene_integer_id", pa.int32()),
+                pa.field("value", pa.float32()),
+            ]
+        )
+        lance.write_dataset(
+            [], test_slaf_dir / "expression.lance", schema=expression_schema
+        )
+
+        # Mock hf_hub_download to return local test files
+        def mock_hf_hub_download(repo_id, filename, repo_type, cache_dir=None):
+            # Map the requested file to our test directory
+            if filename.endswith("config.json"):
+                return str(test_slaf_dir / "config.json")
+            elif filename.endswith("cells.lance"):
+                return str(test_slaf_dir / "cells.lance")
+            elif filename.endswith("genes.lance"):
+                return str(test_slaf_dir / "genes.lance")
+            elif filename.endswith("expression.lance"):
+                return str(test_slaf_dir / "expression.lance")
+            else:
+                raise FileNotFoundError(f"File not found: {filename}")
+
+        import slaf.core.slaf as slaf_module
+
+        monkeypatch.setattr(slaf_module, "hf_hub_download", mock_hf_hub_download)
+        monkeypatch.setattr(slaf_module, "HF_HUB_AVAILABLE", True)
+
+        # Mock lance.dataset to work with local paths even when given hf:// paths
+        original_dataset = lance.dataset
+
+        def mock_lance_dataset(path):
+            # If it's an hf:// path, extract the filename and use local test dir
+            if isinstance(path, str) and path.startswith("hf://"):
+                # Extract filename from path
+                filename = path.split("/")[-1]
+                return original_dataset(str(test_slaf_dir / filename))
+            return original_dataset(path)
+
+        monkeypatch.setattr("lance.dataset", mock_lance_dataset)
+
+        # Test initialization with HuggingFace path
+        hf_path = "hf://datasets/username/repo-name/path/to/slaf"
+        slaf_array = SLAFArray(hf_path)
+
+        assert slaf_array.shape == (10, 5)
+        assert slaf_array.config is not None
+        assert slaf_array._cached_config_path is not None
+
+    def test_hf_cache_dir_parameter(self, tmp_path, monkeypatch):
+        """Test that cache_dir parameter is passed correctly"""
+        slaf_array = SLAFArray.__new__(SLAFArray)
+
+        # Track if cache_dir was passed
+        cache_dir_used = []
+
+        def mock_hf_hub_download(repo_id, filename, repo_type, cache_dir=None):
+            cache_dir_used.append(cache_dir)
+            local_file = tmp_path / "test_config.json"
+            local_file.write_text('{"test": "data"}')
+            return str(local_file)
+
+        import slaf.core.slaf as slaf_module
+
+        monkeypatch.setattr(slaf_module, "hf_hub_download", mock_hf_hub_download)
+        monkeypatch.setattr(slaf_module, "HF_HUB_AVAILABLE", True)
+
+        # Test with custom cache_dir (set on instance)
+        custom_cache = str(tmp_path / "custom_cache")
+        slaf_array._cache_dir = custom_cache
+        hf_path = "hf://datasets/username/repo-name/path/to/slaf"
+        # Don't pass cache_dir parameter, should use self._cache_dir
+        slaf_array._download_hf_file(hf_path, "config.json")
+
+        assert len(cache_dir_used) == 1
+        assert cache_dir_used[0] == custom_cache
+
+        # Test without cache_dir (should be None)
+        cache_dir_used.clear()
+        slaf_array._cache_dir = None
+        # Don't pass cache_dir parameter, should use self._cache_dir which is None
+        slaf_array._download_hf_file(hf_path, "config.json")
+
+        assert len(cache_dir_used) == 1
+        assert cache_dir_used[0] is None

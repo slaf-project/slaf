@@ -199,8 +199,14 @@ class SLAFArray:
                 "filename": full_filename,
                 "repo_type": "dataset",
             }
-            if cache_dir is not None:
-                download_kwargs["cache_dir"] = cache_dir
+            # Use cache_dir parameter if provided, otherwise fall back to instance cache_dir
+            effective_cache_dir = (
+                cache_dir
+                if cache_dir is not None
+                else getattr(self, "_cache_dir", None)
+            )
+            if effective_cache_dir is not None:
+                download_kwargs["cache_dir"] = effective_cache_dir
 
             local_path = hf_hub_download(**download_kwargs)
         except Exception as e:
@@ -351,7 +357,6 @@ class SLAFArray:
 
         # Load configuration
         config_path = self._join_path(self.slaf_path, "config.json")
-
         with self._open_file(config_path) as f:
             self.config = json.load(f)
 
