@@ -300,6 +300,18 @@ class SLAFArray:
             self._join_path(self.slaf_path, self.config["tables"]["genes"])
         )
 
+        # NEW: Setup layers dataset if it exists (format version 0.4+)
+        if "layers" in self.config.get("tables", {}):
+            try:
+                self.layers = lance.dataset(
+                    self._join_path(self.slaf_path, self.config["tables"]["layers"])
+                )
+            except Exception as e:
+                logger.warning(f"Could not load layers dataset: {e}")
+                self.layers = None
+        else:
+            self.layers = None
+
     def _ensure_metadata_loaded(self):
         """Ensure metadata is loaded (lazy loading with async support)"""
         if self._metadata_loaded:
@@ -513,12 +525,13 @@ class SLAFArray:
         Execute SQL query on the SLAF dataset.
 
         Executes SQL queries directly on the underlying Lance tables using Polars.
-        The query can reference three tables: 'cells', 'genes', and 'expression'.
+        The query can reference tables: 'cells', 'genes', 'expression', and optionally 'layers'.
         This enables complex aggregations, joins, and filtering operations.
 
         Args:
-            sql: SQL query string to execute. Can reference tables: cells, genes, expression.
+            sql: SQL query string to execute. Can reference tables: cells, genes, expression, layers.
                  Supports standard SQL operations including WHERE, GROUP BY, ORDER BY, etc.
+                 The 'layers' table is only available if the dataset has layers (format version 0.4+).
 
         Returns:
             Polars DataFrame containing the query results.
@@ -568,13 +581,17 @@ class SLAFArray:
             >>> print(f"Found {len(result)} expression patterns")
             Found 5 expression patterns
         """
-        # Create Polars context with all three Lance datasets
+        # Create Polars context with all Lance datasets
         ctx = pl.SQLContext()
 
         # Register Lance datasets with Polars context
         ctx.register("expression", pl.scan_pyarrow_dataset(self.expression))
         ctx.register("cells", pl.scan_pyarrow_dataset(self.cells))
         ctx.register("genes", pl.scan_pyarrow_dataset(self.genes))
+
+        # NEW: Register layers table if it exists (format version 0.4+)
+        if self.layers is not None:
+            ctx.register("layers", pl.scan_pyarrow_dataset(self.layers))
 
         # Execute the query using Polars SQL
         result = ctx.execute(sql).collect()

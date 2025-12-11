@@ -2993,7 +2993,7 @@ class SLAFConverter:
                 pass  # If we can't load existing config, start fresh
 
         config = {
-            "format_version": "0.3",
+            "format_version": "0.4",  # Bumped to 0.4 for layers support
             "array_shape": [n_cells, n_genes],
             "n_cells": n_cells,
             "n_genes": n_genes,
@@ -3001,6 +3001,7 @@ class SLAFConverter:
                 "expression": "expression.lance",
                 "cells": "cells.lance",
                 "genes": "genes.lance",
+                # Note: "layers" table will be added in Phase 3 when layers are converted
             },
             "optimizations": {
                 "use_integer_keys": self.use_integer_keys,
@@ -3066,7 +3067,7 @@ class SLAFConverter:
         total_cells_from_files = sum(info["n_cells"] for info in source_file_info)
 
         config = {
-            "format_version": "0.3",
+            "format_version": "0.4",  # Bumped to 0.4 for layers support
             "array_shape": [n_cells, n_genes],
             "n_cells": n_cells,
             "n_genes": n_genes,
@@ -3074,6 +3075,7 @@ class SLAFConverter:
                 "expression": "expression.lance",
                 "cells": "cells.lance",
                 "genes": "genes.lance",
+                # Note: "layers" table will be added in Phase 3 when layers are converted
             },
             "optimizations": {
                 "use_integer_keys": self.use_integer_keys,
