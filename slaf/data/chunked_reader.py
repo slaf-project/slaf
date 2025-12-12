@@ -385,18 +385,42 @@ class ChunkedH5ADReader(BaseChunkedReader):
             # Variable chunking not implemented for h5ad
             raise NotImplementedError("Variable chunking not supported for h5ad files")
 
-    def _read_chunk_as_arrow(self, start_row: int, end_row: int) -> pa.Table:
-        """Read a chunk and return as Arrow table directly"""
+    def _read_chunk_as_arrow(
+        self, start_row: int, end_row: int, layers: bool = False, cell_offset: int = 0
+    ) -> pa.Table:
+        """
+        Read a chunk and return as Arrow table directly.
+
+        Args:
+            start_row: Start row index (inclusive)
+            end_row: End row index (exclusive)
+            layers: If True, returns wide format table with all layers as columns.
+                   If False (default), returns expression (X) data.
+            cell_offset: Global cell offset to add to cell_integer_id (for multi-file conversion)
+
+        Returns:
+            If layers=False: Arrow table with columns: cell_integer_id, gene_integer_id, value
+            If layers=True: Arrow table with columns: cell_integer_id, gene_integer_id, layer1, layer2, ...
+        """
         if self.adata is None:
             raise RuntimeError("File not opened. Use context manager.")
 
         # Use scanpy's backed slicing to get the chunk
         chunk_adata = self.adata[start_row:end_row, :]
 
+        if layers:
+            # Return wide format table with all layers
+            return self._read_chunk_layers_wide(
+                chunk_adata, start_row, cell_offset=cell_offset
+            )
+        else:
+            # Get the expression matrix (X)
+            matrix = chunk_adata.X
+
         # Convert sparse matrix to Arrow arrays using optimized approach
-        if sparse.issparse(chunk_adata.X):
+        if sparse.issparse(matrix):
             # Convert to COO format
-            coo = chunk_adata.X.tocoo()
+            coo = matrix.tocoo()
 
             if coo.nnz > 0:
                 # Create Arrow arrays directly
@@ -465,7 +489,115 @@ class ChunkedH5ADReader(BaseChunkedReader):
 
         return result
 
-    def _get_chunk_impl(self, obs_slice: slice, var_slice: slice) -> pa.Table:
+    def _read_chunk_layers_wide(
+        self, chunk_adata, start_row: int, cell_offset: int = 0
+    ) -> pa.Table:
+        """
+        Read a chunk and return wide format Arrow table with all layers as columns.
+
+        Args:
+            chunk_adata: Sliced AnnData object for this chunk
+            start_row: Start row index (for adjusting cell_integer_id)
+            cell_offset: Global cell offset to add to cell_integer_id (for multi-file conversion)
+
+        Returns:
+            Arrow table with columns: cell_integer_id, gene_integer_id, layer1, layer2, ...
+        """
+        import polars as pl
+
+        # Check if layers exist
+        if not hasattr(chunk_adata, "layers") or not chunk_adata.layers:
+            # Return empty table with just cell_integer_id and gene_integer_id
+            return pa.table(
+                {
+                    "cell_integer_id": pa.array([], type=pa.uint32()),
+                    "gene_integer_id": pa.array([], type=pa.uint16()),
+                }
+            )
+
+        layer_names = list(chunk_adata.layers.keys())
+        n_cells = chunk_adata.n_obs
+        n_genes = chunk_adata.n_vars
+
+        # Generate all cell-gene pairs for this chunk (wide format requirement)
+        # Add cell_offset for multi-file conversion
+        cell_ids = np.arange(n_cells, dtype=np.uint32) + start_row + cell_offset
+        gene_ids = np.arange(n_genes, dtype=np.uint16)
+
+        # Create cartesian product for this chunk
+        cell_ids_expanded = np.repeat(cell_ids, n_genes)
+        gene_ids_expanded = np.tile(gene_ids, n_cells)
+
+        # Create base structure DataFrame
+        chunk_layers_table = pl.DataFrame(
+            {
+                "cell_integer_id": cell_ids_expanded,
+                "gene_integer_id": gene_ids_expanded,
+            }
+        )
+
+        # Process each layer for this chunk
+        value_pa_type = pa.uint16() if self.value_type == "uint16" else pa.float32()
+
+        for layer_name in layer_names:
+            layer_matrix = chunk_adata.layers[layer_name]
+
+            # Convert to COO format
+            if sparse.issparse(layer_matrix):
+                coo = layer_matrix.tocoo()
+            else:
+                coo = sparse.coo_matrix(layer_matrix)
+
+            if coo.nnz > 0:
+                # Create Arrow arrays directly
+                # Add cell_offset for multi-file conversion
+                cell_integer_ids = coo.row.astype(np.uint32) + start_row + cell_offset
+                gene_integer_ids = coo.col.astype(np.uint16)
+                # Use the specified value type
+                if self.value_type == "uint16":
+                    values = coo.data.astype(np.uint16)
+                elif self.value_type == "float32":
+                    values = coo.data.astype(np.float32)
+                else:
+                    raise ValueError(f"Unsupported value type: {self.value_type}")
+
+                layer_table = pa.table(
+                    {
+                        "cell_integer_id": pa.array(cell_integer_ids),
+                        "gene_integer_id": pa.array(gene_integer_ids),
+                        "value": pa.array(values),
+                    }
+                )
+            else:
+                # Empty chunk
+                layer_table = pa.table(
+                    {
+                        "cell_integer_id": pa.array([], type=pa.uint32()),
+                        "gene_integer_id": pa.array([], type=pa.uint16()),
+                        "value": pa.array([], type=value_pa_type),
+                    }
+                )
+
+            # Convert to Polars and rename value column to layer name
+            layer_df = (
+                pl.from_arrow(layer_table)
+                .select(["cell_integer_id", "gene_integer_id", "value"])
+                .rename({"value": layer_name})
+            )
+
+            # Left join to add layer column
+            chunk_layers_table = chunk_layers_table.join(
+                layer_df,
+                on=["cell_integer_id", "gene_integer_id"],
+                how="left",
+            )
+
+        # Convert back to PyArrow
+        return chunk_layers_table.to_arrow()
+
+    def _get_chunk_impl(
+        self, obs_slice: slice, var_slice: slice, layers: bool = False
+    ) -> pa.Table:
         """Implementation of chunk retrieval for h5ad files"""
         if self.adata is None:
             raise RuntimeError("File not opened. Use context manager.")
@@ -478,11 +610,22 @@ class ChunkedH5ADReader(BaseChunkedReader):
         # Use scanpy's backed slicing to get the chunk
         chunk_adata = self.adata[start_row:end_row, start_col:end_col]
 
+        if layers:
+            # Return wide format table with all layers
+            # Note: var_slice is not fully supported for layers wide format
+            # For now, we'll return all genes
+            return self._read_chunk_layers_wide(
+                self.adata[start_row:end_row, :], start_row
+            )
+
+        # Get the expression matrix (X)
+        matrix = chunk_adata.X
+
         # Convert to COO format
-        if sparse.issparse(chunk_adata.X):
-            coo = chunk_adata.X.tocoo()
+        if sparse.issparse(matrix):
+            coo = matrix.tocoo()
         else:
-            coo = sparse.coo_matrix(chunk_adata.X)
+            coo = sparse.coo_matrix(matrix)
 
         if coo.nnz > 0:
             # Create Arrow arrays directly

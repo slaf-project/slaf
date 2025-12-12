@@ -645,6 +645,14 @@ class SLAFConverter:
         # Create output directory (only for local paths)
         self._ensure_directory_exists(output_path)
 
+        # Check layer consistency across all files
+        layer_names = self._check_layer_consistency(input_files, input_format)
+        if layer_names is None:
+            logger.warning(
+                "Layers are inconsistent across files. Skipping layers.lance creation."
+            )
+            layer_names = []
+
         # Track source file information
         source_file_info = []
         global_cell_offset = 0
@@ -809,6 +817,24 @@ class SLAFConverter:
                         reader, output_path, i, chunk_start_idx, global_cell_offset
                     )
 
+                    # Process layers if they exist and are consistent
+                    if layer_names:
+                        logger.info(
+                            f"Processing {len(layer_names)} consistent layers for file {i + 1}/{len(input_files)}..."
+                        )
+                        # Determine value type from first file (assume consistent across files)
+                        # For now, use float32 as default (can be improved to detect from data)
+                        value_type = "float32"
+                        self._process_expression_with_checkpoint(
+                            reader,
+                            output_path,
+                            value_type=value_type,
+                            checkpoint=None,  # Layers don't use checkpointing
+                            layers=True,
+                            table_name="layers",
+                            cell_offset=global_cell_offset,
+                        )
+
                     # Track source file information
                     source_file_info.append(
                         {
@@ -869,6 +895,7 @@ class SLAFConverter:
             None,  # We don't need to pass tables since they're already written
             None,
             None,
+            layer_names=layer_names,  # Pass layer names if consistent
         )
 
         # Clear checkpoint after successful completion
@@ -1362,7 +1389,7 @@ class SLAFConverter:
 
         self._write_lance_tables(output_path, table_configs)
 
-        # NEW: Convert layers if they exist
+        # Convert layers if they exist
         layer_names = []
         if hasattr(adata, "layers") and adata.layers and len(adata.layers) > 0:
             logger.info(f"Converting {len(adata.layers)} layers...")
@@ -1427,10 +1454,38 @@ class SLAFConverter:
             if not checkpoint or checkpoint.get("status") != "in_progress":
                 self._write_metadata_efficiently(reader, output_path)
 
+            # Check if layers exist before processing
+            layer_names = []
+            if hasattr(reader, "adata") and reader.adata is not None:
+                if (
+                    hasattr(reader.adata, "layers")
+                    and reader.adata.layers
+                    and len(reader.adata.layers) > 0
+                ):
+                    layer_names = list(reader.adata.layers.keys())
+                    logger.info(f"Detected {len(layer_names)} layers: {layer_names}")
+
             # Process expression data with checkpointing
             self._process_expression_with_checkpoint(
-                reader, output_path, value_type, checkpoint
+                reader,
+                output_path,
+                value_type,
+                checkpoint,
+                layers=False,
+                table_name="expression",
             )
+
+            # Convert layers if they exist (chunked processing)
+            if layer_names:
+                logger.info(f"Converting {len(layer_names)} layers in chunked mode...")
+                self._process_expression_with_checkpoint(
+                    reader,
+                    output_path,
+                    value_type,
+                    checkpoint=None,  # Layers don't use checkpointing (processed after expression)
+                    layers=True,
+                    table_name="layers",
+                )
 
             # Create indices (if enabled)
             if self.create_indices:
@@ -1440,8 +1495,10 @@ class SLAFConverter:
             if self.compact_after_write:
                 self._compact_dataset(output_path)
 
-            # Save config and clear checkpoint
-            self._save_config(output_path, (reader.n_obs, reader.n_vars))
+            # Save config and clear checkpoint (with layers metadata if layers were converted)
+            self._save_config(
+                output_path, (reader.n_obs, reader.n_vars), layer_names=layer_names
+            )
             self._clear_checkpoint(output_path)
             logger.info(f"Conversion complete! Saved to {output_path}")
 
@@ -1679,10 +1736,31 @@ class SLAFConverter:
         )
 
     def _process_expression_with_checkpoint(
-        self, reader, output_path: str, value_type="uint16", checkpoint=None
+        self,
+        reader,
+        output_path: str,
+        value_type="uint16",
+        checkpoint=None,
+        layers: bool = False,
+        table_name: str = "expression",
+        cell_offset: int = 0,
     ):
-        """Process expression data with checkpointing support"""
-        logger.info("Processing expression data with checkpointing...")
+        """
+        Process expression or layer data with checkpointing support.
+
+        Args:
+            reader: Chunked reader instance
+            output_path: Output SLAF directory path
+            value_type: Value type for data ("uint16" or "float32")
+            checkpoint: Optional checkpoint data for resuming
+            layers: If True, processes all layers in wide format. If False, processes expression (X).
+            table_name: Name of the table to write to ("expression" or "layers")
+            cell_offset: Global cell offset to add to cell_integer_id (for multi-file conversion)
+        """
+        if layers:
+            logger.info("Processing layers data with checkpointing...")
+        else:
+            logger.info("Processing expression data with checkpointing...")
 
         # Calculate total chunks
         total_chunks = (reader.n_obs + self.chunk_size - 1) // self.chunk_size
@@ -1712,64 +1790,126 @@ class SLAFConverter:
 
         # Create Lance dataset with schema
         expression_path = f"{output_path}/expression.lance"
-        schema = self._get_expression_schema(value_type)
+        if layers:
+            table_path = f"{output_path}/{table_name}.lance"
+            # For layers, we need to build schema dynamically from available layers
+            if hasattr(reader, "adata") and reader.adata is not None:
+                if hasattr(reader.adata, "layers") and reader.adata.layers:
+                    layer_names = list(reader.adata.layers.keys())
+                    # Build schema for layers table (wide format)
+                    value_pa_type = (
+                        pa.uint16() if value_type == "uint16" else pa.float32()
+                    )
+                    schema_fields = [
+                        pa.field("cell_integer_id", pa.uint32()),
+                        pa.field("gene_integer_id", pa.uint16()),
+                    ]
+                    for layer_name in layer_names:
+                        schema_fields.append(
+                            pa.field(layer_name, value_pa_type, nullable=True)
+                        )
+                    schema = pa.schema(schema_fields)
+                else:
+                    # No layers, use expression schema
+                    schema = self._get_expression_schema(value_type)
+            else:
+                schema = self._get_expression_schema(value_type)
+        else:
+            table_path = expression_path
+            schema = self._get_expression_schema(value_type)
 
         # Create empty dataset first (only if not resuming)
         if start_chunk == 0:
-            logger.info("Creating initial Lance dataset...")
-            schema = self._get_expression_schema(value_type)
+            if layers:
+                logger.info("Creating initial layers Lance dataset...")
+            else:
+                logger.info("Creating initial Lance dataset...")
+            # Schema already set above
 
             # Create empty table with correct schema based on settings
-            if value_type == "uint16":
-                value_pa_type = pa.uint16()
-            elif value_type == "float32":
-                value_pa_type = pa.float32()
+            if layers:
+                # For layers, create empty table with all layer columns
+                if hasattr(reader, "adata") and reader.adata is not None:
+                    if hasattr(reader.adata, "layers") and reader.adata.layers:
+                        layer_names = list(reader.adata.layers.keys())
+                        empty_dict = {
+                            "cell_integer_id": pa.array([], type=pa.uint32()),
+                            "gene_integer_id": pa.array([], type=pa.uint16()),
+                        }
+                        value_pa_type = (
+                            pa.uint16() if value_type == "uint16" else pa.float32()
+                        )
+                        for layer_name in layer_names:
+                            empty_dict[layer_name] = pa.array([], type=value_pa_type)
+                        empty_table = pa.table(empty_dict)
+                    else:
+                        # No layers, create minimal table
+                        empty_table = pa.table(
+                            {
+                                "cell_integer_id": pa.array([], type=pa.uint32()),
+                                "gene_integer_id": pa.array([], type=pa.uint16()),
+                            }
+                        )
+                else:
+                    # Can't determine layers, create minimal table
+                    empty_table = pa.table(
+                        {
+                            "cell_integer_id": pa.array([], type=pa.uint32()),
+                            "gene_integer_id": pa.array([], type=pa.uint16()),
+                        }
+                    )
             else:
-                raise ValueError(f"Unsupported value type: {value_type}")
+                # Expression table
+                if value_type == "uint16":
+                    value_pa_type = pa.uint16()
+                elif value_type == "float32":
+                    value_pa_type = pa.float32()
+                else:
+                    raise ValueError(f"Unsupported value type: {value_type}")
 
-            if self.optimize_storage:
-                if self.use_optimized_dtypes:
-                    empty_table = pa.table(
-                        {
-                            "cell_integer_id": pa.array([], type=pa.uint32()),
-                            "gene_integer_id": pa.array([], type=pa.uint16()),
-                            "value": pa.array([], type=value_pa_type),
-                        }
-                    )
+                if self.optimize_storage:
+                    if self.use_optimized_dtypes:
+                        empty_table = pa.table(
+                            {
+                                "cell_integer_id": pa.array([], type=pa.uint32()),
+                                "gene_integer_id": pa.array([], type=pa.uint16()),
+                                "value": pa.array([], type=value_pa_type),
+                            }
+                        )
+                    else:
+                        empty_table = pa.table(
+                            {
+                                "cell_integer_id": pa.array([], type=pa.int32()),
+                                "gene_integer_id": pa.array([], type=pa.int32()),
+                                "value": pa.array([], type=value_pa_type),
+                            }
+                        )
                 else:
-                    empty_table = pa.table(
-                        {
-                            "cell_integer_id": pa.array([], type=pa.int32()),
-                            "gene_integer_id": pa.array([], type=pa.int32()),
-                            "value": pa.array([], type=value_pa_type),
-                        }
-                    )
-            else:
-                if self.use_optimized_dtypes:
-                    empty_table = pa.table(
-                        {
-                            "cell_id": pa.array([], type=pa.string()),
-                            "gene_id": pa.array([], type=pa.string()),
-                            "cell_integer_id": pa.array([], type=pa.uint32()),
-                            "gene_integer_id": pa.array([], type=pa.uint16()),
-                            "value": pa.array([], type=value_pa_type),
-                        }
-                    )
-                else:
-                    empty_table = pa.table(
-                        {
-                            "cell_id": pa.array([], type=pa.string()),
-                            "gene_id": pa.array([], type=pa.string()),
-                            "cell_integer_id": pa.array([], type=pa.int32()),
-                            "gene_integer_id": pa.array([], type=pa.int32()),
-                            "value": pa.array([], type=value_pa_type),
-                        }
-                    )
+                    if self.use_optimized_dtypes:
+                        empty_table = pa.table(
+                            {
+                                "cell_id": pa.array([], type=pa.string()),
+                                "gene_id": pa.array([], type=pa.string()),
+                                "cell_integer_id": pa.array([], type=pa.uint32()),
+                                "gene_integer_id": pa.array([], type=pa.uint16()),
+                                "value": pa.array([], type=value_pa_type),
+                            }
+                        )
+                    else:
+                        empty_table = pa.table(
+                            {
+                                "cell_id": pa.array([], type=pa.string()),
+                                "gene_id": pa.array([], type=pa.string()),
+                                "cell_integer_id": pa.array([], type=pa.int32()),
+                                "gene_integer_id": pa.array([], type=pa.int32()),
+                                "value": pa.array([], type=value_pa_type),
+                            }
+                        )
 
             # Create initial Lance dataset (using max_rows_per_file for large fragments)
             lance.write_dataset(
                 empty_table,
-                expression_path,
+                table_path,
                 mode="overwrite",
                 schema=schema,
                 max_rows_per_file=10000000,  # 10M rows per file to avoid memory issues
@@ -1807,8 +1947,20 @@ class SLAFConverter:
             total=total_chunks,
         ):
             try:
-                # Get next chunk
-                chunk_table, _obs_slice = next(chunk_iterator)
+                # Get next chunk - use layers flag if provided
+                if layers:
+                    # For layers, we need to read the wide format chunk
+                    # Get the slice from the iterator first
+                    _, obs_slice = next(chunk_iterator)
+                    # Read layers chunk in wide format with cell offset
+                    chunk_table = reader._read_chunk_as_arrow(
+                        obs_slice.start,
+                        obs_slice.stop,
+                        layers=True,
+                        cell_offset=cell_offset,
+                    )
+                else:
+                    chunk_table, _obs_slice = next(chunk_iterator)
 
                 # Process chunk (data type conversion and string ID addition if needed)
                 if not self.use_optimized_dtypes:
@@ -1876,7 +2028,7 @@ class SLAFConverter:
                 # Write chunk to Lance dataset (using max_rows_per_file for large fragments)
                 lance.write_dataset(
                     chunk_table,
-                    expression_path,
+                    table_path,
                     mode="append",
                     max_rows_per_file=10000000,  # 10M rows per file to avoid memory issues
                     enable_v2_manifest_paths=self.enable_v2_manifest,
@@ -2748,6 +2900,66 @@ class SLAFConverter:
         logger.info(f"Successfully converted {len(layer_names)} layers: {layer_names}")
         return layer_names
 
+    def _check_layer_consistency(
+        self, input_files: list[str], input_format: str
+    ) -> list[str] | None:
+        """
+        Check if layers are consistent across all input files.
+
+        Args:
+            input_files: List of input file paths
+            input_format: Format of input files
+
+        Returns:
+            List of layer names if consistent, None if inconsistent
+        """
+        if input_format not in ["h5ad", "10x_h5"]:
+            # Only h5ad and 10x_h5 formats support layers
+            return None
+
+        layer_sets = []
+        for file_path in input_files:
+            try:
+                # Use chunked reader to check layers
+                with create_chunked_reader(
+                    file_path,
+                    chunk_size=self.chunk_size,
+                    collection_name=self.tiledb_collection_name,
+                ) as reader:
+                    if hasattr(reader, "adata") and reader.adata is not None:
+                        if hasattr(reader.adata, "layers") and reader.adata.layers:
+                            layer_names = sorted(reader.adata.layers.keys())
+                            layer_sets.append(set(layer_names))
+                        else:
+                            # No layers in this file
+                            layer_sets.append(set())
+                    else:
+                        # Can't check layers for this file type
+                        return None
+            except Exception as e:
+                logger.warning(
+                    f"Could not check layers in {file_path}: {e}. Skipping layer consistency check."
+                )
+                return None
+
+        if not layer_sets:
+            # No layers in any file
+            return []
+
+        # Check if all files have the same layers
+        first_set = layer_sets[0]
+        if all(layer_set == first_set for layer_set in layer_sets):
+            # All files have the same layers
+            return sorted(first_set)
+        else:
+            # Layers are inconsistent
+            logger.warning(
+                f"Layer inconsistency detected across files. "
+                f"File 1 has layers: {sorted(layer_sets[0])}, "
+                f"but other files have different layers."
+            )
+            return None
+
     def _create_metadata_table(
         self,
         df: pd.DataFrame,
@@ -3160,6 +3372,7 @@ class SLAFConverter:
         combined_expression: pa.Table | None = None,
         combined_cells: pa.Table | None = None,
         combined_genes: pa.Table | None = None,
+        layer_names: list[str] | None = None,
     ):
         """Save SLAF configuration for multi-file conversion with source file tracking"""
 
@@ -3203,7 +3416,6 @@ class SLAFConverter:
                 "expression": "expression.lance",
                 "cells": "cells.lance",
                 "genes": "genes.lance",
-                # Note: "layers" table will be added in Phase 3 when layers are converted
             },
             "optimizations": {
                 "use_integer_keys": self.use_integer_keys,
@@ -3223,6 +3435,15 @@ class SLAFConverter:
             },
             "created_at": pd.Timestamp.now().isoformat(),
         }
+
+        # Add layers metadata if layers were converted
+        if layer_names:
+            config["tables"]["layers"] = "layers.lance"
+            config["layers"] = {
+                "available": layer_names,
+                "immutable": layer_names,  # All converted layers are immutable
+                "mutable": [],
+            }
 
         config_path = f"{output_path}/config.json"
         with self._open_file(config_path, "w") as f:
