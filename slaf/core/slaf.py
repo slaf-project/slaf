@@ -402,11 +402,15 @@ class SLAFArray:
         elif "n_genes" in self._obs.columns:
             # Use existing n_genes column
             cumsum = self._obs["n_genes"].cum_sum()
-            self._cell_start_index = pl.concat([pl.Series([0]), cumsum])
+            # Ensure dtype consistency: cast to Int64
+            cumsum = cumsum.cast(pl.Int64)
+            self._cell_start_index = pl.concat([pl.Series([0], dtype=pl.Int64), cumsum])
         elif "gene_count" in self._obs.columns:
             # Use existing gene_count column
             cumsum = self._obs["gene_count"].cum_sum()
-            self._cell_start_index = pl.concat([pl.Series([0]), cumsum])
+            # Ensure dtype consistency: cast to Int64
+            cumsum = cumsum.cast(pl.Int64)
+            self._cell_start_index = pl.concat([pl.Series([0], dtype=pl.Int64), cumsum])
         else:
             # Calculate n_genes per cell from expression data
             logger.info(
@@ -440,7 +444,9 @@ class SLAFArray:
             )
 
             cumsum = obs_with_counts["n_genes"].cum_sum()
-            self._cell_start_index = pl.concat([pl.Series([0]), cumsum])
+            # Ensure dtype consistency: cast both to Int64 to match other code paths
+            cumsum = cumsum.cast(pl.Int64)
+            self._cell_start_index = pl.concat([pl.Series([0], dtype=pl.Int64), cumsum])
 
         # Restore dtypes for obs using polars
         obs_dtypes = self.config.get("obs_dtypes", {})
@@ -950,14 +956,18 @@ class SLAFArray:
         return self._join_with_metadata(expression_df)
 
     def get_submatrix(
-        self, cell_selector: Any | None = None, gene_selector: Any | None = None
+        self,
+        cell_selector: Any | None = None,
+        gene_selector: Any | None = None,
+        table_name: str = "expression",
+        layer_name: str | None = None,
     ) -> pl.DataFrame:
         """
-        Get expression data using cell/gene selectors with Lance take() and Polars.
+        Get expression or layer data using cell/gene selectors with Lance take() and Polars.
 
-        Retrieves a subset of expression data based on cell and gene selectors.
+        Retrieves a subset of data based on cell and gene selectors.
         The selectors can be slices, lists, boolean masks, or None for all cells/genes.
-        This method provides a flexible interface for subsetting expression data with
+        This method provides a flexible interface for subsetting data with
         significant performance improvements over SQL-based queries.
 
         Args:
@@ -971,17 +981,20 @@ class SLAFArray:
                 - slice: e.g., slice(0, 5000) for first 5000 genes
                 - list: e.g., [0, 100, 200] for specific gene indices
                 - boolean mask: e.g., [True, False, True, ...] for boolean selection
+            table_name: Table to query ("expression" or "layers"). Default: "expression"
+            layer_name: Layer name for layers table (required when table_name="layers").
+                       Default: None
 
         Returns:
-            Polars DataFrame containing expression data for the selected subset.
-            Columns include cell_id, gene_id, and expression values.
+            Polars DataFrame containing data for the selected subset.
+            Columns include cell_id, gene_id, and value (or layer column name).
 
         Raises:
             ValueError: If selectors are invalid or out of bounds.
             RuntimeError: If the query execution fails.
 
         Examples:
-            >>> # Get first 100 cells and first 5000 genes
+            >>> # Get first 100 cells and first 5000 genes from expression
             >>> slaf_array = SLAFArray("path/to/data.slaf")
             >>> submatrix = slaf_array.get_submatrix(
             ...     cell_selector=slice(0, 100),
@@ -990,30 +1003,41 @@ class SLAFArray:
             >>> print(f"Submatrix shape: {submatrix.shape}")
             Submatrix shape: (500000, 3)
 
-            >>> # Get specific cells and genes
+            >>> # Get data from a layer
             >>> submatrix = slaf_array.get_submatrix(
-            ...     cell_selector=[0, 5, 10, 15],
-            ...     gene_selector=[100, 200, 300]
+            ...     cell_selector=slice(0, 100),
+            ...     table_name="layers",
+            ...     layer_name="spliced"
             ... )
-            >>> print(f"Submatrix shape: {submatrix.shape}")
-            Submatrix shape: (12, 3)
-
-            >>> # Get all cells for specific genes
-            >>> submatrix = slaf_array.get_submatrix(
-            ...     gene_selector=[0, 100, 200, 300, 400]
-            ... )
-            >>> print(f"Submatrix shape: {submatrix.shape}")
-            Submatrix shape: (5000, 3)
-
-            >>> # Error handling for invalid selector
-            >>> try:
-            ...     submatrix = slaf_array.get_submatrix(
-            ...         cell_selector=slice(0, 1000000)  # Out of bounds
-            ...     )
-            ... except ValueError as e:
-            ...     print(f"Error: {e}")
-            Error: Cell selector out of bounds
+            >>> print(f"Layer submatrix shape: {submatrix.shape}")
+            Layer submatrix shape: (500000, 3)
         """
+        # For layers table, use SQL query (RowIndexMapper is expression-specific)
+        if table_name == "layers":
+            if layer_name is None:
+                raise ValueError("layer_name must be provided when table_name='layers'")
+            if self.layers is None:
+                raise ValueError("Layers table not available in this dataset")
+
+            # Use QueryOptimizer to build SQL query
+            from slaf.core.query_optimizer import QueryOptimizer
+
+            sql_query = QueryOptimizer.build_submatrix_query(
+                cell_selector=cell_selector,
+                gene_selector=gene_selector,
+                cell_count=self.shape[0],
+                gene_count=self.shape[1],
+                table_name=table_name,
+                layer_name=layer_name,
+            )
+
+            # Execute query
+            result_df = self.query(sql_query)
+
+            # Join with metadata
+            return self._join_with_metadata(result_df)
+
+        # For expression table, use existing optimized path with RowIndexMapper
         # Get row indices for cells using RowIndexMapper
         cell_indices = self.row_mapper.get_cell_row_ranges_by_selector(cell_selector)
 

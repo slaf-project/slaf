@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -10,8 +10,6 @@ from slaf.core.slaf import SLAFArray
 from slaf.core.sparse_ops import LazySparseMixin
 
 if TYPE_CHECKING:
-    from typing import Any
-
     import scanpy as sc
 
 # Import FragmentProcessor for runtime use
@@ -55,13 +53,21 @@ class LazyExpressionMatrix(LazySparseMixin):
         Subset shape: (100, 5000)
     """
 
-    def __init__(self, slaf_array: SLAFArray):
+    def __init__(
+        self,
+        slaf_array: SLAFArray,
+        table_name: str = "expression",
+        layer_name: str | None = None,
+    ):
         """
         Initialize lazy expression matrix with SLAF array.
 
         Args:
             slaf_array: SLAFArray instance containing the single-cell data.
                        Used for database queries and metadata access.
+            table_name: Table name to query ("expression" or "layers"). Default: "expression"
+            layer_name: Layer name for layers table (required when table_name="layers").
+                       Default: None
 
         Examples:
             >>> # Basic initialization
@@ -73,9 +79,16 @@ class LazyExpressionMatrix(LazySparseMixin):
             >>> # Check parent reference
             >>> print(f"Parent adata: {matrix.parent_adata}")
             Parent adata: None
+
+            >>> # Initialize for layers table
+            >>> layer_matrix = LazyExpressionMatrix(slaf_array, table_name="layers", layer_name="spliced")
+            >>> print(f"Layer matrix shape: {layer_matrix.shape}")
+            Layer matrix shape: (1000, 20000)
         """
         super().__init__()
         self.slaf_array = slaf_array
+        self.table_name = table_name
+        self.layer_name = layer_name
         self.parent_adata: LazyAnnData | None = None
         # Store slicing selectors
         self._cell_selector: Any = None
@@ -83,6 +96,9 @@ class LazyExpressionMatrix(LazySparseMixin):
         # Initialize shape attribute (required by LazySparseMixin)
         self._shape = self.slaf_array.shape
         self._cache: dict[str, Any] = {}  # Simple caching for repeated queries
+        # Validate parameters
+        if table_name == "layers" and layer_name is None:
+            raise ValueError("layer_name must be provided when table_name='layers'")
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -199,7 +215,9 @@ class LazyExpressionMatrix(LazySparseMixin):
         # We need to compose them with existing selectors
 
         # Create a new LazyExpressionMatrix with composed selectors
-        new_matrix = LazyExpressionMatrix(self.slaf_array)
+        new_matrix = LazyExpressionMatrix(
+            self.slaf_array, table_name=self.table_name, layer_name=self.layer_name
+        )
         new_matrix.parent_adata = self.parent_adata
 
         # Compose selectors (these are relative to current view)
@@ -423,6 +441,8 @@ class LazyExpressionMatrix(LazySparseMixin):
             gene_selector=gene_selector,
             cell_count=self.slaf_array.shape[0],  # Use original dataset dimensions
             gene_count=self.slaf_array.shape[1],  # Use original dataset dimensions
+            table_name=self.table_name,
+            layer_name=self.layer_name,
         )
 
     def _apply_sql_normalize_total(self, query: str, transform_data: dict) -> str:
@@ -660,6 +680,7 @@ class LazyExpressionMatrix(LazySparseMixin):
             except Exception:
                 use_fragments = False
 
+        # Fragment processing now supports both expression and layers tables
         if use_fragments:
             processor = FragmentProcessor(
                 self.slaf_array,
@@ -667,6 +688,8 @@ class LazyExpressionMatrix(LazySparseMixin):
                 gene_selector=self._gene_selector,
                 max_workers=4,
                 enable_caching=True,
+                table_name=self.table_name,
+                layer_name=self.layer_name,
             )
             # Use smart strategy selection for optimal performance
             lazy_pipeline = processor.build_lazy_pipeline_smart("compute_matrix")
@@ -738,6 +761,139 @@ class LazyExpressionMatrix(LazySparseMixin):
 
         # Create sparse matrix
         return scipy.sparse.coo_matrix((data, (rows, cols)), shape=self.shape).tocsr()
+
+
+class LazyLayersView:
+    """
+    Dictionary-like view of layers with lazy evaluation.
+
+    LazyLayersView provides a dictionary-like interface for accessing AnnData layers
+    stored in the layers.lance table. It supports reading layers as LazyExpressionMatrix
+    objects and provides methods to list, check, and iterate over available layers.
+
+    Key Features:
+        - Dictionary-like interface: layers["name"], "name" in layers, len(layers)
+        - Lazy evaluation: layers are accessed on-demand
+        - Config.json consistency: reads from config for fast layer discovery
+        - Backward compatibility: works with datasets without layers
+
+    Examples:
+        >>> # Access a layer
+        >>> slaf_array = SLAFArray("data.slaf")
+        >>> adata = LazyAnnData(slaf_array)
+        >>> spliced = adata.layers["spliced"]
+        >>> print(f"Layer shape: {spliced.shape}")
+        Layer shape: (1000, 20000)
+
+        >>> # List available layers
+        >>> print(list(adata.layers.keys()))
+        ['spliced', 'unspliced']
+
+        >>> # Check if layer exists
+        >>> assert "spliced" in adata.layers
+        >>> assert "nonexistent" not in adata.layers
+    """
+
+    def __init__(self, lazy_adata: "LazyAnnData"):
+        """
+        Initialize LazyLayersView with LazyAnnData.
+
+        Args:
+            lazy_adata: LazyAnnData instance containing the single-cell data.
+        """
+        self.lazy_adata = lazy_adata
+        self._slaf_array = lazy_adata.slaf
+
+    def _get_layers_from_config(self) -> list[str]:
+        """Get layer names from config.json (fast path)"""
+        if self._slaf_array.layers is None:
+            return []
+
+        layers_config = self._slaf_array.config.get("layers", {})
+        return layers_config.get("available", [])
+
+    def _get_layers_from_table(self) -> list[str]:
+        """Get layer names by querying layers table (fallback)"""
+        if self._slaf_array.layers is None:
+            return []
+
+        try:
+            # Query to get distinct layer column names
+            # In wide format, we need to check which columns exist
+            schema = self._slaf_array.layers.schema
+            column_names = [field.name for field in schema]
+
+            # Filter out cell_integer_id and gene_integer_id
+            layer_names = [
+                col
+                for col in column_names
+                if col not in ("cell_integer_id", "gene_integer_id")
+            ]
+            return layer_names
+        except Exception:
+            return []
+
+    def keys(self) -> list[str]:
+        """List all available layer names"""
+        # Fast path: read from config.json
+        config_layers = self._get_layers_from_config()
+
+        if config_layers:
+            # Verify consistency with table if possible
+            table_layers = self._get_layers_from_table()
+            if table_layers and set(config_layers) != set(table_layers):
+                # Log warning but prefer config
+                import warnings
+
+                warnings.warn(
+                    f"Layer names in config.json ({config_layers}) don't match "
+                    f"layers table ({table_layers}). Using config.json values.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            return config_layers
+
+        # Fallback: query table
+        return self._get_layers_from_table()
+
+    def __contains__(self, key: str) -> bool:
+        """Check if layer exists"""
+        return key in self.keys()
+
+    def __len__(self) -> int:
+        """Number of layers"""
+        return len(self.keys())
+
+    def __iter__(self):
+        """Iterate over layer names"""
+        return iter(self.keys())
+
+    def __getitem__(self, key: str) -> LazyExpressionMatrix:
+        """Get a layer as LazyExpressionMatrix"""
+        # Validate layer exists
+        if key not in self.keys():
+            raise KeyError(f"Layer '{key}' not found")
+
+        # Create LazyExpressionMatrix pointing to layers table
+        layer_matrix = LazyExpressionMatrix(
+            self._slaf_array, table_name="layers", layer_name=key
+        )
+        layer_matrix.parent_adata = self.lazy_adata
+
+        # Propagate cell/gene selectors from parent LazyAnnData
+        if hasattr(self.lazy_adata, "_cell_selector"):
+            layer_matrix._cell_selector = self.lazy_adata._cell_selector
+        if hasattr(self.lazy_adata, "_gene_selector"):
+            layer_matrix._gene_selector = self.lazy_adata._gene_selector
+        layer_matrix._update_shape()
+
+        return layer_matrix
+
+    def _is_immutable(self, key: str) -> bool:
+        """Check if a layer is immutable (converted from h5ad)"""
+        layers_config = self._slaf_array.config.get("layers", {})
+        immutable_layers = layers_config.get("immutable", [])
+        return key in immutable_layers
 
 
 class LazyAnnData(LazySparseMixin):
@@ -841,6 +997,40 @@ class LazyAnnData(LazySparseMixin):
 
         # Transformations for lazy evaluation
         self._transformations: dict[str, Any] = {}
+
+        # Layers view (lazy initialization)
+        self._layers: LazyLayersView | None = None
+
+    @property
+    def layers(self) -> LazyLayersView:
+        """
+        Access to layers (dictionary-like interface).
+
+        Returns a dictionary-like view of layers that provides access to alternative
+        representations of the expression matrix (e.g., spliced, unspliced, counts).
+        Layers have the same dimensions as X.
+
+        Returns:
+            LazyLayersView providing dictionary-like access to layers.
+
+        Examples:
+            >>> # Access a layer
+            >>> slaf_array = SLAFArray("data.slaf")
+            >>> adata = LazyAnnData(slaf_array)
+            >>> spliced = adata.layers["spliced"]
+            >>> print(f"Layer shape: {spliced.shape}")
+            Layer shape: (1000, 20000)
+
+            >>> # List available layers
+            >>> print(list(adata.layers.keys()))
+            ['spliced', 'unspliced']
+
+            >>> # Check if layer exists
+            >>> assert "spliced" in adata.layers
+        """
+        if self._layers is None:
+            self._layers = LazyLayersView(self)
+        return self._layers
 
     @property
     def X(self) -> LazyExpressionMatrix:
@@ -1178,6 +1368,9 @@ class LazyAnnData(LazySparseMixin):
 
         # Copy transformations
         new_adata._transformations = self._transformations.copy()
+
+        # Copy layers view (will be recreated with new selectors when accessed)
+        new_adata._layers = None
 
         return new_adata
 

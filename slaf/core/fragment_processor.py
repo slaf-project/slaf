@@ -29,6 +29,8 @@ class FragmentProcessor:
         gene_selector: Any | None = None,
         max_workers: int = 4,
         enable_caching: bool = True,
+        table_name: str = "expression",
+        layer_name: str | None = None,
     ):
         """
         Initialize FragmentProcessor.
@@ -39,15 +41,29 @@ class FragmentProcessor:
             gene_selector: Gene selector for subsetting
             max_workers: Maximum number of parallel workers
             enable_caching: Whether to enable operation caching
+            table_name: Table to process ("expression" or "layers"). Default: "expression"
+            layer_name: Layer name for layers table (required when table_name="layers").
+                       Default: None
         """
         self.slaf_array = slaf_array
         self.cell_selector = cell_selector
         self.gene_selector = gene_selector
         self.max_workers = max_workers
         self.enable_caching = enable_caching
+        self.table_name = table_name
+        self.layer_name = layer_name
 
-        # Get fragments from the expression dataset
-        self.fragments = slaf_array.expression.get_fragments()
+        # Validate parameters
+        if table_name == "layers" and layer_name is None:
+            raise ValueError("layer_name must be provided when table_name='layers'")
+        if table_name == "layers" and slaf_array.layers is None:
+            raise ValueError("Layers table not available in this dataset")
+
+        # Get fragments from the appropriate dataset
+        if table_name == "layers":
+            self.fragments = slaf_array.layers.get_fragments()
+        else:
+            self.fragments = slaf_array.expression.get_fragments()
         self.n_fragments = len(self.fragments)
 
         # Initialize cache
@@ -109,6 +125,18 @@ class FragmentProcessor:
 
                 # Create lazy dataframe from fragment
                 lazy_df = pl.scan_pyarrow_dataset(fragment)
+
+                # For layers table, select only the relevant layer column
+                if self.table_name == "layers":
+                    # Select cell_integer_id, gene_integer_id, and the layer column
+                    # Rename layer column to "value" for consistency
+                    lazy_df = lazy_df.select(
+                        [
+                            "cell_integer_id",
+                            "gene_integer_id",
+                            pl.col(self.layer_name).alias("value"),
+                        ]
+                    )
 
                 # Apply cell and gene selectors to the fragment
                 lazy_df = self._apply_selectors_to_fragment(lazy_df)
@@ -278,6 +306,18 @@ class FragmentProcessor:
         # Create lazy dataframe from fragment
         lazy_df = pl.scan_pyarrow_dataset(fragment)
 
+        # For layers table, select only the relevant layer column
+        if self.table_name == "layers":
+            # Select cell_integer_id, gene_integer_id, and the layer column
+            # Rename layer column to "value" for consistency
+            lazy_df = lazy_df.select(
+                [
+                    "cell_integer_id",
+                    "gene_integer_id",
+                    pl.col(self.layer_name).alias("value"),
+                ]
+            )
+
         # Apply cell and gene selectors to the fragment
         lazy_df = self._apply_selectors_to_fragment(lazy_df)
 
@@ -324,6 +364,16 @@ class FragmentProcessor:
         for i, fragment in enumerate(self.fragments):
             logger.debug(f"Normalizing fragment {i + 1}/{self.n_fragments}")
             lazy_df = pl.scan_pyarrow_dataset(fragment)
+
+            # For layers table, select only the relevant layer column
+            if self.table_name == "layers":
+                lazy_df = lazy_df.select(
+                    [
+                        "cell_integer_id",
+                        "gene_integer_id",
+                        pl.col(self.layer_name).alias("value"),
+                    ]
+                )
 
             # Apply cell and gene selectors to the fragment
             lazy_df = self._apply_selectors_to_fragment(lazy_df)

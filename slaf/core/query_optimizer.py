@@ -317,6 +317,8 @@ class QueryOptimizer:
         gene_selector: Any | None = None,
         cell_count: int | None = None,
         gene_count: int | None = None,
+        table_name: str = "expression",
+        layer_name: str | None = None,
     ) -> str:
         """
         Build an optimized SQL query for submatrix selection
@@ -326,6 +328,8 @@ class QueryOptimizer:
             gene_selector: Gene selector (slice, list, boolean mask, int, or None)
             cell_count: Total number of cells (for bounds checking)
             gene_count: Total number of genes (for bounds checking)
+            table_name: Table name to query ("expression" or "layers")
+            layer_name: Layer name for layers table (required when table_name="layers")
 
         Returns:
             Optimized SQL query string
@@ -335,6 +339,8 @@ class QueryOptimizer:
             raise ValueError("cell_count must be provided for cell selectors")
         if gene_selector is not None and gene_count is None:
             raise ValueError("gene_count must be provided for gene selectors")
+        if table_name == "layers" and layer_name is None:
+            raise ValueError("layer_name must be provided when table_name='layers'")
 
         # Use unified selector processing
         cell_condition = QueryOptimizer._process_selector(
@@ -346,7 +352,15 @@ class QueryOptimizer:
 
         # Build final query
         where_clause = f"{cell_condition} AND {gene_condition}"
-        return f"SELECT * FROM expression WHERE {where_clause}"
+
+        # For layers table with wide format, select the specific layer column
+        if table_name == "layers":
+            # Wide format: select layer_name column as "value"
+            # Note: NULL values will be handled by sparse matrix construction (treated as zeros)
+            return f"SELECT cell_integer_id, gene_integer_id, {layer_name} as value FROM {table_name} WHERE {where_clause}"
+        else:
+            # Expression table: select all columns
+            return f"SELECT * FROM {table_name} WHERE {where_clause}"
 
     @staticmethod
     def build_cte_query(entity_ids: list[int], entity_type: str) -> str:
