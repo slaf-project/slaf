@@ -1224,6 +1224,45 @@ class LazyLayersView:
         with self._slaf_array._open_file(config_path, "w") as f:
             json.dump(config, f, indent=2)
 
+    def __delitem__(self, key: str):
+        """
+        Delete a layer (only if mutable).
+
+        Args:
+            key: Layer name to delete
+
+        Raises:
+            KeyError: If layer doesn't exist
+            ValueError: If layer is immutable and cannot be deleted
+        """
+        import lance
+
+        # Check if layer exists
+        if key not in self.keys():
+            raise KeyError(f"Layer '{key}' not found")
+
+        # Check if layer is immutable
+        if self._is_immutable(key):
+            raise ValueError(
+                f"Layer '{key}' is immutable (converted from h5ad) and cannot be deleted"
+            )
+
+        # Get layers path
+        layers_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path,
+            self._slaf_array.config.get("tables", {}).get("layers", "layers.lance"),
+        )
+
+        # Drop the column using Lance's drop_columns() method (metadata-only, very fast)
+        layers_dataset = self._slaf_array.layers
+        layers_dataset = layers_dataset.drop_columns([key])
+
+        # Reload layers dataset from path to ensure consistency
+        self._slaf_array.layers = lance.dataset(layers_path)
+
+        # Update config.json atomically
+        self._update_config_layers_list([key], add=False)
+
 
 class LazyAnnData(LazySparseMixin):
     """

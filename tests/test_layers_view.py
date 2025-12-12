@@ -318,6 +318,97 @@ class TestLazyLayersView:
         dense_layer = layers["dense_layer"]
         assert dense_layer.shape == (3, 2)
 
+    def test_delitem_mutable_layer(self, slaf_without_layers):
+        """Test deleting a mutable layer"""
+        import scipy.sparse
+
+        adata = LazyAnnData(slaf_without_layers)
+        layers = adata.layers
+
+        # Create a new layer (mutable)
+        layer = scipy.sparse.csr_matrix([[1, 2], [3, 4], [5, 6]], dtype=np.float32)
+        layers["mutable_layer"] = layer
+
+        # Verify it exists
+        assert "mutable_layer" in layers
+        assert len(layers) == 1
+
+        # Delete it
+        del layers["mutable_layer"]
+
+        # Verify it's gone
+        assert "mutable_layer" not in layers
+        assert len(layers) == 0
+
+        # Verify it raises KeyError when accessing
+        with pytest.raises(KeyError, match="Layer 'mutable_layer' not found"):
+            _ = layers["mutable_layer"]
+
+    def test_delitem_immutable_layer(self, slaf_with_layers):
+        """Test that deleting immutable layer raises ValueError"""
+        adata = LazyAnnData(slaf_with_layers)
+        layers = adata.layers
+
+        # Verify layer exists and is immutable
+        assert "spliced" in layers
+        assert layers._is_immutable("spliced")
+
+        # Try to delete immutable layer
+        with pytest.raises(ValueError, match="is immutable.*cannot be deleted"):
+            del layers["spliced"]
+
+        # Verify it still exists
+        assert "spliced" in layers
+
+    def test_delitem_nonexistent_layer(self, slaf_without_layers):
+        """Test that deleting non-existent layer raises KeyError"""
+        adata = LazyAnnData(slaf_without_layers)
+        layers = adata.layers
+
+        # Try to delete non-existent layer
+        with pytest.raises(KeyError, match="Layer 'nonexistent' not found"):
+            del layers["nonexistent"]
+
+    def test_delitem_multiple_layers(self, slaf_without_layers):
+        """Test deleting multiple mutable layers"""
+        import scipy.sparse
+
+        adata = LazyAnnData(slaf_without_layers)
+        layers = adata.layers
+
+        # Create multiple layers
+        layer1 = scipy.sparse.csr_matrix([[1, 2], [3, 4], [5, 6]], dtype=np.float32)
+        layer2 = scipy.sparse.csr_matrix(
+            [[10, 20], [30, 40], [50, 60]], dtype=np.float32
+        )
+        layer3 = scipy.sparse.csr_matrix(
+            [[100, 200], [300, 400], [500, 600]], dtype=np.float32
+        )
+
+        layers["layer1"] = layer1
+        layers["layer2"] = layer2
+        layers["layer3"] = layer3
+
+        assert len(layers) == 3
+
+        # Delete one layer
+        del layers["layer2"]
+        assert "layer2" not in layers
+        assert len(layers) == 2
+        assert "layer1" in layers
+        assert "layer3" in layers
+
+        # Delete another layer
+        del layers["layer1"]
+        assert "layer1" not in layers
+        assert len(layers) == 1
+        assert "layer3" in layers
+
+        # Delete last layer
+        del layers["layer3"]
+        assert "layer3" not in layers
+        assert len(layers) == 0
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
