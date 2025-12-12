@@ -1362,12 +1362,24 @@ class SLAFConverter:
 
         self._write_lance_tables(output_path, table_configs)
 
+        # NEW: Convert layers if they exist
+        layer_names = []
+        if hasattr(adata, "layers") and adata.layers and len(adata.layers) > 0:
+            logger.info(f"Converting {len(adata.layers)} layers...")
+            layer_names = self._convert_layers(
+                adata.layers,
+                output_path,
+                adata.obs.index,
+                adata.var.index,
+                value_type,
+            )
+
         # Compact dataset for optimal storage (only if enabled)
         if self.compact_after_write:
             self._compact_dataset(output_path)
 
-        # Save config
-        self._save_config(output_path, adata.shape)
+        # Save config (with layers metadata if layers were converted)
+        self._save_config(output_path, adata.shape, layer_names=layer_names)
         logger.info(f"Conversion complete! Saved to {output_path}")
 
     def _convert_chunked(self, h5ad_path: str, output_path: str):
@@ -2637,6 +2649,105 @@ class SLAFConverter:
 
         return table
 
+    def _convert_layers(
+        self,
+        layers: dict[str, Any],
+        output_path: str,
+        cell_ids: Any,
+        gene_ids: Any,
+        value_type: str = "uint16",
+    ) -> list[str]:
+        """
+        Convert AnnData layers to layers.lance table in wide format.
+
+        Args:
+            layers: Dictionary of layer names to sparse matrices
+            output_path: Output SLAF directory path
+            cell_ids: Cell IDs (index or array)
+            gene_ids: Gene IDs (index or array)
+            value_type: Value type for layer data ("uint16" or "float32")
+
+        Returns:
+            List of layer names that were successfully converted
+        """
+        logger.info("Converting layers to wide format...")
+
+        # Get base structure from expression table (all cell-gene pairs)
+        expression_path = f"{output_path}/expression.lance"
+        expression_dataset = lance.dataset(expression_path)
+
+        # Read all (cell_integer_id, gene_integer_id) pairs from expression
+        expression_df = (
+            pl.scan_pyarrow_dataset(expression_dataset)
+            .select(["cell_integer_id", "gene_integer_id"])
+            .unique()
+            .collect()
+        )
+
+        # Start with base table
+        layers_table = expression_df
+
+        layer_names = []
+        for layer_name, layer_matrix in layers.items():
+            logger.info(f"Converting layer '{layer_name}'...")
+
+            # Validate layer shape matches expression
+            if layer_matrix.shape != (len(cell_ids), len(gene_ids)):
+                logger.warning(
+                    f"Layer '{layer_name}' shape {layer_matrix.shape} doesn't match "
+                    f"expression shape ({len(cell_ids)}, {len(gene_ids)}). Skipping."
+                )
+                continue
+
+            # Convert to COO format using existing method
+            layer_coo_table = self._sparse_to_coo_table(
+                sparse_matrix=layer_matrix,
+                cell_ids=cell_ids,
+                gene_ids=gene_ids,
+                value_type=value_type,
+            )
+
+            # Convert to Polars DataFrame
+            layer_df = pl.from_arrow(layer_coo_table).select(
+                ["cell_integer_id", "gene_integer_id", "value"]
+            )
+
+            # Rename value column to layer name for wide format
+            layer_df = layer_df.rename({"value": layer_name})
+
+            # Left join to add layer column (nullable for sparse data)
+            layers_table = layers_table.join(
+                layer_df,
+                on=["cell_integer_id", "gene_integer_id"],
+                how="left",
+            )
+
+            layer_names.append(layer_name)
+
+        if not layer_names:
+            logger.warning("No valid layers to convert")
+            return []
+
+        # Convert back to PyArrow for Lance
+        combined_layers = layers_table.to_arrow()
+
+        # Write to layers.lance
+        layers_path = f"{output_path}/layers.lance"
+        logger.info(f"Writing layers table to {layers_path}...")
+
+        # Use same settings as expression table
+        lance.write_dataset(
+            combined_layers,
+            layers_path,
+            mode="overwrite",
+            max_rows_per_file=10000000,  # Same as expression table
+            enable_v2_manifest_paths=self.enable_v2_manifest,
+            data_storage_version="2.1",
+        )
+
+        logger.info(f"Successfully converted {len(layer_names)} layers: {layer_names}")
+        return layer_names
+
     def _create_metadata_table(
         self,
         df: pd.DataFrame,
@@ -2963,7 +3074,9 @@ class SLAFConverter:
 
         return stats, int(running_stats["count"])
 
-    def _save_config(self, output_path: str, shape: tuple):
+    def _save_config(
+        self, output_path: str, shape: tuple, layer_names: list[str] | None = None
+    ):
         """Save SLAF configuration with computed metadata"""
         n_cells = int(shape[0])
         n_genes = int(shape[1])
@@ -2992,17 +3105,23 @@ class SLAFConverter:
             except Exception:
                 pass  # If we can't load existing config, start fresh
 
+        # Build tables dict
+        tables = {
+            "expression": "expression.lance",
+            "cells": "cells.lance",
+            "genes": "genes.lance",
+        }
+
+        # Add layers table if layers were converted
+        if layer_names and len(layer_names) > 0:
+            tables["layers"] = "layers.lance"
+
         config = {
             "format_version": "0.4",  # Bumped to 0.4 for layers support
             "array_shape": [n_cells, n_genes],
             "n_cells": n_cells,
             "n_genes": n_genes,
-            "tables": {
-                "expression": "expression.lance",
-                "cells": "cells.lance",
-                "genes": "genes.lance",
-                # Note: "layers" table will be added in Phase 3 when layers are converted
-            },
+            "tables": tables,
             "optimizations": {
                 "use_integer_keys": self.use_integer_keys,
                 "optimize_storage": self.optimize_storage,
@@ -3016,6 +3135,15 @@ class SLAFConverter:
             },
             "created_at": pd.Timestamp.now().isoformat(),
         }
+
+        # Add layers metadata if layers were converted
+        if layer_names and len(layer_names) > 0:
+            # All converted layers are immutable by default
+            config["layers"] = {
+                "available": layer_names,
+                "immutable": layer_names,  # Converted layers cannot be deleted
+                "mutable": [],  # No mutable layers yet
+            }
 
         # Preserve checkpoint data if it exists
         if "checkpoint" in existing_config:
