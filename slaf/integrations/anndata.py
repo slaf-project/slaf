@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 import polars as pl
+import pyarrow as pa
 import scipy.sparse
 
 from slaf.core.slaf import SLAFArray
@@ -894,6 +895,334 @@ class LazyLayersView:
         layers_config = self._slaf_array.config.get("layers", {})
         immutable_layers = layers_config.get("immutable", [])
         return key in immutable_layers
+
+    def _validate_layer_name(self, key: str):
+        """Validate layer name (alphanumeric + underscore, non-empty)"""
+        if not key:
+            raise ValueError("Layer name cannot be empty")
+        if not key.replace("_", "").isalnum():
+            raise ValueError(
+                f"Layer name '{key}' contains invalid characters. "
+                "Only alphanumeric characters and underscores are allowed."
+            )
+
+    def __setitem__(
+        self, key: str, value: "LazyExpressionMatrix | scipy.sparse.spmatrix"
+    ):
+        """
+        Create or update a layer (lazy write - requires commit()).
+
+        Stores the assignment in a pending writes queue. The actual write to
+        layers.lance happens when commit() is called. This allows batching
+        multiple layer operations and ensures config.json consistency.
+
+        Args:
+            key: Layer name (must be alphanumeric + underscore, non-empty)
+            value: LazyExpressionMatrix or scipy sparse matrix to assign.
+                   Must have the same shape as adata.X.
+
+        Raises:
+            ValueError: If layer name is invalid, shape doesn't match X,
+                       or trying to overwrite an immutable layer.
+        """
+        # Validate layer name
+        self._validate_layer_name(key)
+
+        # Validate shape matches X
+        if value.shape != self.lazy_adata.shape:
+            raise ValueError(
+                f"Layer shape {value.shape} doesn't match X shape {self.lazy_adata.shape}"
+            )
+
+        # Check if layer already exists and is immutable
+        if key in self.keys():
+            if self._is_immutable(key):
+                raise ValueError(
+                    f"Layer '{key}' is immutable (converted from h5ad) and cannot be overwritten"
+                )
+
+        # Convert to materialized sparse matrix if needed
+        from_lazy = isinstance(value, LazyExpressionMatrix)
+        if from_lazy:
+            value = value.compute()  # Materialize the lazy matrix
+
+        # Ensure it's a sparse matrix
+        import scipy.sparse
+
+        if not scipy.sparse.issparse(value):
+            # Convert dense to sparse
+            value = scipy.sparse.csr_matrix(value)
+
+        # Write immediately (eager write)
+        self._write_layer_immediate(key, value, from_lazy=from_lazy)
+
+    def _write_layer_immediate(
+        self, layer_name: str, layer_matrix, from_lazy: bool = False
+    ):
+        """
+        Write layer immediately to layers.lance (eager write).
+
+        This method handles the immediate write of a layer to the layers.lance table.
+        It's designed for small datasets (~10k cells) where the entire layer fits in memory.
+
+        Args:
+            layer_name: Name of the layer
+            layer_matrix: Sparse matrix to write
+            from_lazy: If True, the matrix came from LazyExpressionMatrix.compute(),
+                      so coo.row and coo.col are already integer IDs
+        """
+        # Ensure layers table exists (create if needed)
+        layers_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path,
+            self._slaf_array.config.get("tables", {}).get("layers", "layers.lance"),
+        )
+
+        # Convert sparse matrix to COO
+        coo = layer_matrix.tocoo()
+
+        # Get cell and gene integer IDs
+        if from_lazy:
+            # Matrix came from LazyExpressionMatrix.compute(), so row/col are already integer IDs
+            cell_integer_ids = coo.row
+            gene_integer_ids = coo.col
+        else:
+            # Matrix came from external source, need to map row/col indices to integer IDs
+            obs_df = self.lazy_adata.slaf.obs
+            var_df = self.lazy_adata.slaf.var
+            cell_integer_ids = obs_df["cell_integer_id"].to_numpy()[coo.row]
+            gene_integer_ids = var_df["gene_integer_id"].to_numpy()[coo.col]
+
+        # Optimize dtype
+        values, value_pa_type = self._optimize_dtype_for_layer(coo.data)
+
+        # Create PyArrow table with the new layer column
+        layer_table = pa.table(
+            {
+                "cell_integer_id": pa.array(cell_integer_ids, type=pa.uint32()),
+                "gene_integer_id": pa.array(gene_integer_ids, type=pa.uint16()),
+                layer_name: pa.array(values, type=value_pa_type),
+            }
+        )
+
+        # Check if layers table exists
+        if self._slaf_array.layers is None:
+            # Create new layers table from expression table structure
+            self._create_layers_table_with_layer(layer_table, layer_name, layers_path)
+        else:
+            # Update existing layers table
+            self._update_layers_table_with_layer(layer_table, layer_name, layers_path)
+
+        # Update config.json atomically
+        self._update_config_layers_list([layer_name], add=True)
+
+    def _optimize_dtype_for_layer(self, data: np.ndarray) -> tuple[np.ndarray, str]:
+        """
+        Optimize dtype for layer values.
+
+        If float32 data contains only integers within uint16 range, convert to uint16.
+        Otherwise, use float32.
+
+        Args:
+            data: Array of layer values
+
+        Returns:
+            Tuple of (optimized values array, value type string)
+        """
+        if len(data) == 0:
+            return np.array([], dtype=np.float32), "float32"
+
+        # Sample data to determine dtype
+        sample_size = min(10000, len(data))
+        sample_data = data[:sample_size]
+
+        # Check if data is integer or float
+        is_integer = np.issubdtype(sample_data.dtype, np.integer)
+        max_value = np.max(data)
+        min_value = np.min(data)
+
+        if is_integer and max_value <= 65535 and min_value >= 0:
+            return data.astype(np.uint16), "uint16"
+        elif not is_integer:
+            # Check if float data contains only integer values
+            rounded_data = np.round(data)
+            is_integer_values = np.allclose(data, rounded_data, rtol=1e-10)
+
+            if is_integer_values and max_value <= 65535 and min_value >= 0:
+                return rounded_data.astype(np.uint16), "uint16"
+            else:
+                return data.astype(np.float32), "float32"
+        else:
+            return data.astype(np.float32), "float32"
+
+    def _get_pyarrow_type(self, value_type: str) -> pa.DataType:
+        """
+        Get PyArrow data type for a given value type string.
+
+        Args:
+            value_type: "uint16" or "float32"
+
+        Returns:
+            PyArrow data type
+        """
+        if value_type == "uint16":
+            return pa.uint16()
+        elif value_type == "float32":
+            return pa.float32()
+        else:
+            raise ValueError(f"Unsupported value type: {value_type}")
+
+    def _create_layers_table_with_layer(
+        self, layer_table: pa.Table, layer_name: str, layers_path: str
+    ):
+        """Create new layers table with a single layer."""
+        import lance
+
+        # Get base structure from expression table (all cell-gene pairs)
+        expression_df = (
+            pl.scan_pyarrow_dataset(self._slaf_array.expression)
+            .select(["cell_integer_id", "gene_integer_id"])
+            .unique()
+            .collect()
+        )
+
+        # Convert to PyArrow
+        base_table = expression_df.to_arrow()
+
+        # Join with new layer data
+        layer_df = pl.from_arrow(layer_table)
+        base_df = pl.from_arrow(base_table)
+
+        # Left join to add layer column (nullable for sparse data)
+        combined_df = base_df.join(
+            layer_df, on=["cell_integer_id", "gene_integer_id"], how="left"
+        )
+
+        # Write new layers table
+        lance.write_dataset(
+            combined_df.to_arrow(),
+            layers_path,
+            mode="create",
+            max_rows_per_file=10000000,
+        )
+
+        # Reload layers dataset
+        self._slaf_array.layers = lance.dataset(layers_path)
+
+    def _update_layers_table_with_layer(
+        self, layer_table: pa.Table, layer_name: str, layers_path: str
+    ):
+        """Update existing layers table with a new/updated layer using add_columns() with UDF."""
+        import lance
+
+        layers_dataset = self._slaf_array.layers
+
+        # Check if layer column already exists
+        schema = layers_dataset.schema
+        column_names = [field.name for field in schema]
+
+        # Drop the old column if it exists (using Lance native method - metadata-only, very fast)
+        if layer_name in column_names:
+            layers_dataset = layers_dataset.drop_columns([layer_name])
+            # Reload from path after drop_columns to get the updated dataset
+            layers_dataset = lance.dataset(layers_path)
+
+        # Convert layer data to polars for efficient lookup in UDF
+        layer_df = pl.from_arrow(layer_table)
+
+        # Create UDF that returns just the new column data
+        # Note: Pass function directly to add_columns(), not decorated
+        def add_layer_column_udf(batch):
+            """
+            UDF to add layer column by joining batch with layer data.
+
+            Receives batch with existing columns (cell_integer_id, gene_integer_id, etc.),
+            returns RecordBatch with just the new layer column.
+
+            This processes the dataset in batches, joining each batch with the
+            new layer data to add the column efficiently without rewriting
+            existing data.
+            """
+            # Convert batch to polars to access cell_integer_id and gene_integer_id
+            batch_df = pl.from_arrow(batch)
+
+            # Join with layer data (left join preserves all rows, nullable for sparse data)
+            result_df = batch_df.join(
+                layer_df, on=["cell_integer_id", "gene_integer_id"], how="left"
+            )
+
+            # Extract just the new layer column and convert to single array
+            new_layer_chunked = result_df.select([layer_name]).to_arrow().column(0)
+            new_layer_array = new_layer_chunked.combine_chunks()
+
+            # Return RecordBatch with just the new column (names must match column name)
+            return pa.RecordBatch.from_arrays(
+                [new_layer_array],
+                names=[layer_name],
+            )
+
+        # Add the column using add_columns() with UDF
+        # This processes in batches and doesn't rewrite existing data
+        layers_dataset.add_columns(add_layer_column_udf)
+
+        # Reload layers dataset from path to ensure consistency
+        self._slaf_array.layers = lance.dataset(layers_path)
+
+    def _update_config_layers_list(self, layer_names: list[str], add: bool):
+        """
+        Update config.json to add or remove layers from available/mutable lists.
+
+        Args:
+            layer_names: List of layer names to add or remove
+            add: If True, add layers; if False, remove layers
+        """
+        config_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path, "config.json"
+        )
+
+        # Load existing config
+        with self._slaf_array._open_file(config_path) as f:
+            import json
+
+            config = json.load(f)
+
+        # Ensure layers config exists
+        if "layers" not in config:
+            config["layers"] = {"available": [], "immutable": [], "mutable": []}
+
+        # Ensure tables config includes layers
+        if "tables" not in config:
+            config["tables"] = {}
+        if "layers" not in config["tables"]:
+            config["tables"]["layers"] = "layers.lance"
+
+        layers_config = config["layers"]
+        available = set(layers_config.get("available", []))
+        immutable = set(layers_config.get("immutable", []))
+        mutable = set(layers_config.get("mutable", []))
+
+        if add:
+            # Add layers to available and mutable (new layers are mutable)
+            for layer_name in layer_names:
+                available.add(layer_name)
+                mutable.add(layer_name)
+                # Remove from immutable if it was there (shouldn't happen, but be safe)
+                immutable.discard(layer_name)
+        else:
+            # Remove layers from all lists
+            for layer_name in layer_names:
+                available.discard(layer_name)
+                mutable.discard(layer_name)
+                immutable.discard(layer_name)
+
+        # Update config
+        layers_config["available"] = sorted(available)
+        layers_config["immutable"] = sorted(immutable)
+        layers_config["mutable"] = sorted(mutable)
+
+        # Save updated config
+        # Note: this will not work for huggingface remote
+        with self._slaf_array._open_file(config_path, "w") as f:
+            json.dump(config, f, indent=2)
 
 
 class LazyAnnData(LazySparseMixin):
