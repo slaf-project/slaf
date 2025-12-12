@@ -630,3 +630,45 @@ def slaf_without_layers(temp_dir):
 
     # Return SLAFArray instance (with load_metadata=False to avoid async issues in tests)
     return SLAFArray(str(slaf_dir), load_metadata=False)
+
+
+@pytest.fixture
+def anndata_with_layers():
+    """Create an AnnData object with layers for testing (reusable fixture)"""
+    # Set random seed for reproducible tests
+    np.random.seed(42)
+
+    n_cells, n_genes = 10, 5
+
+    # Create expression matrix
+    X = csr_matrix(np.random.rand(n_cells, n_genes), dtype=np.float32)
+    adata = sc.AnnData(X=X)
+    adata.obs_names = [f"cell_{i}" for i in range(n_cells)]
+    adata.var_names = [f"gene_{i}" for i in range(n_genes)]
+
+    # Add layers
+    adata.layers["spliced"] = csr_matrix(
+        np.random.rand(n_cells, n_genes), dtype=np.float32
+    )
+    adata.layers["unspliced"] = csr_matrix(
+        np.random.rand(n_cells, n_genes), dtype=np.float32
+    )
+
+    return adata
+
+
+@pytest.fixture
+def anndata_without_layers():
+    """Create an AnnData object without layers for testing (reusable fixture)"""
+    # Set random seed for reproducible tests
+    np.random.seed(42)
+
+    n_cells, n_genes = 10, 5
+
+    # Create expression matrix
+    X = csr_matrix(np.random.rand(n_cells, n_genes), dtype=np.float32)
+    adata = sc.AnnData(X=X)
+    adata.obs_names = [f"cell_{i}" for i in range(n_cells)]
+    adata.var_names = [f"gene_{i}" for i in range(n_genes)]
+
+    return adata

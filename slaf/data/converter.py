@@ -822,18 +822,30 @@ class SLAFConverter:
                         logger.info(
                             f"Processing {len(layer_names)} consistent layers for file {i + 1}/{len(input_files)}..."
                         )
-                        # Determine value type from first file (assume consistent across files)
-                        # For now, use float32 as default (can be improved to detect from data)
-                        value_type = "float32"
-                        self._process_expression_with_checkpoint(
-                            reader,
-                            output_path,
-                            value_type=value_type,
-                            checkpoint=None,  # Layers don't use checkpointing
-                            layers=True,
-                            table_name="layers",
-                            cell_offset=global_cell_offset,
-                        )
+                        # Determine value type from layer data (assume float32 for layers)
+                        # Update reader's value_type to match (needed for _read_chunk_layers_wide)
+                        original_value_type = reader.value_type
+                        reader.value_type = "float32"
+                        try:
+                            # For multi-file, only create empty table on first file (i == 0)
+                            # For subsequent files, skip empty table creation and append directly
+                            layers_path = f"{output_path}/layers.lance"
+                            is_first_file = i == 0 and not self._path_exists(
+                                layers_path
+                            )
+                            self._process_expression_with_checkpoint(
+                                reader,
+                                output_path,
+                                value_type="float32",
+                                checkpoint=None,  # Layers don't use checkpointing
+                                layers=True,
+                                table_name="layers",
+                                cell_offset=global_cell_offset,
+                                skip_empty_table=not is_first_file,  # Skip if not first file
+                            )
+                        finally:
+                            # Restore original value_type
+                            reader.value_type = original_value_type
 
                     # Track source file information
                     source_file_info.append(
@@ -1478,14 +1490,22 @@ class SLAFConverter:
             # Convert layers if they exist (chunked processing)
             if layer_names:
                 logger.info(f"Converting {len(layer_names)} layers in chunked mode...")
-                self._process_expression_with_checkpoint(
-                    reader,
-                    output_path,
-                    value_type,
-                    checkpoint=None,  # Layers don't use checkpointing (processed after expression)
-                    layers=True,
-                    table_name="layers",
-                )
+                # For layers, use float32 as default (layers typically contain float data)
+                # Update reader's value_type to match (needed for _read_chunk_layers_wide)
+                original_value_type = reader.value_type
+                reader.value_type = "float32"
+                try:
+                    self._process_expression_with_checkpoint(
+                        reader,
+                        output_path,
+                        value_type="float32",
+                        checkpoint=None,  # Layers don't use checkpointing (processed after expression)
+                        layers=True,
+                        table_name="layers",
+                    )
+                finally:
+                    # Restore original value_type
+                    reader.value_type = original_value_type
 
             # Create indices (if enabled)
             if self.create_indices:
@@ -1744,6 +1764,7 @@ class SLAFConverter:
         layers: bool = False,
         table_name: str = "expression",
         cell_offset: int = 0,
+        skip_empty_table: bool = False,
     ):
         """
         Process expression or layer data with checkpointing support.
@@ -1756,6 +1777,7 @@ class SLAFConverter:
             layers: If True, processes all layers in wide format. If False, processes expression (X).
             table_name: Name of the table to write to ("expression" or "layers")
             cell_offset: Global cell offset to add to cell_integer_id (for multi-file conversion)
+            skip_empty_table: If True, skip creating empty table (for multi-file append mode)
         """
         if layers:
             logger.info("Processing layers data with checkpointing...")
@@ -1818,8 +1840,8 @@ class SLAFConverter:
             table_path = expression_path
             schema = self._get_expression_schema(value_type)
 
-        # Create empty dataset first (only if not resuming)
-        if start_chunk == 0:
+        # Create empty dataset first (only if not resuming and not skipping)
+        if start_chunk == 0 and not skip_empty_table:
             if layers:
                 logger.info("Creating initial layers Lance dataset...")
             else:
@@ -1963,8 +1985,9 @@ class SLAFConverter:
                     chunk_table, _obs_slice = next(chunk_iterator)
 
                 # Process chunk (data type conversion and string ID addition if needed)
-                if not self.use_optimized_dtypes:
-                    # Convert from optimized dtypes to standard dtypes
+                # For layers, skip dtype conversion as they're already in wide format
+                if not layers and not self.use_optimized_dtypes:
+                    # Convert from optimized dtypes to standard dtypes (expression only)
                     cell_integer_ids = (
                         chunk_table.column("cell_integer_id")
                         .to_numpy()
@@ -1985,7 +2008,8 @@ class SLAFConverter:
                         }
                     )
 
-                if not self.optimize_storage:
+                # For layers, skip string ID addition as they use wide format
+                if not layers and not self.optimize_storage:
                     # Get cell and gene names
                     cell_names = reader.obs_names
                     gene_names = reader.var_names
