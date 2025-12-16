@@ -427,8 +427,39 @@ class LazyPreprocessing:
 
                 return filtered_adata
         else:
-            # Fallback to using cell_integer_id directly
-            cell_mask = adata.obs_names.isin(filtered_cells["cell_integer_id"])
+            # Fallback: create boolean mask by mapping integer IDs to cell names
+            # obs_names contains string cell IDs, so we need to map integer IDs to cell names
+            if hasattr(adata.slaf, "obs") and adata.slaf.obs is not None:
+                # Create mapping from cell_integer_id to cell_id
+                obs_df = adata.slaf.obs
+                if "cell_id" in obs_df.columns and "cell_integer_id" in obs_df.columns:
+                    id_to_name = dict(
+                        zip(
+                            obs_df["cell_integer_id"].to_list(),
+                            obs_df["cell_id"].to_list(),
+                            strict=False,
+                        )
+                    )
+                    # Map filtered integer IDs to cell names
+                    filtered_cell_names = {
+                        id_to_name.get(cid)
+                        for cid in filtered_cells["cell_integer_id"].to_list()
+                        if id_to_name.get(cid) is not None
+                    }
+                    # Create boolean mask
+                    cell_mask = adata.obs_names.isin(filtered_cell_names)
+                else:
+                    # Fallback: use integer IDs directly (assume obs_names are integer strings)
+                    filtered_cell_ids = {
+                        str(cid) for cid in filtered_cells["cell_integer_id"].to_list()
+                    }
+                    cell_mask = adata.obs_names.astype(str).isin(filtered_cell_ids)
+            else:
+                # Last resort: assume obs_names match integer IDs as strings
+                filtered_cell_ids = {
+                    str(cid) for cid in filtered_cells["cell_integer_id"].to_list()
+                }
+                cell_mask = adata.obs_names.astype(str).isin(filtered_cell_ids)
 
         if inplace:
             # Apply filter to adata (would need proper implementation)

@@ -376,12 +376,12 @@ class TestLazyAnnDataValueComparison:
         X_native = native_single.X.toarray()
         np.testing.assert_allclose(X_lazy, X_native, rtol=1e-7)
 
-        # Compare metadata essentials
+        # Compare metadata essentials (get DataFrames from views)
         compare_metadata_essentials(
-            lazy_single.obs, native_single.obs, "single cell obs"
+            lazy_single.obs._get_dataframe(), native_single.obs, "single cell obs"
         )
         compare_metadata_essentials(
-            lazy_single.var, native_single.var, "single cell var"
+            lazy_single.var._get_dataframe(), native_single.var, "single cell var"
         )
 
     def test_single_gene_slicing_values(self, tiny_slaf, tiny_adata):
@@ -399,10 +399,10 @@ class TestLazyAnnDataValueComparison:
 
         # Compare metadata essentials
         compare_metadata_essentials(
-            lazy_single.obs, native_single.obs, "single gene obs"
+            lazy_single.obs._get_dataframe(), native_single.obs, "single gene obs"
         )
         compare_metadata_essentials(
-            lazy_single.var, native_single.var, "single gene var"
+            lazy_single.var._get_dataframe(), native_single.var, "single gene var"
         )
 
     def test_range_slicing_values(self, tiny_slaf, tiny_adata):
@@ -419,8 +419,12 @@ class TestLazyAnnDataValueComparison:
         np.testing.assert_allclose(X_lazy, X_native, rtol=1e-7)
 
         # Compare metadata essentials
-        compare_metadata_essentials(lazy_range.obs, native_range.obs, "range obs")
-        compare_metadata_essentials(lazy_range.var, native_range.var, "range var")
+        compare_metadata_essentials(
+            lazy_range.obs._get_dataframe(), native_range.obs, "range obs"
+        )
+        compare_metadata_essentials(
+            lazy_range.var._get_dataframe(), native_range.var, "range var"
+        )
 
     def test_step_slicing_values(self, tiny_slaf, tiny_adata):
         """Test that step slicing returns correct values"""
@@ -436,8 +440,12 @@ class TestLazyAnnDataValueComparison:
         np.testing.assert_allclose(X_lazy, X_native, rtol=1e-7)
 
         # Compare metadata essentials
-        compare_metadata_essentials(lazy_step.obs, native_step.obs, "step obs")
-        compare_metadata_essentials(lazy_step.var, native_step.var, "step var")
+        compare_metadata_essentials(
+            lazy_step.obs._get_dataframe(), native_step.obs, "step obs"
+        )
+        compare_metadata_essentials(
+            lazy_step.var._get_dataframe(), native_step.var, "step var"
+        )
 
     def test_boolean_mask_slicing_values(self, tiny_slaf, tiny_adata):
         """Test that boolean mask slicing returns correct values"""
@@ -460,8 +468,12 @@ class TestLazyAnnDataValueComparison:
         np.testing.assert_allclose(X_lazy, X_native, rtol=1e-7)
 
         # Compare metadata essentials
-        compare_metadata_essentials(lazy_bool.obs, native_bool.obs, "boolean obs")
-        compare_metadata_essentials(lazy_bool.var, native_bool.var, "boolean var")
+        compare_metadata_essentials(
+            lazy_bool.obs._get_dataframe(), native_bool.obs, "boolean obs"
+        )
+        compare_metadata_essentials(
+            lazy_bool.var._get_dataframe(), native_bool.var, "boolean var"
+        )
 
     def test_list_indexing_values(self, tiny_slaf, tiny_adata):
         """Test that list indexing returns correct values"""
@@ -480,8 +492,12 @@ class TestLazyAnnDataValueComparison:
         np.testing.assert_allclose(X_lazy, X_native, rtol=1e-7)
 
         # Compare metadata essentials
-        compare_metadata_essentials(lazy_list.obs, native_list.obs, "list obs")
-        compare_metadata_essentials(lazy_list.var, native_list.var, "list var")
+        compare_metadata_essentials(
+            lazy_list.obs._get_dataframe(), native_list.obs, "list obs"
+        )
+        compare_metadata_essentials(
+            lazy_list.var._get_dataframe(), native_list.var, "list var"
+        )
 
     def test_chained_slicing_values(self, tiny_slaf, tiny_adata):
         """Test that single-step slicing returns correct values"""
@@ -498,10 +514,10 @@ class TestLazyAnnDataValueComparison:
 
         # Compare metadata essentials
         compare_metadata_essentials(
-            lazy_sliced.obs, native_sliced.obs, "single-step obs"
+            lazy_sliced.obs._get_dataframe(), native_sliced.obs, "single-step obs"
         )
         compare_metadata_essentials(
-            lazy_sliced.var, native_sliced.var, "single-step var"
+            lazy_sliced.var._get_dataframe(), native_sliced.var, "single-step var"
         )
 
     def test_mixed_slicing_values(self, tiny_slaf, tiny_adata):
@@ -522,8 +538,12 @@ class TestLazyAnnDataValueComparison:
         np.testing.assert_allclose(X_lazy, X_native, rtol=1e-7)
 
         # Compare metadata essentials
-        compare_metadata_essentials(lazy_mixed.obs, native_mixed.obs, "mixed obs")
-        compare_metadata_essentials(lazy_mixed.var, native_mixed.var, "mixed var")
+        compare_metadata_essentials(
+            lazy_mixed.obs._get_dataframe(), native_mixed.obs, "mixed obs"
+        )
+        compare_metadata_essentials(
+            lazy_mixed.var._get_dataframe(), native_mixed.var, "mixed var"
+        )
 
     def test_negative_indexing_values(self, tiny_slaf, tiny_adata):
         """Test that negative indexing returns correct values"""
@@ -539,8 +559,12 @@ class TestLazyAnnDataValueComparison:
         np.testing.assert_allclose(X_lazy, X_native, rtol=1e-7)
 
         # Compare metadata essentials
-        compare_metadata_essentials(lazy_neg.obs, native_neg.obs, "negative obs")
-        compare_metadata_essentials(lazy_neg.var, native_neg.var, "negative var")
+        compare_metadata_essentials(
+            lazy_neg.obs._get_dataframe(), native_neg.obs, "negative obs"
+        )
+        compare_metadata_essentials(
+            lazy_neg.var._get_dataframe(), native_neg.var, "negative var"
+        )
 
     def test_complex_chained_slicing_values(self, tiny_slaf, tiny_adata):
         """Test complex single-step slicing scenarios"""
@@ -558,10 +582,14 @@ class TestLazyAnnDataValueComparison:
 
         # Compare metadata essentials
         compare_metadata_essentials(
-            lazy_sliced.obs, native_sliced.obs, "complex single-step obs"
+            lazy_sliced.obs._get_dataframe(),
+            native_sliced.obs,
+            "complex single-step obs",
         )
         compare_metadata_essentials(
-            lazy_sliced.var, native_sliced.var, "complex single-step var"
+            lazy_sliced.var._get_dataframe(),
+            native_sliced.var,
+            "complex single-step var",
         )
 
     def test_edge_case_slicing_values(self, tiny_slaf, tiny_adata):
@@ -586,16 +614,16 @@ class TestLazyAnnDataValueComparison:
 
         # Compare metadata essentials
         compare_metadata_essentials(
-            lazy_single.obs, native_single.obs, "edge case single obs"
+            lazy_single.obs._get_dataframe(), native_single.obs, "edge case single obs"
         )
         compare_metadata_essentials(
-            lazy_single.var, native_single.var, "edge case single var"
+            lazy_single.var._get_dataframe(), native_single.var, "edge case single var"
         )
         compare_metadata_essentials(
-            lazy_bounds.obs, native_bounds.obs, "edge case bounds obs"
+            lazy_bounds.obs._get_dataframe(), native_bounds.obs, "edge case bounds obs"
         )
         compare_metadata_essentials(
-            lazy_bounds.var, native_bounds.var, "edge case bounds var"
+            lazy_bounds.var._get_dataframe(), native_bounds.var, "edge case bounds var"
         )
 
     @pytest.mark.skip(reason="Not implemented")
@@ -634,10 +662,14 @@ class TestLazyAnnDataValueComparison:
 
         # Compare metadata essentials
         compare_metadata_essentials(
-            native_lazy_sliced.obs, native_sliced.obs, "transformation obs"
+            native_lazy_sliced.obs._get_dataframe(),
+            native_sliced.obs,
+            "transformation obs",
         )
         compare_metadata_essentials(
-            native_lazy_sliced.var, native_sliced.var, "transformation var"
+            native_lazy_sliced.var._get_dataframe(),
+            native_sliced.var,
+            "transformation var",
         )
 
         # Verify compute() returns AnnData
@@ -825,29 +857,29 @@ class TestMetadataAccessPerformance:
         """Test that repeated var access is efficient (cached)"""
         lazy_adata = LazyAnnData(tiny_slaf)
 
-        # First access should load data
+        # First access should load data (view is cached)
         var1 = lazy_adata.var
         assert var1 is not None
 
-        # Repeated access should be fast (cached)
+        # Repeated access should be fast (cached view)
         var2 = lazy_adata.var
         assert var2 is not None
-        assert var1 is var2  # Should be the same object (cached)
+        assert var1 is var2  # Should be the same view object (cached)
 
     def test_metadata_consistency_after_slicing(self, tiny_slaf):
         """Test that metadata remains consistent after slicing"""
         lazy_adata = LazyAnnData(tiny_slaf)
 
-        # Get original metadata
-        original_obs = lazy_adata.obs
-        original_var = lazy_adata.var
+        # Get original metadata (as DataFrames)
+        original_obs = lazy_adata.obs._get_dataframe()
+        original_var = lazy_adata.var._get_dataframe()
 
         # Apply slicing
         sliced_adata = lazy_adata[:10, :20]
 
-        # Metadata should be filtered appropriately
-        sliced_obs = sliced_adata.obs
-        sliced_var = sliced_adata.var
+        # Metadata should be filtered appropriately (get DataFrames from views)
+        sliced_obs = sliced_adata.obs._get_dataframe()
+        sliced_var = sliced_adata.var._get_dataframe()
 
         # Check that slicing worked correctly
         assert len(sliced_obs) <= len(original_obs)

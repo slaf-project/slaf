@@ -1401,15 +1401,31 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
             parts = sql_condition.split(" AND ")
             ge_part = [p for p in parts if ">=" in p][0]
             lt_part = [p for p in parts if "<" in p][0]
-            ge_value = int(ge_part.split(">=")[1].strip())
-            lt_value = int(lt_part.split("<")[1].strip())
-            return (pl.col(id_column) >= ge_value) & (pl.col(id_column) < lt_value)
+            try:
+                ge_value = int(ge_part.split(">=")[1].strip())
+                lt_value = int(lt_part.split("<")[1].strip())
+                return (pl.col(id_column) >= ge_value) & (pl.col(id_column) < lt_value)
+            except ValueError:
+                # If values are not integers, return False condition
+                return pl.lit(False)
 
         # Handle IN clause: "cell_integer_id IN (0,1,2,3)"
         if " IN " in sql_condition:
             values_str = sql_condition.split(" IN ")[1].strip("()")
-            values = [int(v.strip()) for v in values_str.split(",")]
-            return pl.col(id_column).is_in(values)
+            # Filter out non-numeric values (like "False", "True", etc.)
+            values = []
+            for v in values_str.split(","):
+                v = v.strip()
+                try:
+                    values.append(int(v))
+                except ValueError:
+                    # Skip non-integer values
+                    continue
+            if values:
+                return pl.col(id_column).is_in(values)
+            else:
+                # If no valid values, return False condition
+                return pl.lit(False)
 
         # Handle equality: "cell_integer_id = 5"
         if " = " in sql_condition:
@@ -1510,16 +1526,16 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
 
     def __getitem__(self, key):
         """
-        Get column/vector or DataFrame slice (dual interface: dict-like and DataFrame-like).
+        Get column/vector or DataFrame slice (AnnData-compatible DataFrame interface).
 
-        - String key: Returns numpy array (dict-like behavior)
+        - String key: Returns pandas Series (DataFrame-like behavior, matches AnnData)
         - Other keys (slice, list, etc.): Delegates to DataFrame indexing (DataFrame-like behavior)
 
         Args:
             key: Column name (str) or DataFrame indexer (slice, list, etc.)
 
         Returns:
-            numpy array if key is string, otherwise DataFrame slice
+            pandas Series if key is string, otherwise DataFrame slice
         """
         # Route to vector or scalar method based on table_type
         if self.table_type in ("obsm", "varm"):
@@ -1530,24 +1546,12 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
                 )
             return self._get_vector_item(key)
         else:
-            # For obs/var, support both dict-like and DataFrame-like access
-            if isinstance(key, str):
-                # Dict-like: return numpy array
-                if key not in self.keys():
-                    raise KeyError(f"Column '{key}' not found")
-
-                # Build filtered query with selectors
-                query = self._build_filtered_query([self.id_column, key])
-                df = query.collect()
-
-                # Sort by integer ID to match order
-                df = df.sort(self.id_column)
-
-                # Extract column values
-                return df[key].to_numpy()
-            else:
-                # DataFrame-like: delegate to underlying DataFrame
-                return self._get_dataframe().__getitem__(key)
+            # For obs/var, use DataFrame-like access (AnnData-compatible)
+            # Check if key exists first for better error messages
+            if isinstance(key, str) and key not in self.keys():
+                raise KeyError(f"Column '{key}' not found")
+            # Always delegate to underlying DataFrame to get Series for string keys
+            return self._get_dataframe().__getitem__(key)
 
     def _is_immutable(self, key: str) -> bool:
         """Check if column/vector key is immutable (converted from h5ad)"""
@@ -1656,8 +1660,8 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
                 # Note: This will modify the DataFrame but won't persist to Lance
                 # For now, we'll raise an error to guide users to use string keys for mutations
                 raise NotImplementedError(
-                    f"DataFrame-like assignment (e.g., obs_view[{key}] = ...) is not supported. "
-                    f"Use column assignment (e.g., obs_view['{key}'] = ...) for mutations."
+                    f"DataFrame-like assignment (e.g., obs[{key}] = ...) is not supported. "
+                    f"Use column assignment (e.g., obs['{key}'] = ...) for mutations."
                 )
 
     def _set_column_item(self, key: str, value: np.ndarray | pd.Series):
@@ -2235,32 +2239,33 @@ class LazyObsView(LazyMetadataViewMixin):
     and mutating cell metadata columns stored in the cells.lance table.
 
     Key Features:
-        - DataFrame-like interface: obs_view.columns, obs_view.head(), obs_view[slice]
-        - Dictionary-like interface: obs_view["col"], "col" in obs_view, len(obs_view)
+        - DataFrame-like interface: obs.columns, obs.head(), obs[slice] (AnnData-compatible)
+        - AnnData-compatible access: obs["col"] returns pd.Series (not np.ndarray)
+        - Dictionary-like interface: "col" in obs, len(obs), obs.keys()
         - Lazy evaluation: columns are accessed on-demand
         - Selector support: respects cell selectors from parent LazyAnnData
         - Immutability: prevents deletion/modification of converted columns
         - Config.json consistency: reads from config for fast column discovery
 
     Examples:
-        >>> # DataFrame-like access
+        >>> # DataFrame-like access (AnnData-compatible)
         >>> slaf_array = SLAFArray("data.slaf")
         >>> adata = LazyAnnData(slaf_array)
-        >>> df = adata.obs_view  # Returns DataFrame
+        >>> df = adata.obs  # Returns DataFrame-like view
         >>> print(df.columns)  # DataFrame columns
         >>> print(df.head())  # DataFrame methods work
 
-        >>> # Dictionary-like access
-        >>> cluster = adata.obs_view["cluster"]  # Returns numpy array
-        >>> print(f"Cluster array shape: {cluster.shape}")
-        Cluster array shape: (1000,)
+        >>> # AnnData-compatible column access (returns Series)
+        >>> cluster = adata.obs["cluster"]  # Returns pd.Series (AnnData-compatible)
+        >>> print(type(cluster))
+        <class 'pandas.core.series.Series'>
 
         >>> # Create a new column
-        >>> adata.obs_view["new_cluster"] = new_cluster_labels
-        >>> assert "new_cluster" in adata.obs_view
+        >>> adata.obs["new_cluster"] = new_cluster_labels
+        >>> assert "new_cluster" in adata.obs
 
         >>> # List available columns
-        >>> print(list(adata.obs_view.keys()))
+        >>> print(list(adata.obs.keys()))
         ['cell_id', 'total_counts', 'cluster', 'new_cluster']
     """
 
@@ -2287,6 +2292,15 @@ class LazyObsView(LazyMetadataViewMixin):
         """Required by LazySparseMixin - uses parent's shape"""
         return self._shape
 
+    def __len__(self) -> int:
+        """
+        Return number of rows (DataFrame-like behavior).
+
+        For DataFrame compatibility, len(obs) should return the number of rows,
+        not the number of columns (which is what the dictionary interface would return).
+        """
+        return len(self._get_dataframe())
+
     def _get_dataframe(self) -> pd.DataFrame:
         """
         Get underlying DataFrame (lazy-loaded, respects selectors).
@@ -2294,6 +2308,13 @@ class LazyObsView(LazyMetadataViewMixin):
         Returns:
             pandas DataFrame with all columns from cells.lance (excluding vector columns)
         """
+        # If parent has filtered_obs function, use it instead
+        if (
+            hasattr(self.lazy_adata, "_filtered_obs")
+            and self.lazy_adata._filtered_obs is not None
+        ):
+            return self.lazy_adata._filtered_obs()
+
         if self._dataframe is None:
             # Get all column names from table schema
             table = getattr(self._slaf_array, self.table_name)
@@ -2342,8 +2363,8 @@ class LazyObsView(LazyMetadataViewMixin):
         """
         Delegate DataFrame attributes to underlying DataFrame.
 
-        This allows obs_view to behave like a DataFrame when accessed directly,
-        e.g., obs_view.columns, obs_view.head(), obs_view.shape, etc.
+        This allows obs to behave like a DataFrame when accessed directly,
+        e.g., obs.columns, obs.head(), obs.shape, etc.
         """
         # Don't delegate special methods or our own methods
         if name.startswith("_") or name in dir(self):
@@ -2368,29 +2389,30 @@ class LazyVarView(LazyMetadataViewMixin):
     and mutating gene metadata columns stored in the genes.lance table.
 
     Key Features:
-        - DataFrame-like interface: var_view.columns, var_view.head(), var_view[slice]
-        - Dictionary-like interface: var_view["col"], "col" in var_view, len(var_view)
+        - DataFrame-like interface: var.columns, var.head(), var[slice] (AnnData-compatible)
+        - AnnData-compatible access: var["col"] returns pd.Series (not np.ndarray)
+        - Dictionary-like interface: "col" in var, len(var), var.keys()
         - Lazy evaluation: columns are accessed on-demand
         - Selector support: respects gene selectors from parent LazyAnnData
         - Immutability: prevents deletion/modification of converted columns
         - Config.json consistency: reads from config for fast column discovery
 
     Examples:
-        >>> # DataFrame-like access
+        >>> # DataFrame-like access (AnnData-compatible)
         >>> slaf_array = SLAFArray("data.slaf")
         >>> adata = LazyAnnData(slaf_array)
-        >>> df = adata.var_view  # Returns DataFrame
+        >>> df = adata.var  # Returns DataFrame-like view
         >>> print(df.columns)  # DataFrame columns
         >>> print(df.head())  # DataFrame methods work
 
-        >>> # Dictionary-like access
-        >>> hvg = adata.var_view["highly_variable"]  # Returns numpy array
-        >>> print(f"HVG array shape: {hvg.shape}")
-        HVG array shape: (20000,)
+        >>> # AnnData-compatible column access (returns Series)
+        >>> hvg = adata.var["highly_variable"]  # Returns pd.Series (AnnData-compatible)
+        >>> print(type(hvg))
+        <class 'pandas.core.series.Series'>
 
         >>> # Create a new column
-        >>> adata.var_view["new_annotation"] = new_annotations
-        >>> assert "new_annotation" in adata.var_view
+        >>> adata.var["new_annotation"] = new_annotations
+        >>> assert "new_annotation" in adata.var
     """
 
     def __init__(self, lazy_adata: "LazyAnnData"):
@@ -2416,6 +2438,15 @@ class LazyVarView(LazyMetadataViewMixin):
         """Required by LazySparseMixin - uses parent's shape"""
         return self._shape
 
+    def __len__(self) -> int:
+        """
+        Return number of rows (DataFrame-like behavior).
+
+        For DataFrame compatibility, len(var) should return the number of rows,
+        not the number of columns (which is what the dictionary interface would return).
+        """
+        return len(self._get_dataframe())
+
     def _get_dataframe(self) -> pd.DataFrame:
         """
         Get underlying DataFrame (lazy-loaded, respects selectors).
@@ -2423,6 +2454,13 @@ class LazyVarView(LazyMetadataViewMixin):
         Returns:
             pandas DataFrame with all columns from genes.lance (excluding vector columns)
         """
+        # If parent has filtered_var function, use it instead
+        if (
+            hasattr(self.lazy_adata, "_filtered_var")
+            and self.lazy_adata._filtered_var is not None
+        ):
+            return self.lazy_adata._filtered_var()
+
         if self._dataframe is None:
             # Get all column names from table schema
             table = getattr(self._slaf_array, self.table_name)
@@ -2471,8 +2509,8 @@ class LazyVarView(LazyMetadataViewMixin):
         """
         Delegate DataFrame attributes to underlying DataFrame.
 
-        This allows var_view to behave like a DataFrame when accessed directly,
-        e.g., var_view.columns, var_view.head(), var_view.shape, etc.
+        This allows var to behave like a DataFrame when accessed directly,
+        e.g., var.columns, var.head(), var.shape, etc.
         """
         # Don't delegate special methods or our own methods
         if name.startswith("_") or name in dir(self):
@@ -2814,6 +2852,9 @@ class LazyAnnData(LazySparseMixin):
         self._filtered_obs: Callable[[], pd.DataFrame] | None = None
         self._filtered_var: Callable[[], pd.DataFrame] | None = None
 
+        # Reference to parent LazyAnnData (for sliced objects)
+        self._parent_adata: LazyAnnData | None = None
+
         # Transformations for lazy evaluation
         self._transformations: dict[str, Any] = {}
 
@@ -2852,31 +2893,34 @@ class LazyAnnData(LazySparseMixin):
         return self._layers
 
     @property
-    def obs_view(self) -> LazyObsView:
+    def obs(self) -> LazyObsView:
         """
-        Mutable view of obs columns for mutations.
+        Cell metadata (observations) - mutable view with DataFrame-like and dict-like interfaces.
 
-        Returns a dictionary-like view that provides access to cell metadata columns
-        with support for creating, updating, and deleting columns. This view respects
-        cell selectors from parent LazyAnnData.
+        Returns a view that provides both DataFrame-like and dictionary-like access to cell
+        metadata columns with support for creating, updating, and deleting columns. This view
+        respects cell selectors from parent LazyAnnData.
+
+        When accessed with a string key (e.g., ``obs["cluster"]``), returns a pandas Series
+        (AnnData-compatible). When accessed directly, behaves like a DataFrame.
 
         Returns:
-            LazyObsView providing dictionary-like access to obs columns.
+            LazyObsView providing DataFrame-like and dictionary-like access to obs columns.
 
         Examples:
-            >>> # Access a column
+            >>> # DataFrame-like access (AnnData-compatible)
             >>> slaf_array = SLAFArray("data.slaf")
             >>> adata = LazyAnnData(slaf_array)
-            >>> cluster = adata.obs_view["cluster"]
-            >>> print(f"Cluster array shape: {cluster.shape}")
-            Cluster array shape: (1000,)
+            >>> df = adata.obs  # Returns DataFrame-like view
+            >>> cluster = adata.obs["cluster"]  # Returns pd.Series (AnnData-compatible)
+            >>> print(cluster.head())
 
             >>> # Create a new column
-            >>> adata.obs_view["new_cluster"] = new_cluster_labels
-            >>> assert "new_cluster" in adata.obs_view
+            >>> adata.obs["new_cluster"] = new_cluster_labels
+            >>> assert "new_cluster" in adata.obs
 
             >>> # List available columns
-            >>> print(list(adata.obs_view.keys()))
+            >>> print(list(adata.obs.keys()))
             ['cell_id', 'total_counts', 'cluster', 'new_cluster']
         """
         if not hasattr(self, "_obs_view"):
@@ -2884,28 +2928,31 @@ class LazyAnnData(LazySparseMixin):
         return self._obs_view
 
     @property
-    def var_view(self) -> LazyVarView:
+    def var(self) -> LazyVarView:
         """
-        Mutable view of var columns for mutations.
+        Gene metadata (variables) - mutable view with DataFrame-like and dict-like interfaces.
 
-        Returns a dictionary-like view that provides access to gene metadata columns
-        with support for creating, updating, and deleting columns. This view respects
-        gene selectors from parent LazyAnnData.
+        Returns a view that provides both DataFrame-like and dictionary-like access to gene
+        metadata columns with support for creating, updating, and deleting columns. This view
+        respects gene selectors from parent LazyAnnData.
+
+        When accessed with a string key (e.g., ``var["highly_variable"]``), returns a pandas
+        Series (AnnData-compatible). When accessed directly, behaves like a DataFrame.
 
         Returns:
-            LazyVarView providing dictionary-like access to var columns.
+            LazyVarView providing DataFrame-like and dictionary-like access to var columns.
 
         Examples:
-            >>> # Access a column
+            >>> # DataFrame-like access (AnnData-compatible)
             >>> slaf_array = SLAFArray("data.slaf")
             >>> adata = LazyAnnData(slaf_array)
-            >>> hvg = adata.var_view["highly_variable"]
-            >>> print(f"HVG array shape: {hvg.shape}")
-            HVG array shape: (20000,)
+            >>> df = adata.var  # Returns DataFrame-like view
+            >>> hvg = adata.var["highly_variable"]  # Returns pd.Series (AnnData-compatible)
+            >>> print(hvg.head())
 
             >>> # Create a new column
-            >>> adata.var_view["new_annotation"] = new_annotations
-            >>> assert "new_annotation" in adata.var_view
+            >>> adata.var["new_annotation"] = new_annotations
+            >>> assert "new_annotation" in adata.var
         """
         if not hasattr(self, "_var_view"):
             self._var_view = LazyVarView(self)
@@ -3018,13 +3065,26 @@ class LazyAnnData(LazySparseMixin):
         return self._X
 
     @property
-    def obs(self) -> pd.DataFrame:
+    def obs_deprecated(self) -> pd.DataFrame:
         """
-        Cell metadata (observations).
+        Cell metadata (observations) - DEPRECATED.
+
+        .. deprecated:: 0.X
+            This property is deprecated. Use :attr:`obs` (formerly :attr:`obs`) instead.
+            This will be removed in a future version.
 
         This property triggers computation of metadata when accessed.
         For lazy access to metadata structure only, use obs.columns, obs.index, etc.
         """
+        import warnings
+
+        warnings.warn(
+            "obs_deprecated is deprecated and will be removed in a future version. "
+            "Use obs instead, which provides both DataFrame-like and dict-like access "
+            "with mutation support.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if self._filtered_obs is not None:
             result = self._filtered_obs()
             if isinstance(result, pd.DataFrame):
@@ -3069,13 +3129,26 @@ class LazyAnnData(LazySparseMixin):
         return self._obs
 
     @property
-    def var(self) -> pd.DataFrame:
+    def var_deprecated(self) -> pd.DataFrame:
         """
-        Gene metadata (variables).
+        Gene metadata (variables) - DEPRECATED.
+
+        .. deprecated:: 0.X
+            This property is deprecated. Use :attr:`var` (formerly :attr:`var`) instead.
+            This will be removed in a future version.
 
         This property triggers computation of metadata when accessed.
         For lazy access to metadata structure only, use var.columns, var.index, etc.
         """
+        import warnings
+
+        warnings.warn(
+            "var_deprecated is deprecated and will be removed in a future version. "
+            "Use var instead, which provides both DataFrame-like and dict-like access "
+            "with mutation support.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if self._filtered_var is not None:
             result = self._filtered_var()
             if isinstance(result, pd.DataFrame):
@@ -3122,14 +3195,16 @@ class LazyAnnData(LazySparseMixin):
     def obs_names(self) -> pd.Index:
         """Cell names"""
         if self._cached_obs_names is None:
-            self._cached_obs_names = self.obs.index
+            # Use the DataFrame's index from the view
+            self._cached_obs_names = self.obs._get_dataframe().index
         return self._cached_obs_names
 
     @property
     def var_names(self) -> pd.Index:
         """Gene names"""
         if self._cached_var_names is None:
-            self._cached_var_names = self.var.index
+            # Use the DataFrame's index from the view
+            self._cached_var_names = self.var._get_dataframe().index
         return self._cached_var_names
 
     @property
@@ -3219,6 +3294,9 @@ class LazyAnnData(LazySparseMixin):
         # Create a new LazyAnnData with the same backend
         new_adata = LazyAnnData(self.slaf, backend=self.backend)
 
+        # Store reference to parent for accessing full DataFrames
+        new_adata._parent_adata = self
+
         # Store the selectors for lazy filtering
         new_adata._cell_selector = cell_selector
         new_adata._gene_selector = gene_selector
@@ -3234,8 +3312,27 @@ class LazyAnnData(LazySparseMixin):
 
         # Override obs and var properties to apply filtering
         def filtered_obs() -> pd.DataFrame:
-            # Always apply the composed selector to the original obs
-            obs_df = self.obs
+            # Always apply the composed selector to the original obs DataFrame
+            # Get the FULL DataFrame from parent (without selectors) to apply our selector
+            # Access parent's view without selectors
+            parent = getattr(self, "_parent_adata", None)
+            if parent is None:
+                parent = self
+            parent_obs_view = parent.obs
+            # Temporarily clear selectors to get full DataFrame
+            original_cell_selector = getattr(parent, "_cell_selector", None)
+            original_gene_selector = getattr(parent, "_gene_selector", None)
+            # Temporarily clear selectors
+            parent._cell_selector = None
+            parent._gene_selector = None
+            # Clear cache to force reload
+            if hasattr(parent_obs_view, "_dataframe"):
+                parent_obs_view._dataframe = None
+            # Get full DataFrame
+            obs_df = parent_obs_view._get_dataframe()
+            # Restore selectors
+            parent._cell_selector = original_cell_selector
+            parent._gene_selector = original_gene_selector
             if cell_selector is None or (
                 isinstance(cell_selector, slice) and cell_selector == slice(None)
             ):
@@ -3243,9 +3340,15 @@ class LazyAnnData(LazySparseMixin):
             else:
                 obs_df = obs_df.copy()
                 if isinstance(cell_selector, slice):
-                    start = cell_selector.start or 0
-                    stop = cell_selector.stop or len(obs_df)
-                    step = cell_selector.step or 1
+                    start = cell_selector.start
+                    stop = cell_selector.stop
+                    step = cell_selector.step if cell_selector.step is not None else 1
+
+                    # Handle None values
+                    if start is None:
+                        start = 0
+                    if stop is None:
+                        stop = len(obs_df)
 
                     # Handle negative indices
                     if start < 0:
@@ -3290,8 +3393,28 @@ class LazyAnnData(LazySparseMixin):
             return pd.DataFrame()
 
         def filtered_var() -> pd.DataFrame:
-            # Always apply the composed selector to the original var
-            var_df = self.var
+            # Always apply the composed selector to the original var DataFrame
+            # Get the FULL DataFrame from parent (without selectors) to apply our selector
+            # Access parent's view without selectors
+            parent = getattr(self, "_parent_adata", None)
+            if parent is None:
+                parent = self
+            parent_var_view = parent.var
+            # Temporarily clear selectors to get full DataFrame
+            original_cell_selector = getattr(parent, "_cell_selector", None)
+            original_gene_selector = getattr(parent, "_gene_selector", None)
+            # Temporarily clear selectors
+            parent._cell_selector = None
+            parent._gene_selector = None
+            # Clear cache to force reload
+            if hasattr(parent_var_view, "_dataframe"):
+                parent_var_view._dataframe = None
+            # Get full DataFrame
+            var_df = parent_var_view._get_dataframe()
+            # Restore selectors
+            parent._cell_selector = original_cell_selector
+            parent._gene_selector = original_gene_selector
+
             if gene_selector is None or (
                 isinstance(gene_selector, slice) and gene_selector == slice(None)
             ):
@@ -3299,9 +3422,15 @@ class LazyAnnData(LazySparseMixin):
             else:
                 var_df = var_df.copy()
                 if isinstance(gene_selector, slice):
-                    start = gene_selector.start or 0
-                    stop = gene_selector.stop or len(var_df)
-                    step = gene_selector.step or 1
+                    start = gene_selector.start
+                    stop = gene_selector.stop
+                    step = gene_selector.step if gene_selector.step is not None else 1
+
+                    # Handle None values
+                    if start is None:
+                        start = 0
+                    if stop is None:
+                        stop = len(var_df)
 
                     # Handle negative indices
                     if start < 0:
@@ -3420,8 +3549,12 @@ class LazyAnnData(LazySparseMixin):
         """Explicitly compute and return a native AnnData object"""
         import scanpy as sc
 
-        # Create native AnnData object
-        adata = sc.AnnData(X=self._X.compute(), obs=self.obs, var=self.var)
+        # Create native AnnData object (get DataFrames from views)
+        adata = sc.AnnData(
+            X=self._X.compute(),
+            obs=self.obs._get_dataframe(),
+            var=self.var._get_dataframe(),
+        )
 
         return adata
 

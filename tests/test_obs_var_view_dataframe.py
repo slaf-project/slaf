@@ -1,7 +1,7 @@
 """
-Tests for DataFrame-like behavior of obs_view and var_view.
+Tests for DataFrame-like behavior of obs and var.
 
-Tests that obs_view and var_view can be used both as DataFrames and as dictionaries.
+Tests that obs and var can be used both as DataFrames and as dictionaries.
 """
 
 import tempfile
@@ -45,8 +45,8 @@ def anndata_with_metadata():
     return adata
 
 
-def test_obs_view_dataframe_access(anndata_with_metadata):
-    """Test that obs_view behaves like a DataFrame when accessed directly"""
+def test_obs_dataframe_access(anndata_with_metadata):
+    """Test that obs behaves like a DataFrame when accessed directly"""
     with tempfile.TemporaryDirectory() as tmpdir:
         converter = SLAFConverter(
             use_optimized_dtypes=False,
@@ -58,8 +58,8 @@ def test_obs_view_dataframe_access(anndata_with_metadata):
         slaf = SLAFArray(tmpdir)
         adata = LazyAnnData(slaf)
 
-        # Access as DataFrame - obs_view should behave like DataFrame
-        df = adata.obs_view._get_dataframe()
+        # Access as DataFrame - obs should behave like DataFrame
+        df = adata.obs._get_dataframe()
         assert isinstance(df, pd.DataFrame)
         assert len(df) == 10  # n_cells
 
@@ -86,8 +86,8 @@ def test_obs_view_dataframe_access(anndata_with_metadata):
         assert list(subset.columns) == ["cluster", "total_counts"]
 
 
-def test_obs_view_dict_access(anndata_with_metadata):
-    """Test that obs_view still supports dictionary-like access"""
+def test_obs_anndata_compatible_access(anndata_with_metadata):
+    """Test that obs supports AnnData-compatible access (returns Series)"""
     with tempfile.TemporaryDirectory() as tmpdir:
         converter = SLAFConverter(
             use_optimized_dtypes=False,
@@ -99,19 +99,19 @@ def test_obs_view_dict_access(anndata_with_metadata):
         slaf = SLAFArray(tmpdir)
         adata = LazyAnnData(slaf)
 
-        # Dictionary-like access should return numpy array
-        cluster = adata.obs_view["cluster"]
-        assert isinstance(cluster, np.ndarray)
+        # AnnData-compatible access: returns pandas Series
+        cluster = adata.obs["cluster"]
+        assert isinstance(cluster, pd.Series)  # AnnData-compatible
         assert len(cluster) == 10  # n_cells
 
         # Dictionary methods should work
-        assert "cluster" in adata.obs_view
-        assert len(adata.obs_view) > 0
-        assert "cluster" in list(adata.obs_view.keys())
+        assert "cluster" in adata.obs
+        assert len(adata.obs) > 0
+        assert "cluster" in list(adata.obs.keys())
 
 
-def test_obs_view_dual_interface(anndata_with_metadata):
-    """Test that obs_view supports both DataFrame and dict interfaces simultaneously"""
+def test_obs_dual_interface(anndata_with_metadata):
+    """Test that obs supports both DataFrame and AnnData-compatible interfaces"""
     with tempfile.TemporaryDirectory() as tmpdir:
         converter = SLAFConverter(
             use_optimized_dtypes=False,
@@ -124,23 +124,23 @@ def test_obs_view_dual_interface(anndata_with_metadata):
         adata = LazyAnnData(slaf)
 
         # DataFrame interface
-        df = adata.obs_view._get_dataframe()
+        df = adata.obs._get_dataframe()
         assert isinstance(df, pd.DataFrame)
 
-        # Dict interface (string key returns array)
-        cluster_array = adata.obs_view["cluster"]
-        assert isinstance(cluster_array, np.ndarray)
+        # AnnData-compatible interface (string key returns Series)
+        cluster_series = adata.obs["cluster"]
+        assert isinstance(cluster_series, pd.Series)  # AnnData-compatible
 
         # DataFrame indexing (list of columns returns DataFrame)
-        subset_df = adata.obs_view[["cluster", "total_counts"]]
+        subset_df = adata.obs[["cluster", "total_counts"]]
         assert isinstance(subset_df, pd.DataFrame)
 
         # Both should give same data
-        assert np.array_equal(df["cluster"].values, cluster_array)
+        assert np.array_equal(df["cluster"].values, cluster_series.values)
 
 
-def test_var_view_dataframe_access(anndata_with_metadata):
-    """Test that var_view behaves like a DataFrame when accessed directly"""
+def test_var_dataframe_access(anndata_with_metadata):
+    """Test that var behaves like a DataFrame when accessed directly"""
     with tempfile.TemporaryDirectory() as tmpdir:
         converter = SLAFConverter(
             use_optimized_dtypes=False,
@@ -152,8 +152,8 @@ def test_var_view_dataframe_access(anndata_with_metadata):
         slaf = SLAFArray(tmpdir)
         adata = LazyAnnData(slaf)
 
-        # Access as DataFrame - var_view should behave like DataFrame
-        df = adata.var_view._get_dataframe()
+        # Access as DataFrame - var should behave like DataFrame
+        df = adata.var._get_dataframe()
         assert isinstance(df, pd.DataFrame)
         assert len(df) == 5  # n_genes
 
@@ -168,8 +168,8 @@ def test_var_view_dataframe_access(anndata_with_metadata):
         assert len(head_df) == 3
 
 
-def test_var_view_dict_access(anndata_with_metadata):
-    """Test that var_view still supports dictionary-like access"""
+def test_var_anndata_compatible_access(anndata_with_metadata):
+    """Test that var supports AnnData-compatible access (returns Series)"""
     with tempfile.TemporaryDirectory() as tmpdir:
         converter = SLAFConverter(
             use_optimized_dtypes=False,
@@ -181,14 +181,14 @@ def test_var_view_dict_access(anndata_with_metadata):
         slaf = SLAFArray(tmpdir)
         adata = LazyAnnData(slaf)
 
-        # Dictionary-like access should return numpy array
-        hvg = adata.var_view["highly_variable"]
-        assert isinstance(hvg, np.ndarray)
+        # AnnData-compatible access: returns pandas Series
+        hvg = adata.var["highly_variable"]
+        assert isinstance(hvg, pd.Series)  # AnnData-compatible
         assert len(hvg) == 5  # n_genes
 
 
-def test_obs_view_vector_columns_excluded(anndata_with_metadata):
-    """Test that vector columns (obsm) are excluded from obs_view DataFrame"""
+def test_obs_vector_columns_excluded(anndata_with_metadata):
+    """Test that vector columns (obsm) are excluded from obs DataFrame"""
     with tempfile.TemporaryDirectory() as tmpdir:
         converter = SLAFConverter(
             use_optimized_dtypes=False,
@@ -203,8 +203,8 @@ def test_obs_view_vector_columns_excluded(anndata_with_metadata):
         # Add a new obsm embedding
         adata.obsm["X_pca"] = np.random.rand(10, 50).astype(np.float32)  # n_cells
 
-        # obs_view should NOT include vector columns
-        df = adata.obs_view._get_dataframe()
+        # obs should NOT include vector columns
+        df = adata.obs._get_dataframe()
         columns = list(df.columns)
         assert "X_umap" not in columns
         assert "X_pca" not in columns
@@ -214,8 +214,8 @@ def test_obs_view_vector_columns_excluded(anndata_with_metadata):
         assert "X_pca" in adata.obsm
 
 
-def test_var_view_vector_columns_excluded(anndata_with_metadata):
-    """Test that vector columns (varm) are excluded from var_view DataFrame"""
+def test_var_vector_columns_excluded(anndata_with_metadata):
+    """Test that vector columns (varm) are excluded from var DataFrame"""
     with tempfile.TemporaryDirectory() as tmpdir:
         converter = SLAFConverter(
             use_optimized_dtypes=False,
@@ -230,8 +230,8 @@ def test_var_view_vector_columns_excluded(anndata_with_metadata):
         # Add a new varm embedding
         adata.varm["loadings"] = np.random.rand(5, 30).astype(np.float32)  # n_genes
 
-        # var_view should NOT include vector columns
-        df = adata.var_view._get_dataframe()
+        # var should NOT include vector columns
+        df = adata.var._get_dataframe()
         columns = list(df.columns)
         assert "PCs" not in columns
         assert "loadings" not in columns
@@ -241,8 +241,8 @@ def test_var_view_vector_columns_excluded(anndata_with_metadata):
         assert "loadings" in adata.varm
 
 
-def test_obs_view_cache_invalidation(anndata_with_metadata):
-    """Test that obs_view DataFrame cache is invalidated when columns change"""
+def test_obs_cache_invalidation(anndata_with_metadata):
+    """Test that obs DataFrame cache is invalidated when columns change"""
     with tempfile.TemporaryDirectory() as tmpdir:
         converter = SLAFConverter(
             use_optimized_dtypes=False,
@@ -255,14 +255,14 @@ def test_obs_view_cache_invalidation(anndata_with_metadata):
         adata = LazyAnnData(slaf)
 
         # Access DataFrame (creates cache)
-        df1 = adata.obs_view._get_dataframe()
+        df1 = adata.obs._get_dataframe()
         initial_columns = set(df1.columns)
 
         # Add a new column
-        adata.obs_view["new_col"] = np.random.rand(10)  # n_cells
+        adata.obs["new_col"] = np.random.rand(10)  # n_cells
 
         # Access DataFrame again (should be refreshed)
-        df2 = adata.obs_view._get_dataframe()
+        df2 = adata.obs._get_dataframe()
         new_columns = set(df2.columns)
 
         # New column should be present
@@ -270,8 +270,8 @@ def test_obs_view_cache_invalidation(anndata_with_metadata):
         assert "new_col" not in initial_columns
 
 
-def test_var_view_cache_invalidation(anndata_with_metadata):
-    """Test that var_view DataFrame cache is invalidated when columns change"""
+def test_var_cache_invalidation(anndata_with_metadata):
+    """Test that var DataFrame cache is invalidated when columns change"""
     with tempfile.TemporaryDirectory() as tmpdir:
         converter = SLAFConverter(
             use_optimized_dtypes=False,
@@ -284,14 +284,14 @@ def test_var_view_cache_invalidation(anndata_with_metadata):
         adata = LazyAnnData(slaf)
 
         # Access DataFrame (creates cache)
-        df1 = adata.var_view._get_dataframe()
+        df1 = adata.var._get_dataframe()
         initial_columns = set(df1.columns)
 
         # Add a new column
-        adata.var_view["new_col"] = np.random.rand(5)  # n_genes
+        adata.var["new_col"] = np.random.rand(5)  # n_genes
 
         # Access DataFrame again (should be refreshed)
-        df2 = adata.var_view._get_dataframe()
+        df2 = adata.var._get_dataframe()
         new_columns = set(df2.columns)
 
         # New column should be present
@@ -299,8 +299,8 @@ def test_var_view_cache_invalidation(anndata_with_metadata):
         assert "new_col" not in initial_columns
 
 
-def test_obs_view_selector_support(anndata_with_metadata):
-    """Test that obs_view DataFrame respects selectors from parent LazyAnnData"""
+def test_obs_selector_support(anndata_with_metadata):
+    """Test that obs DataFrame respects selectors from parent LazyAnnData"""
     with tempfile.TemporaryDirectory() as tmpdir:
         converter = SLAFConverter(
             use_optimized_dtypes=False,
@@ -315,17 +315,18 @@ def test_obs_view_selector_support(anndata_with_metadata):
         # Subset adata
         subset_adata = adata[:5]
 
-        # obs_view should respect selector
-        df = subset_adata.obs_view._get_dataframe()
+        # obs should respect selector
+        df = subset_adata.obs._get_dataframe()
         assert len(df) == 5
 
-        # Dict access should also respect selector
-        cluster = subset_adata.obs_view["cluster"]
+        # AnnData-compatible access should also respect selector
+        cluster = subset_adata.obs["cluster"]
+        assert isinstance(cluster, pd.Series)
         assert len(cluster) == 5
 
 
-def test_var_view_selector_support(anndata_with_metadata):
-    """Test that var_view DataFrame respects selectors from parent LazyAnnData"""
+def test_var_selector_support(anndata_with_metadata):
+    """Test that var DataFrame respects selectors from parent LazyAnnData"""
     with tempfile.TemporaryDirectory() as tmpdir:
         converter = SLAFConverter(
             use_optimized_dtypes=False,
@@ -340,12 +341,13 @@ def test_var_view_selector_support(anndata_with_metadata):
         # Subset adata
         subset_adata = adata[:, :3]
 
-        # var_view should respect selector
-        df = subset_adata.var_view._get_dataframe()
+        # var should respect selector
+        df = subset_adata.var._get_dataframe()
         assert len(df) == 3
 
-        # Dict access should also respect selector
-        hvg = subset_adata.var_view["highly_variable"]
+        # AnnData-compatible access should also respect selector
+        hvg = subset_adata.var["highly_variable"]
+        assert isinstance(hvg, pd.Series)
         assert len(hvg) == 3
 
 
