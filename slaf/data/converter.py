@@ -1413,12 +1413,45 @@ class SLAFConverter:
                 value_type,
             )
 
+        # Convert obsm if it exists
+        obsm_keys = []
+        if hasattr(adata, "obsm") and adata.obsm and len(adata.obsm) > 0:
+            logger.info(f"Converting {len(adata.obsm)} obsm embeddings...")
+            obsm_keys = self._convert_obsm(
+                adata.obsm,
+                output_path,
+                adata.obs.index,
+                cell_id_mapping,
+            )
+
+        # Convert varm if it exists
+        varm_keys = []
+        if hasattr(adata, "varm") and adata.varm and len(adata.varm) > 0:
+            logger.info(f"Converting {len(adata.varm)} varm embeddings...")
+            varm_keys = self._convert_varm(
+                adata.varm,
+                output_path,
+                adata.var.index,
+                gene_id_mapping,
+            )
+
+        # Convert uns if it exists
+        if hasattr(adata, "uns") and adata.uns and len(adata.uns) > 0:
+            logger.info("Converting uns metadata...")
+            self._convert_uns(adata.uns, output_path)
+
         # Compact dataset for optimal storage (only if enabled)
         if self.compact_after_write:
             self._compact_dataset(output_path)
 
-        # Save config (with layers metadata if layers were converted)
-        self._save_config(output_path, adata.shape, layer_names=layer_names)
+        # Save config (with layers, obsm, varm metadata if they were converted)
+        self._save_config(
+            output_path,
+            adata.shape,
+            layer_names=layer_names,
+            obsm_keys=obsm_keys,
+            varm_keys=varm_keys,
+        )
         logger.info(f"Conversion complete! Saved to {output_path}")
 
     def _convert_chunked(self, h5ad_path: str, output_path: str):
@@ -2924,6 +2957,283 @@ class SLAFConverter:
         logger.info(f"Successfully converted {len(layer_names)} layers: {layer_names}")
         return layer_names
 
+    def _convert_obsm(
+        self,
+        obsm: dict[str, np.ndarray],
+        output_path: str,
+        cell_ids: Any,
+        cell_id_mapping: list[dict[str, Any]] | None = None,
+    ) -> list[str]:
+        """
+        Convert AnnData obsm to FixedSizeListArray columns in cells.lance.
+
+        Args:
+            obsm: Dictionary of obsm key names to numpy arrays (shape: n_obs × n_dims)
+            output_path: Output SLAF directory path
+            cell_ids: Cell IDs (index or array)
+            cell_id_mapping: Optional integer ID mapping for cells
+
+        Returns:
+            List of obsm keys that were successfully converted
+        """
+        import lance
+        import numpy as np
+        import pyarrow as pa
+
+        logger.info("Converting obsm embeddings to FixedSizeListArray columns...")
+
+        # Load existing cells.lance table
+        cells_path = f"{output_path}/cells.lance"
+        cells_dataset = lance.dataset(cells_path)
+
+        obsm_keys = []
+        obsm_dimensions = {}
+
+        for key, embedding in obsm.items():
+            logger.info(f"Converting obsm '{key}'...")
+
+            # Validate embedding shape
+            if embedding.shape[0] != len(cell_ids):
+                logger.warning(
+                    f"obsm '{key}' shape {embedding.shape[0]} doesn't match "
+                    f"n_obs {len(cell_ids)}. Skipping."
+                )
+                continue
+
+            # Convert to numpy array
+            embedding = np.asarray(embedding)
+            n_dims = embedding.shape[1] if len(embedding.shape) > 1 else 1
+
+            # Get cell integer IDs in order
+            if cell_id_mapping and self.use_integer_keys:
+                # Create mapping dict for fast lookup
+                # cell_id_mapping has keys: "cell_id" and "integer_id"
+                id_map = {
+                    item["cell_id"]: item["integer_id"] for item in cell_id_mapping
+                }
+                integer_ids = np.array(
+                    [id_map.get(str(cid), i) for i, cid in enumerate(cell_ids)],
+                    dtype=np.uint32,
+                )
+            else:
+                integer_ids = np.arange(len(cell_ids), dtype=np.uint32)
+
+            # Create FixedSizeListArray from embedding
+            value_dtype = pa.float32() if embedding.dtype.kind == "f" else pa.float32()
+            flat_values = pa.array(embedding.flatten(), type=value_dtype)
+            vector_array = pa.FixedSizeListArray.from_arrays(flat_values, n_dims)
+
+            # Create table with integer IDs and vector column
+            column_table = pa.table(
+                {
+                    "cell_integer_id": pa.array(integer_ids, type=pa.uint32()),
+                    key: vector_array,
+                }
+            )
+
+            # Add column to cells.lance using add_columns with UDF
+            # Create factory function to avoid loop variable binding issues
+            def create_obsm_udf(obsm_key, obsm_column_table):
+                """Factory function to create UDF with captured variables"""
+
+                def add_obsm_column_udf(batch):
+                    """UDF to add obsm column by joining batch with embedding data"""
+                    import polars as pl
+
+                    batch_df = pl.from_arrow(batch)
+                    column_df = pl.from_arrow(obsm_column_table)
+
+                    # Join to get the embedding column
+                    result_df = batch_df.join(
+                        column_df, on=["cell_integer_id"], how="left"
+                    )
+                    embedding_chunked = (
+                        result_df.select([obsm_key]).to_arrow().column(0)
+                    )
+                    embedding_array = embedding_chunked.combine_chunks()
+
+                    return pa.RecordBatch.from_arrays(
+                        [embedding_array], names=[obsm_key]
+                    )
+
+                return add_obsm_column_udf
+
+            cells_dataset.add_columns(create_obsm_udf(key, column_table))
+
+            # Reload dataset to ensure consistency
+            cells_dataset = lance.dataset(cells_path)
+
+            obsm_keys.append(key)
+            obsm_dimensions[key] = n_dims
+
+        if not obsm_keys:
+            logger.warning("No valid obsm embeddings to convert")
+            return []
+
+        logger.info(
+            f"Successfully converted {len(obsm_keys)} obsm embeddings: {obsm_keys}"
+        )
+        return obsm_keys
+
+    def _convert_varm(
+        self,
+        varm: dict[str, np.ndarray],
+        output_path: str,
+        gene_ids: Any,
+        gene_id_mapping: list[dict[str, Any]] | None = None,
+    ) -> list[str]:
+        """
+        Convert AnnData varm to FixedSizeListArray columns in genes.lance.
+
+        Args:
+            varm: Dictionary of varm key names to numpy arrays (shape: n_vars × n_dims)
+            output_path: Output SLAF directory path
+            gene_ids: Gene IDs (index or array)
+            gene_id_mapping: Optional integer ID mapping for genes
+
+        Returns:
+            List of varm keys that were successfully converted
+        """
+        import lance
+        import numpy as np
+        import pyarrow as pa
+
+        logger.info("Converting varm embeddings to FixedSizeListArray columns...")
+
+        # Load existing genes.lance table
+        genes_path = f"{output_path}/genes.lance"
+        genes_dataset = lance.dataset(genes_path)
+
+        varm_keys = []
+        varm_dimensions = {}
+
+        for key, embedding in varm.items():
+            logger.info(f"Converting varm '{key}'...")
+
+            # Validate embedding shape
+            if embedding.shape[0] != len(gene_ids):
+                logger.warning(
+                    f"varm '{key}' shape {embedding.shape[0]} doesn't match "
+                    f"n_vars {len(gene_ids)}. Skipping."
+                )
+                continue
+
+            # Convert to numpy array
+            embedding = np.asarray(embedding)
+            n_dims = embedding.shape[1] if len(embedding.shape) > 1 else 1
+
+            # Get gene integer IDs in order
+            if gene_id_mapping and self.use_integer_keys:
+                # Create mapping dict for fast lookup
+                # gene_id_mapping has keys: "gene_id" and "integer_id"
+                id_map = {
+                    item["gene_id"]: item["integer_id"] for item in gene_id_mapping
+                }
+                integer_ids = np.array(
+                    [id_map.get(str(gid), i) for i, gid in enumerate(gene_ids)],
+                    dtype=np.uint16,
+                )
+            else:
+                integer_ids = np.arange(len(gene_ids), dtype=np.uint16)
+
+            # Create FixedSizeListArray from embedding
+            value_dtype = pa.float32() if embedding.dtype.kind == "f" else pa.float32()
+            flat_values = pa.array(embedding.flatten(), type=value_dtype)
+            vector_array = pa.FixedSizeListArray.from_arrays(flat_values, n_dims)
+
+            # Create table with integer IDs and vector column
+            column_table = pa.table(
+                {
+                    "gene_integer_id": pa.array(integer_ids, type=pa.uint16()),
+                    key: vector_array,
+                }
+            )
+
+            # Add column to genes.lance using add_columns with UDF
+            # Create factory function to avoid loop variable binding issues
+            def create_varm_udf(varm_key, varm_column_table):
+                """Factory function to create UDF with captured variables"""
+
+                def add_varm_column_udf(batch):
+                    """UDF to add varm column by joining batch with embedding data"""
+                    import polars as pl
+
+                    batch_df = pl.from_arrow(batch)
+                    column_df = pl.from_arrow(varm_column_table)
+
+                    # Join to get the embedding column
+                    result_df = batch_df.join(
+                        column_df, on=["gene_integer_id"], how="left"
+                    )
+                    embedding_chunked = (
+                        result_df.select([varm_key]).to_arrow().column(0)
+                    )
+                    embedding_array = embedding_chunked.combine_chunks()
+
+                    return pa.RecordBatch.from_arrays(
+                        [embedding_array], names=[varm_key]
+                    )
+
+                return add_varm_column_udf
+
+            genes_dataset.add_columns(create_varm_udf(key, column_table))
+
+            # Reload dataset to ensure consistency
+            genes_dataset = lance.dataset(genes_path)
+
+            varm_keys.append(key)
+            varm_dimensions[key] = n_dims
+
+        if not varm_keys:
+            logger.warning("No valid varm embeddings to convert")
+            return []
+
+        logger.info(
+            f"Successfully converted {len(varm_keys)} varm embeddings: {varm_keys}"
+        )
+        return varm_keys
+
+    def _convert_uns(self, uns: dict, output_path: str):
+        """
+        Convert AnnData uns to uns.json file.
+
+        Args:
+            uns: Dictionary of unstructured metadata
+            output_path: Output SLAF directory path
+        """
+        import json
+
+        import numpy as np
+        import pandas as pd
+
+        logger.info("Converting uns metadata to uns.json...")
+
+        # Serialize uns to JSON-compatible format
+        def json_serialize(value):
+            """Convert value to JSON-serializable format"""
+            if isinstance(value, np.ndarray):
+                return value.tolist()
+            elif isinstance(value, np.integer | np.floating):
+                return value.item()
+            elif isinstance(value, pd.Series):
+                return value.tolist()
+            elif isinstance(value, dict):
+                return {k: json_serialize(v) for k, v in value.items()}
+            elif isinstance(value, list):
+                return [json_serialize(item) for item in value]
+            return value
+
+        uns_serialized = {k: json_serialize(v) for k, v in uns.items()}
+
+        # Write to uns.json
+        uns_path = f"{output_path}/uns.json"
+        with self._open_file(uns_path, "w") as f:
+            json.dump(uns_serialized, f, indent=2)
+
+        logger.info(
+            f"Successfully converted uns metadata with {len(uns_serialized)} keys"
+        )
+
     def _check_layer_consistency(
         self, input_files: list[str], input_format: str
     ) -> list[str] | None:
@@ -3311,7 +3621,12 @@ class SLAFConverter:
         return stats, int(running_stats["count"])
 
     def _save_config(
-        self, output_path: str, shape: tuple, layer_names: list[str] | None = None
+        self,
+        output_path: str,
+        shape: tuple,
+        layer_names: list[str] | None = None,
+        obsm_keys: list[str] | None = None,
+        varm_keys: list[str] | None = None,
     ):
         """Save SLAF configuration with computed metadata"""
         n_cells = int(shape[0])
@@ -3379,6 +3694,46 @@ class SLAFConverter:
                 "available": layer_names,
                 "immutable": layer_names,  # Converted layers cannot be deleted
                 "mutable": [],  # No mutable layers yet
+            }
+
+        # Add obsm metadata if obsm was converted
+        if obsm_keys and len(obsm_keys) > 0:
+            # Get dimensions from cells.lance schema
+            cells_dataset = lance.dataset(f"{output_path}/cells.lance")
+            obsm_dimensions = {}
+            schema = cells_dataset.schema
+            for field in schema:
+                if field.name in obsm_keys and isinstance(
+                    field.type, pa.FixedSizeListType
+                ):
+                    obsm_dimensions[field.name] = field.type.list_size
+
+            # All converted obsm keys are immutable by default
+            config["obsm"] = {
+                "available": obsm_keys,
+                "immutable": obsm_keys,  # Converted obsm cannot be deleted
+                "mutable": [],  # No mutable obsm yet
+                "dimensions": obsm_dimensions,
+            }
+
+        # Add varm metadata if varm was converted
+        if varm_keys and len(varm_keys) > 0:
+            # Get dimensions from genes.lance schema
+            genes_dataset = lance.dataset(f"{output_path}/genes.lance")
+            varm_dimensions = {}
+            schema = genes_dataset.schema
+            for field in schema:
+                if field.name in varm_keys and isinstance(
+                    field.type, pa.FixedSizeListType
+                ):
+                    varm_dimensions[field.name] = field.type.list_size
+
+            # All converted varm keys are immutable by default
+            config["varm"] = {
+                "available": varm_keys,
+                "immutable": varm_keys,  # Converted varm cannot be deleted
+                "mutable": [],  # No mutable varm yet
+                "dimensions": varm_dimensions,
             }
 
         # Preserve checkpoint data if it exists
