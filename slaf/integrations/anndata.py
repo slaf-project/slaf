@@ -1350,8 +1350,10 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
         Invalidate cached obs/var DataFrames when table structure changes.
 
         When we modify cells.lance or genes.lance (add/remove columns),
-        the cached DataFrames in LazyAnnData become stale and need to be cleared.
+        the cached DataFrames in both LazyAnnData and SLAFArray become stale
+        and need to be cleared so they reload from the updated tables.
         """
+        # Invalidate LazyAnnData cache
         if hasattr(self.lazy_adata, "_obs"):
             self.lazy_adata._obs = None
         if hasattr(self.lazy_adata, "_var"):
@@ -1360,6 +1362,28 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
             self.lazy_adata._cached_obs_names = None
         if hasattr(self.lazy_adata, "_cached_var_names"):
             self.lazy_adata._cached_var_names = None
+
+        # Invalidate SLAFArray cache (which LazyAnnData.obs/var load from)
+        # This ensures that when LazyAnnData.obs/var are accessed again,
+        # they reload from the updated Lance tables
+        if self.table_type in ("obs", "obsm"):
+            # Modified cells.lance - invalidate SLAFArray._obs
+            if hasattr(self._slaf_array, "_obs"):
+                self._slaf_array._obs = None
+            if hasattr(self._slaf_array, "_obs_columns"):
+                self._slaf_array._obs_columns = None
+            # Mark metadata as not loaded so it gets reloaded
+            if hasattr(self._slaf_array, "_metadata_loaded"):
+                self._slaf_array._metadata_loaded = False
+        elif self.table_type in ("var", "varm"):
+            # Modified genes.lance - invalidate SLAFArray._var
+            if hasattr(self._slaf_array, "_var"):
+                self._slaf_array._var = None
+            if hasattr(self._slaf_array, "_var_columns"):
+                self._slaf_array._var_columns = None
+            # Mark metadata as not loaded so it gets reloaded
+            if hasattr(self._slaf_array, "_metadata_loaded"):
+                self._slaf_array._metadata_loaded = False
 
     def _sql_condition_to_polars(self, sql_condition: str, id_column: str) -> pl.Expr:
         """Convert SQL WHERE condition to Polars expression"""
@@ -2770,6 +2794,22 @@ class LazyAnnData(LazySparseMixin):
                 # Drop cell_integer_id column if present to match AnnData expectations
                 if "cell_integer_id" in obs_pl.columns:
                     obs_pl = obs_pl.drop("cell_integer_id")
+                # Filter out vector columns (obsm) - these are FixedSizeListArray columns
+                # Vector columns should only be accessed via adata.obsm, not adata.obs
+                cells_table = getattr(self.slaf, "cells", None)
+                if cells_table is not None:
+                    schema = cells_table.schema
+                    vector_column_names = {
+                        field.name
+                        for field in schema
+                        if isinstance(field.type, pa.FixedSizeListType)
+                    }
+                    # Drop vector columns from obs
+                    columns_to_drop = [
+                        col for col in obs_pl.columns if col in vector_column_names
+                    ]
+                    if columns_to_drop:
+                        obs_pl = obs_pl.drop(columns_to_drop)
                 # Convert to pandas DataFrame for AnnData compatibility at API boundary
                 obs_copy = obs_pl.to_pandas()
                 # Set cell_id as index if present, otherwise use default index
@@ -2804,6 +2844,22 @@ class LazyAnnData(LazySparseMixin):
                 # Drop gene_integer_id column if present to match AnnData expectations
                 if "gene_integer_id" in var_pl.columns:
                     var_pl = var_pl.drop("gene_integer_id")
+                # Filter out vector columns (varm) - these are FixedSizeListArray columns
+                # Vector columns should only be accessed via adata.varm, not adata.var
+                genes_table = getattr(self.slaf, "genes", None)
+                if genes_table is not None:
+                    schema = genes_table.schema
+                    vector_column_names = {
+                        field.name
+                        for field in schema
+                        if isinstance(field.type, pa.FixedSizeListType)
+                    }
+                    # Drop vector columns from var
+                    columns_to_drop = [
+                        col for col in var_pl.columns if col in vector_column_names
+                    ]
+                    if columns_to_drop:
+                        var_pl = var_pl.drop(columns_to_drop)
                 # Convert to pandas DataFrame for AnnData compatibility at API boundary
                 var_copy = var_pl.to_pandas()
                 # Set gene_id as index if present, otherwise use default index
