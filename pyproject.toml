@@ -9,7 +9,7 @@ requires-python = ">=3.10,<3.14"
 
 dependencies = [
     # Core dependencies - essential for basic SLAF functionality
-    "pylance>=0.31.0", # Lance format storage in core/slaf.py
+    "pylance>=1.0.0", # Lance format storage in core/slaf.py
     "polars>=1.31.0",  # DataFrame operations and SQL queries across all modules
     "numpy>=2.2.0",    # Numerical operations across all modules
     "pandas>=2.3.0",   # DataFrame operations in data, integrations, ml
@@ -25,7 +25,8 @@ dependencies = [
     "rich>=14.0.0",          # Rich console output
     "tqdm>=4.67.0",          # Progress bars
     "build>=1.2.2.post1",
-    "lancedb>=0.24.2",
+    "lancedb>=0.25.3",
+    "lance-namespace-urllib3-client>=0.3.1",
     "boto3>=1.40.10",
     "smart-open[s3]>=7.4.1",
 ]

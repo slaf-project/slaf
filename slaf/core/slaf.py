@@ -282,6 +282,17 @@ class SLAFArray:
             self._load_metadata()
             self._metadata_loaded = True
         except Exception as e:
+            # Ignore Lance IO errors that occur during dataset modifications
+            # These can happen when tables are being modified (e.g., adding obsm/varm columns)
+            # and the background thread tries to read stale references
+            error_str = str(e)
+            if "not found" in error_str and ".lance" in error_str:
+                # This is a transient error during dataset modification, log as warning instead
+                logger.warning(
+                    f"Transient error loading metadata (likely due to concurrent dataset modification): {e}"
+                )
+                # Don't set metadata_error for transient errors, allow retry
+                return
             self._metadata_error = e
             logger.error(f"Error loading metadata: {e}")
         finally:

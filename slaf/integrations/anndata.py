@@ -1345,6 +1345,22 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
             return self._shape[axis]
         return self._get_selector_size(selector, axis)
 
+    def _invalidate_metadata_cache(self):
+        """
+        Invalidate cached obs/var DataFrames when table structure changes.
+
+        When we modify cells.lance or genes.lance (add/remove columns),
+        the cached DataFrames in LazyAnnData become stale and need to be cleared.
+        """
+        if hasattr(self.lazy_adata, "_obs"):
+            self.lazy_adata._obs = None
+        if hasattr(self.lazy_adata, "_var"):
+            self.lazy_adata._var = None
+        if hasattr(self.lazy_adata, "_cached_obs_names"):
+            self.lazy_adata._cached_obs_names = None
+        if hasattr(self.lazy_adata, "_cached_var_names"):
+            self.lazy_adata._cached_var_names = None
+
     def _sql_condition_to_polars(self, sql_condition: str, id_column: str) -> pl.Expr:
         """Convert SQL WHERE condition to Polars expression"""
         if sql_condition == "TRUE":
@@ -1646,6 +1662,9 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
             # Update config.json atomically
             self._update_config_columns_list([key], add=True)
 
+            # Invalidate cached obs/var DataFrames since table structure changed
+            self._invalidate_metadata_cache()
+
     def _update_table_with_column(
         self, column_table: pa.Table, column_name: str, table_path: str
     ):
@@ -1839,6 +1858,9 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
             # Update config.json atomically
             self._update_config_columns_list([key], add=False)
 
+            # Invalidate cached obs/var DataFrames since table structure changed
+            self._invalidate_metadata_cache()
+
     # ==================== Vector-specific methods (for obsm/varm) ====================
 
     def _detect_vector_columns(self) -> dict[str, int]:
@@ -1973,6 +1995,9 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
         # Update config.json
         self._update_config_vector_list([key], add=True, n_dims=n_dims)
 
+        # Invalidate cached obs/var DataFrames since table structure changed
+        self._invalidate_metadata_cache()
+
     def _del_vector_item(self, key: str):
         """Delete vector key (drops the vector column)"""
         import lance
@@ -2000,6 +2025,9 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
 
         # Update config.json
         self._update_config_vector_list([key], add=False)
+
+        # Invalidate cached obs/var DataFrames since table structure changed
+        self._invalidate_metadata_cache()
 
     def _keys_vector(self) -> list[str]:
         """List all available vector keys by detecting FixedSizeListArray columns"""
@@ -2334,13 +2362,27 @@ class LazyUnsView(LazyDictionaryViewMixin):
         if self._uns_data is not None:
             return self._uns_data
 
-        if self._slaf_array._path_exists(self._uns_path):
-            with self._slaf_array._open_file(self._uns_path) as f:
-                import json
+        # Check if file exists (not directory)
+        import os
 
-                self._uns_data = json.load(f)
+        if self._slaf_array._is_cloud_path(self._uns_path):
+            # For cloud paths, try to open the file
+            try:
+                with self._slaf_array._open_file(self._uns_path) as f:
+                    import json
+
+                    self._uns_data = json.load(f)
+            except Exception:
+                self._uns_data = {}
         else:
-            self._uns_data = {}
+            # For local paths, check if file exists
+            if os.path.exists(self._uns_path) and os.path.isfile(self._uns_path):
+                with self._slaf_array._open_file(self._uns_path) as f:
+                    import json
+
+                    self._uns_data = json.load(f)
+            else:
+                self._uns_data = {}
 
         return self._uns_data
 

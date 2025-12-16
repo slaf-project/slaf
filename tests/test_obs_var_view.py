@@ -540,3 +540,199 @@ class TestLazyVarmView:
 
         # Should be the same instance
         assert varm1 is varm2
+
+
+class TestLazyUnsView:
+    """Test LazyUnsView dictionary-like interface for unstructured metadata"""
+
+    def test_keys_empty(self, slaf_without_layers):
+        """Test listing keys when no uns data exists"""
+        adata = LazyAnnData(slaf_without_layers)
+        uns = adata.uns
+
+        keys = list(uns.keys())
+        assert len(keys) == 0
+
+    def test_contains_empty(self, slaf_without_layers):
+        """Test checking if key exists when no uns data exists"""
+        adata = LazyAnnData(slaf_without_layers)
+        uns = adata.uns
+
+        assert "neighbors" not in uns
+
+    def test_len_empty(self, slaf_without_layers):
+        """Test getting number of keys when no uns data exists"""
+        adata = LazyAnnData(slaf_without_layers)
+        uns = adata.uns
+
+        assert len(uns) == 0
+
+    def test_getitem_nonexistent_key(self, slaf_without_layers):
+        """Test accessing a non-existent key raises KeyError"""
+        adata = LazyAnnData(slaf_without_layers)
+        uns = adata.uns
+
+        with pytest.raises(KeyError, match="uns key 'neighbors' not found"):
+            _ = uns["neighbors"]
+
+    def test_setitem_create_new_key(self, slaf_without_layers):
+        """Test creating a new uns key"""
+        adata = LazyAnnData(slaf_without_layers)
+        uns = adata.uns
+
+        # Create new key with simple value
+        uns["neighbors"] = {"params": {"n_neighbors": 15, "metric": "euclidean"}}
+
+        # Verify key exists
+        assert "neighbors" in uns
+        assert len(uns) == 1
+
+        # Verify data
+        retrieved = uns["neighbors"]
+        assert retrieved == {"params": {"n_neighbors": 15, "metric": "euclidean"}}
+
+    def test_setitem_update_existing_key(self, slaf_without_layers):
+        """Test updating an existing uns key"""
+        adata = LazyAnnData(slaf_without_layers)
+        uns = adata.uns
+
+        # Create key
+        uns["neighbors"] = {"params": {"n_neighbors": 15}}
+
+        # Update key
+        uns["neighbors"] = {"params": {"n_neighbors": 20, "metric": "cosine"}}
+
+        # Verify update
+        retrieved = uns["neighbors"]
+        assert retrieved == {"params": {"n_neighbors": 20, "metric": "cosine"}}
+
+    def test_setitem_invalid_name(self, slaf_without_layers):
+        """Test that invalid key names raise ValueError"""
+        adata = LazyAnnData(slaf_without_layers)
+        uns = adata.uns
+
+        # Empty name
+        with pytest.raises(ValueError, match="cannot be empty"):
+            uns[""] = {"value": 1}
+
+        # Invalid characters
+        with pytest.raises(ValueError, match="invalid characters"):
+            uns["invalid-name"] = {"value": 1}
+
+        with pytest.raises(ValueError, match="invalid characters"):
+            uns["invalid name"] = {"value": 1}
+
+    def test_delitem_existing_key(self, slaf_without_layers):
+        """Test deleting an existing uns key"""
+        adata = LazyAnnData(slaf_without_layers)
+        uns = adata.uns
+
+        # Create key
+        uns["temp_key"] = {"value": 1}
+        assert "temp_key" in uns
+
+        # Delete key
+        del uns["temp_key"]
+        assert "temp_key" not in uns
+
+    def test_delitem_nonexistent_key(self, slaf_without_layers):
+        """Test deleting a non-existent key raises KeyError"""
+        adata = LazyAnnData(slaf_without_layers)
+        uns = adata.uns
+
+        with pytest.raises(KeyError, match="uns key 'nonexistent' not found"):
+            del uns["nonexistent"]
+
+    def test_json_serialize_numpy_array(self, slaf_without_layers):
+        """Test that numpy arrays are serialized to lists"""
+        adata = LazyAnnData(slaf_without_layers)
+        uns = adata.uns
+
+        # Store numpy array
+        arr = np.array([1.0, 2.0, 3.0])
+        uns["array"] = arr
+
+        # Retrieve and verify it's a list
+        retrieved = uns["array"]
+        assert isinstance(retrieved, list)
+        assert retrieved == [1.0, 2.0, 3.0]
+
+    def test_json_serialize_numpy_scalar(self, slaf_without_layers):
+        """Test that numpy scalars are serialized to Python types"""
+        adata = LazyAnnData(slaf_without_layers)
+        uns = adata.uns
+
+        # Store numpy scalar
+        uns["int_value"] = np.int32(42)
+        uns["float_value"] = np.float64(3.14)
+
+        # Retrieve and verify they're Python types
+        assert isinstance(uns["int_value"], int)
+        assert uns["int_value"] == 42
+        assert isinstance(uns["float_value"], float)
+        assert uns["float_value"] == 3.14
+
+    def test_json_serialize_nested_structure(self, slaf_without_layers):
+        """Test that nested structures with numpy arrays are serialized"""
+        adata = LazyAnnData(slaf_without_layers)
+        uns = adata.uns
+
+        # Store nested structure with numpy arrays
+        nested = {
+            "pca": {
+                "variance_ratio": np.array([0.1, 0.05, 0.03]),
+                "variance": np.array([100.0, 50.0, 30.0]),
+            },
+            "params": {"n_components": 50},
+        }
+        uns["analysis"] = nested
+
+        # Retrieve and verify structure
+        retrieved = uns["analysis"]
+        assert isinstance(retrieved, dict)
+        assert isinstance(retrieved["pca"]["variance_ratio"], list)
+        assert retrieved["pca"]["variance_ratio"] == [0.1, 0.05, 0.03]
+        assert retrieved["params"]["n_components"] == 50
+
+    def test_json_serialize_pandas_series(self, slaf_without_layers):
+        """Test that pandas Series are serialized to lists"""
+        adata = LazyAnnData(slaf_without_layers)
+        uns = adata.uns
+
+        import pandas as pd
+
+        # Store pandas Series
+        series = pd.Series([1, 2, 3, 4, 5])
+        uns["series"] = series
+
+        # Retrieve and verify it's a list
+        retrieved = uns["series"]
+        assert isinstance(retrieved, list)
+        assert retrieved == [1, 2, 3, 4, 5]
+
+    def test_iter(self, slaf_without_layers):
+        """Test iterating over uns keys"""
+        adata = LazyAnnData(slaf_without_layers)
+        uns = adata.uns
+
+        # Create multiple keys
+        uns["key1"] = {"value": 1}
+        uns["key2"] = {"value": 2}
+        uns["key3"] = {"value": 3}
+
+        # Iterate and collect keys
+        keys = list(uns)
+        assert len(keys) == 3
+        assert "key1" in keys
+        assert "key2" in keys
+        assert "key3" in keys
+
+    def test_uns_cached(self, slaf_without_layers):
+        """Test that uns is cached (same instance on multiple accesses)"""
+        adata = LazyAnnData(slaf_without_layers)
+
+        uns1 = adata.uns
+        uns2 = adata.uns
+
+        # Should be the same instance
+        assert uns1 is uns2
