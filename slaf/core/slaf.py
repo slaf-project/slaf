@@ -379,6 +379,8 @@ class SLAFArray:
 
     def _load_metadata(self):
         """Load cell and gene metadata into polars DataFrames for fast operations"""
+        import pyarrow as pa
+
         # Load cell metadata using optimized Lance operations
         # Use more efficient loading strategy for large datasets
         # Load in chunks if dataset is very large
@@ -389,11 +391,44 @@ class SLAFArray:
             # Use direct to_table() for smaller datasets
             cells_df = pl.from_arrow(self.cells.to_table())
 
+        # Filter out vector columns (obsm) - these are FixedSizeListArray columns
+        # Vector columns should only be accessed via adata.obsm, not adata.obs
+        schema = self.cells.schema
+        vector_column_names = {
+            field.name
+            for field in schema
+            if isinstance(field.type, pa.FixedSizeListType)
+        }
+        if vector_column_names:
+            # Drop vector columns from obs
+            columns_to_drop = [
+                col for col in cells_df.columns if col in vector_column_names
+            ]
+            if columns_to_drop:
+                cells_df = cells_df.drop(columns_to_drop)
+
         self._obs = cells_df.sort("cell_integer_id")
 
         # Load gene metadata using optimized Lance operations
         # Genes are typically smaller, so use direct loading
         genes_df = pl.from_arrow(self.genes.to_table())
+
+        # Filter out vector columns (varm) - these are FixedSizeListArray columns
+        # Vector columns should only be accessed via adata.varm, not adata.var
+        schema = self.genes.schema
+        vector_column_names = {
+            field.name
+            for field in schema
+            if isinstance(field.type, pa.FixedSizeListType)
+        }
+        if vector_column_names:
+            # Drop vector columns from var
+            columns_to_drop = [
+                col for col in genes_df.columns if col in vector_column_names
+            ]
+            if columns_to_drop:
+                genes_df = genes_df.drop(columns_to_drop)
+
         self._var = genes_df.sort("gene_integer_id")
 
         # Cache column information for faster access

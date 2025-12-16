@@ -1385,6 +1385,10 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
             if hasattr(self._slaf_array, "_metadata_loaded"):
                 self._slaf_array._metadata_loaded = False
 
+        # Invalidate view's cached DataFrame
+        if hasattr(self, "_dataframe"):
+            self._dataframe = None
+
     def _sql_condition_to_polars(self, sql_condition: str, id_column: str) -> pl.Expr:
         """Convert SQL WHERE condition to Polars expression"""
         if sql_condition == "TRUE":
@@ -1504,25 +1508,46 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
             # Fallback: query table
             return self._get_columns_from_table()
 
-    def __getitem__(self, key: str) -> np.ndarray:
-        """Get column/vector as numpy array (respects selectors from parent)"""
+    def __getitem__(self, key):
+        """
+        Get column/vector or DataFrame slice (dual interface: dict-like and DataFrame-like).
+
+        - String key: Returns numpy array (dict-like behavior)
+        - Other keys (slice, list, etc.): Delegates to DataFrame indexing (DataFrame-like behavior)
+
+        Args:
+            key: Column name (str) or DataFrame indexer (slice, list, etc.)
+
+        Returns:
+            numpy array if key is string, otherwise DataFrame slice
+        """
         # Route to vector or scalar method based on table_type
         if self.table_type in ("obsm", "varm"):
+            # For obsm/varm, only support string keys (dict-like)
+            if not isinstance(key, str):
+                raise TypeError(
+                    f"{self.table_type} only supports string keys, got {type(key)}"
+                )
             return self._get_vector_item(key)
         else:
-            # Scalar column access
-            if key not in self.keys():
-                raise KeyError(f"Column '{key}' not found")
+            # For obs/var, support both dict-like and DataFrame-like access
+            if isinstance(key, str):
+                # Dict-like: return numpy array
+                if key not in self.keys():
+                    raise KeyError(f"Column '{key}' not found")
 
-            # Build filtered query with selectors
-            query = self._build_filtered_query([self.id_column, key])
-            df = query.collect()
+                # Build filtered query with selectors
+                query = self._build_filtered_query([self.id_column, key])
+                df = query.collect()
 
-            # Sort by integer ID to match order
-            df = df.sort(self.id_column)
+                # Sort by integer ID to match order
+                df = df.sort(self.id_column)
 
-            # Extract column values
-            return df[key].to_numpy()
+                # Extract column values
+                return df[key].to_numpy()
+            else:
+                # DataFrame-like: delegate to underlying DataFrame
+                return self._get_dataframe().__getitem__(key)
 
     def _is_immutable(self, key: str) -> bool:
         """Check if column/vector key is immutable (converted from h5ad)"""
@@ -1594,21 +1619,24 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
         else:
             return data.astype(np.float32), pa.float32()
 
-    def __setitem__(self, key: str, value: np.ndarray | pd.Series):
+    def __setitem__(self, key, value):
         """
-        Create or update a column/vector (eager write - immediate).
+        Create or update a column/vector or DataFrame slice (dual interface).
+
+        - String key: Column assignment (dict-like behavior)
+        - Other keys: DataFrame assignment (DataFrame-like behavior)
 
         Args:
-            key: Column/vector name (must be alphanumeric + underscore, non-empty)
-            value: numpy array or pandas Series to assign.
-                   Must have length matching entity count (considering selectors).
-
-        Raises:
-            ValueError: If column name is invalid, length doesn't match,
-                       or trying to overwrite an immutable column.
+            key: Column name (str) or DataFrame indexer
+            value: numpy array, pandas Series, or DataFrame slice value
         """
         # Route to vector or scalar method based on table_type
         if self.table_type in ("obsm", "varm"):
+            # For obsm/varm, only support string keys (dict-like)
+            if not isinstance(key, str):
+                raise TypeError(
+                    f"{self.table_type} only supports string keys, got {type(key)}"
+                )
             # Convert to numpy array if needed
             if isinstance(value, pd.Series):
                 value = value.values
@@ -1619,75 +1647,109 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
                 value = value.reshape(-1, 1)
             self._set_vector_item(key, value)
         else:
-            # Scalar column assignment
-            # Validate column name
-            self._validate_name(key)
-
-            # Validate shape matches entity count (considering selectors)
-            expected_count = self._get_entity_count()
-            entity_name = self.table_type  # "obs" or "var"
-            if len(value) != expected_count:
-                raise ValueError(
-                    f"Column length {len(value)} doesn't match {entity_name} count {expected_count}"
-                )
-
-            # Check if column already exists and is immutable
-            if key in self.keys() and self._is_immutable(key):
-                raise ValueError(
-                    f"Column '{key}' is immutable (converted from h5ad) and cannot be overwritten"
-                )
-
-            # Convert to numpy array
-            if isinstance(value, pd.Series):
-                value = value.values
-            value = np.asarray(value)
-
-            # Optimize dtype
-            values, value_pa_type = self._optimize_dtype_for_column(value)
-
-            # Get integer IDs in order (respecting selectors)
-            selector = self._get_current_selector()
-            table = getattr(self._slaf_array, self.table_name)
-            if selector is None:
-                # No selector - use all entities
-                df = table.to_table().to_pandas()
-                integer_ids = df[self.id_column].values
+            # For obs/var, support both dict-like and DataFrame-like assignment
+            if isinstance(key, str):
+                # Dict-like: column assignment
+                self._set_column_item(key, value)
             else:
-                # Apply selector to get integer IDs
-                query = self._build_filtered_query([self.id_column])
-                df = query.collect().sort(self.id_column)
-                integer_ids = df[self.id_column].to_numpy()
+                # DataFrame-like: delegate to underlying DataFrame
+                # Note: This will modify the DataFrame but won't persist to Lance
+                # For now, we'll raise an error to guide users to use string keys for mutations
+                raise NotImplementedError(
+                    f"DataFrame-like assignment (e.g., obs_view[{key}] = ...) is not supported. "
+                    f"Use column assignment (e.g., obs_view['{key}'] = ...) for mutations."
+                )
 
-            # Determine ID column type (uint32 for cells, uint16 for genes)
-            id_pa_type = pa.uint32() if self.table_type == "obs" else pa.uint16()
+    def _set_column_item(self, key: str, value: np.ndarray | pd.Series):
+        """
+        Create or update a column (eager write - immediate).
 
-            # Create PyArrow table with the new column
-            column_table = pa.table(
-                {
-                    self.id_column: pa.array(integer_ids, type=id_pa_type),
-                    key: pa.array(values, type=value_pa_type),
-                }
+        Args:
+            key: Column name (must be alphanumeric + underscore, non-empty)
+            value: numpy array or pandas Series to assign.
+                   Must have length matching entity count (considering selectors).
+
+        Raises:
+            ValueError: If column name is invalid, length doesn't match,
+                       or trying to overwrite an immutable column.
+        """
+        # Validate column name
+        self._validate_name(key)
+
+        # Validate shape matches entity count (considering selectors)
+        expected_count = self._get_entity_count()
+        entity_name = self.table_type  # "obs" or "var"
+        if len(value) != expected_count:
+            raise ValueError(
+                f"Column length {len(value)} doesn't match {entity_name} count {expected_count}"
             )
 
-            # Write to table
-            table_path = self._slaf_array._join_path(
-                self._slaf_array.slaf_path,
-                self._slaf_array.config.get("tables", {}).get(
-                    self.table_name, f"{self.table_name}.lance"
-                ),
+        # Check if column already exists and is immutable
+        if key in self.keys() and self._is_immutable(key):
+            raise ValueError(
+                f"Column '{key}' is immutable (converted from h5ad) and cannot be overwritten"
             )
 
-            if table is None:
-                raise ValueError(f"{self.table_name}.lance table not found")
+        # Convert to numpy array
+        if isinstance(value, pd.Series):
+            value = value.values
+        value = np.asarray(value)
 
-            # Update table (similar to layers update logic)
-            self._update_table_with_column(column_table, key, table_path)
+        # Optimize dtype
+        values, value_pa_type = self._optimize_dtype_for_column(value)
 
-            # Update config.json atomically
-            self._update_config_columns_list([key], add=True)
+        # Get integer IDs in order (respecting selectors)
+        selector = self._get_current_selector()
+        table = getattr(self._slaf_array, self.table_name)
+        if selector is None:
+            # No selector - use all entities
+            df = table.to_table().to_pandas()
+            integer_ids = df[self.id_column].values
+        else:
+            # Apply selector to get integer IDs
+            query = self._build_filtered_query([self.id_column])
+            df = query.collect().sort(self.id_column)
+            integer_ids = df[self.id_column].to_numpy()
 
-            # Invalidate cached obs/var DataFrames since table structure changed
-            self._invalidate_metadata_cache()
+        # Determine ID column type (uint32 for cells, uint16 for genes)
+        id_pa_type = pa.uint32() if self.table_type == "obs" else pa.uint16()
+
+        # Create PyArrow table with the new column
+        column_table = pa.table(
+            {
+                self.id_column: pa.array(integer_ids, type=id_pa_type),
+                key: pa.array(values, type=value_pa_type),
+            }
+        )
+
+        # Write to table
+        table_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path,
+            self._slaf_array.config.get("tables", {}).get(
+                self.table_name, f"{self.table_name}.lance"
+            ),
+        )
+
+        if table is None:
+            raise ValueError(f"{self.table_name}.lance table not found")
+
+        # Update table (similar to layers update logic)
+        self._update_table_with_column(column_table, key, table_path)
+
+        # Update config.json atomically
+        self._update_config_columns_list([key], add=True)
+
+        # Reload config to ensure it's up-to-date (config is cached in SLAFArray)
+        config_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path, "config.json"
+        )
+        with self._slaf_array._open_file(config_path) as f:
+            import json
+
+            self._slaf_array.config = json.load(f)
+
+        # Invalidate cached obs/var DataFrames since table structure changed
+        self._invalidate_metadata_cache()
 
     def _update_table_with_column(
         self, column_table: pa.Table, column_name: str, table_path: str
@@ -1882,6 +1944,15 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
             # Update config.json atomically
             self._update_config_columns_list([key], add=False)
 
+            # Reload config to ensure it's up-to-date (config is cached in SLAFArray)
+            config_path = self._slaf_array._join_path(
+                self._slaf_array.slaf_path, "config.json"
+            )
+            with self._slaf_array._open_file(config_path) as f:
+                import json
+
+                self._slaf_array.config = json.load(f)
+
             # Invalidate cached obs/var DataFrames since table structure changed
             self._invalidate_metadata_cache()
 
@@ -2019,6 +2090,15 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
         # Update config.json
         self._update_config_vector_list([key], add=True, n_dims=n_dims)
 
+        # Reload config to ensure it's up-to-date (config is cached in SLAFArray)
+        config_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path, "config.json"
+        )
+        with self._slaf_array._open_file(config_path) as f:
+            import json
+
+            self._slaf_array.config = json.load(f)
+
         # Invalidate cached obs/var DataFrames since table structure changed
         self._invalidate_metadata_cache()
 
@@ -2049,6 +2129,15 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
 
         # Update config.json
         self._update_config_vector_list([key], add=False)
+
+        # Reload config to ensure it's up-to-date (config is cached in SLAFArray)
+        config_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path, "config.json"
+        )
+        with self._slaf_array._open_file(config_path) as f:
+            import json
+
+            self._slaf_array.config = json.load(f)
 
         # Invalidate cached obs/var DataFrames since table structure changed
         self._invalidate_metadata_cache()
@@ -2140,13 +2229,13 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
 
 class LazyObsView(LazyMetadataViewMixin):
     """
-    Dictionary-like view of obs columns with mutation support.
+    Dual-interface view of obs columns: DataFrame-like and dictionary-like.
 
-    LazyObsView provides a dictionary-like interface for accessing and mutating
-    cell metadata columns stored in the cells.lance table. It supports reading
-    columns as numpy arrays and provides methods to create, update, and delete columns.
+    LazyObsView provides both DataFrame-like and dictionary-like interfaces for accessing
+    and mutating cell metadata columns stored in the cells.lance table.
 
     Key Features:
+        - DataFrame-like interface: obs_view.columns, obs_view.head(), obs_view[slice]
         - Dictionary-like interface: obs_view["col"], "col" in obs_view, len(obs_view)
         - Lazy evaluation: columns are accessed on-demand
         - Selector support: respects cell selectors from parent LazyAnnData
@@ -2154,10 +2243,15 @@ class LazyObsView(LazyMetadataViewMixin):
         - Config.json consistency: reads from config for fast column discovery
 
     Examples:
-        >>> # Access a column
+        >>> # DataFrame-like access
         >>> slaf_array = SLAFArray("data.slaf")
         >>> adata = LazyAnnData(slaf_array)
-        >>> cluster = adata.obs_view["cluster"]
+        >>> df = adata.obs_view  # Returns DataFrame
+        >>> print(df.columns)  # DataFrame columns
+        >>> print(df.head())  # DataFrame methods work
+
+        >>> # Dictionary-like access
+        >>> cluster = adata.obs_view["cluster"]  # Returns numpy array
         >>> print(f"Cluster array shape: {cluster.shape}")
         Cluster array shape: (1000,)
 
@@ -2186,22 +2280,95 @@ class LazyObsView(LazyMetadataViewMixin):
         self.table_name = "cells"
         self.id_column = "cell_integer_id"
         self.table_type = "obs"
+        self._dataframe: pd.DataFrame | None = None  # Cached DataFrame
 
     @property
     def shape(self) -> tuple[int, int]:
         """Required by LazySparseMixin - uses parent's shape"""
         return self._shape
 
+    def _get_dataframe(self) -> pd.DataFrame:
+        """
+        Get underlying DataFrame (lazy-loaded, respects selectors).
+
+        Returns:
+            pandas DataFrame with all columns from cells.lance (excluding vector columns)
+        """
+        if self._dataframe is None:
+            # Get all column names from table schema
+            table = getattr(self._slaf_array, self.table_name)
+            schema = table.schema
+            all_columns = [field.name for field in schema]
+
+            # Build DataFrame from cells.lance with selectors
+            query = self._build_filtered_query(all_columns)
+            df = query.collect()
+
+            # Sort by integer ID to match order
+            df = df.sort(self.id_column)
+
+            # Convert to pandas DataFrame
+            obs_df = df.to_pandas()
+
+            # Drop system columns
+            if self.id_column in obs_df.columns:
+                obs_df = obs_df.drop(columns=[self.id_column])
+
+            # Filter out vector columns (obsm) - these are FixedSizeListArray columns
+            cells_table = getattr(self._slaf_array, self.table_name, None)
+            if cells_table is not None:
+                schema = cells_table.schema
+                vector_column_names = {
+                    field.name
+                    for field in schema
+                    if isinstance(field.type, pa.FixedSizeListType)
+                }
+                columns_to_drop = [
+                    col for col in obs_df.columns if col in vector_column_names
+                ]
+                if columns_to_drop:
+                    obs_df = obs_df.drop(columns=columns_to_drop)
+
+            # Set cell_id as index if present
+            if "cell_id" in obs_df.columns:
+                obs_df = obs_df.set_index("cell_id")
+                obs_df.index.name = "cell_id"
+
+            self._dataframe = obs_df
+
+        return self._dataframe
+
+    def __getattr__(self, name: str):
+        """
+        Delegate DataFrame attributes to underlying DataFrame.
+
+        This allows obs_view to behave like a DataFrame when accessed directly,
+        e.g., obs_view.columns, obs_view.head(), obs_view.shape, etc.
+        """
+        # Don't delegate special methods or our own methods
+        if name.startswith("_") or name in dir(self):
+            raise AttributeError(
+                f"'{type(self).__name__}' object has no attribute '{name}'"
+            )
+
+        # Delegate to underlying DataFrame
+        try:
+            return getattr(self._get_dataframe(), name)
+        except AttributeError as err:
+            raise AttributeError(
+                f"'{type(self).__name__}' object has no attribute '{name}'"
+            ) from err
+
 
 class LazyVarView(LazyMetadataViewMixin):
     """
-    Dictionary-like view of var columns with mutation support.
+    Dual-interface view of var columns: DataFrame-like and dictionary-like.
 
-    LazyVarView provides a dictionary-like interface for accessing and mutating
-    gene metadata columns stored in the genes.lance table. It supports reading
-    columns as numpy arrays and provides methods to create, update, and delete columns.
+    LazyVarView provides both DataFrame-like and dictionary-like interfaces for accessing
+    and mutating gene metadata columns stored in the genes.lance table.
 
     Key Features:
+        - DataFrame-like interface: var_view.columns, var_view.head(), var_view[slice]
         - Dictionary-like interface: var_view["col"], "col" in var_view, len(var_view)
         - Lazy evaluation: columns are accessed on-demand
         - Selector support: respects gene selectors from parent LazyAnnData
@@ -2209,10 +2376,15 @@ class LazyVarView(LazyMetadataViewMixin):
         - Config.json consistency: reads from config for fast column discovery
 
     Examples:
-        >>> # Access a column
+        >>> # DataFrame-like access
         >>> slaf_array = SLAFArray("data.slaf")
         >>> adata = LazyAnnData(slaf_array)
-        >>> hvg = adata.var_view["highly_variable"]
+        >>> df = adata.var_view  # Returns DataFrame
+        >>> print(df.columns)  # DataFrame columns
+        >>> print(df.head())  # DataFrame methods work
+
+        >>> # Dictionary-like access
+        >>> hvg = adata.var_view["highly_variable"]  # Returns numpy array
         >>> print(f"HVG array shape: {hvg.shape}")
         HVG array shape: (20000,)
 
@@ -2237,11 +2409,84 @@ class LazyVarView(LazyMetadataViewMixin):
         self.table_name = "genes"
         self.id_column = "gene_integer_id"
         self.table_type = "var"
+        self._dataframe: pd.DataFrame | None = None  # Cached DataFrame
 
     @property
     def shape(self) -> tuple[int, int]:
         """Required by LazySparseMixin - uses parent's shape"""
         return self._shape
+
+    def _get_dataframe(self) -> pd.DataFrame:
+        """
+        Get underlying DataFrame (lazy-loaded, respects selectors).
+
+        Returns:
+            pandas DataFrame with all columns from genes.lance (excluding vector columns)
+        """
+        if self._dataframe is None:
+            # Get all column names from table schema
+            table = getattr(self._slaf_array, self.table_name)
+            schema = table.schema
+            all_columns = [field.name for field in schema]
+
+            # Build DataFrame from genes.lance with selectors
+            query = self._build_filtered_query(all_columns)
+            df = query.collect()
+
+            # Sort by integer ID to match order
+            df = df.sort(self.id_column)
+
+            # Convert to pandas DataFrame
+            var_df = df.to_pandas()
+
+            # Drop system columns
+            if self.id_column in var_df.columns:
+                var_df = var_df.drop(columns=[self.id_column])
+
+            # Filter out vector columns (varm) - these are FixedSizeListArray columns
+            genes_table = getattr(self._slaf_array, self.table_name, None)
+            if genes_table is not None:
+                schema = genes_table.schema
+                vector_column_names = {
+                    field.name
+                    for field in schema
+                    if isinstance(field.type, pa.FixedSizeListType)
+                }
+                columns_to_drop = [
+                    col for col in var_df.columns if col in vector_column_names
+                ]
+                if columns_to_drop:
+                    var_df = var_df.drop(columns=columns_to_drop)
+
+            # Set gene_id as index if present
+            if "gene_id" in var_df.columns:
+                var_df = var_df.set_index("gene_id")
+                var_df.index.name = "gene_id"
+
+            self._dataframe = var_df
+
+        return self._dataframe
+
+    def __getattr__(self, name: str):
+        """
+        Delegate DataFrame attributes to underlying DataFrame.
+
+        This allows var_view to behave like a DataFrame when accessed directly,
+        e.g., var_view.columns, var_view.head(), var_view.shape, etc.
+        """
+        # Don't delegate special methods or our own methods
+        if name.startswith("_") or name in dir(self):
+            raise AttributeError(
+                f"'{type(self).__name__}' object has no attribute '{name}'"
+            )
+
+        # Delegate to underlying DataFrame
+        try:
+            return getattr(self._get_dataframe(), name)
+        except AttributeError as err:
+            raise AttributeError(
+                f"'{type(self).__name__}' object has no attribute '{name}'"
+            ) from err
 
 
 class LazyObsmView(LazyMetadataViewMixin):

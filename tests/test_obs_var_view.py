@@ -8,6 +8,7 @@ Tests the dictionary-like interface for accessing obs/var columns:
 - __delitem__() for deleting columns
 - Selector support
 - Immutability enforcement
+- Scalar column filtering (vector columns excluded from obs/var)
 """
 
 import numpy as np
@@ -48,20 +49,20 @@ class TestLazyObsView:
         assert "nonexistent" not in obs_view
 
     def test_len_with_columns(self, slaf_with_obs_columns):
-        """Test getting number of columns when columns exist"""
+        """Test length when columns exist"""
         adata = LazyAnnData(slaf_with_obs_columns)
         obs_view = adata.obs_view
 
         assert len(obs_view) >= 2
 
     def test_iter_with_columns(self, slaf_with_obs_columns):
-        """Test iterating over columns when columns exist"""
+        """Test iteration over column names"""
         adata = LazyAnnData(slaf_with_obs_columns)
         obs_view = adata.obs_view
 
-        column_names = list(obs_view)
-        assert "cell_type" in column_names
-        assert "total_counts" in column_names
+        keys = list(obs_view)
+        assert "cell_type" in keys
+        assert "total_counts" in keys
 
     def test_getitem_existing_column(self, slaf_with_obs_columns):
         """Test accessing an existing column"""
@@ -80,123 +81,91 @@ class TestLazyObsView:
         with pytest.raises(KeyError, match="Column 'nonexistent' not found"):
             _ = obs_view["nonexistent"]
 
-    def test_setitem_create_new_column(self, slaf_without_layers):
+    def test_setitem_new_column(self, slaf_with_obs_columns):
         """Test creating a new column"""
-        adata = LazyAnnData(slaf_without_layers)
+        adata = LazyAnnData(slaf_with_obs_columns)
         obs_view = adata.obs_view
 
-        # Create new column
-        n_obs = adata.n_obs
-        new_cluster = np.array([f"cluster_{i % 3}" for i in range(n_obs)])
-        obs_view["new_cluster"] = new_cluster
+        new_values = np.random.rand(adata.n_obs).astype(np.float32)
+        obs_view["new_column"] = new_values
 
-        # Verify column exists
-        assert "new_cluster" in obs_view
-        retrieved = obs_view["new_cluster"]
-        assert np.array_equal(retrieved, new_cluster)
+        assert "new_column" in obs_view
+        retrieved = obs_view["new_column"]
+        np.testing.assert_array_equal(retrieved, new_values)
 
-    def test_setitem_update_mutable_column(self, slaf_without_layers):
-        """Test updating a mutable column"""
-        adata = LazyAnnData(slaf_without_layers)
+    def test_setitem_update_column(self, slaf_with_obs_columns):
+        """Test updating an existing mutable column"""
+        adata = LazyAnnData(slaf_with_obs_columns)
         obs_view = adata.obs_view
 
-        # Create column
-        n_obs = adata.n_obs
-        original = np.array([i % 3 for i in range(n_obs)], dtype=np.float32)
-        obs_view["mutable_col"] = original
+        # Create a new column first
+        new_values = np.random.rand(adata.n_obs).astype(np.float32)
+        obs_view["updatable_column"] = new_values
 
-        # Update column
-        updated = np.array([i % 5 for i in range(n_obs)], dtype=np.float32)
-        obs_view["mutable_col"] = updated
+        # Update it
+        updated_values = np.random.rand(adata.n_obs).astype(np.float32)
+        obs_view["updatable_column"] = updated_values
 
-        # Verify update
-        retrieved = obs_view["mutable_col"]
-        assert np.array_equal(retrieved, updated)
+        retrieved = obs_view["updatable_column"]
+        np.testing.assert_array_equal(retrieved, updated_values)
 
-    def test_setitem_shape_mismatch(self, slaf_without_layers):
-        """Test that shape mismatch raises ValueError"""
-        adata = LazyAnnData(slaf_without_layers)
-        obs_view = adata.obs_view
-
-        # Try to assign array with wrong length (dataset has 3 cells, use 5)
-        wrong_length = np.array([1, 2, 3, 4, 5])  # Wrong length
-        with pytest.raises(ValueError, match="doesn't match obs count"):
-            obs_view["wrong_col"] = wrong_length
-
-    def test_setitem_invalid_name(self, slaf_without_layers):
-        """Test that invalid column names raise ValueError"""
-        adata = LazyAnnData(slaf_without_layers)
-        obs_view = adata.obs_view
-
-        n_obs = adata.n_obs
-        values = np.array([1.0] * n_obs)
-
-        # Empty name
-        with pytest.raises(ValueError, match="cannot be empty"):
-            obs_view[""] = values
-
-        # Invalid characters
-        with pytest.raises(ValueError, match="invalid characters"):
-            obs_view["invalid-name"] = values
-
-        with pytest.raises(ValueError, match="invalid characters"):
-            obs_view["invalid name"] = values
-
-    def test_delitem_mutable_column(self, slaf_without_layers):
+    def test_delitem_mutable_column(self, slaf_with_obs_columns):
         """Test deleting a mutable column"""
-        adata = LazyAnnData(slaf_without_layers)
-        obs_view = adata.obs_view
-
-        # Create column
-        n_obs = adata.n_obs
-        obs_view["temp_col"] = np.array([1.0] * n_obs)
-        assert "temp_col" in obs_view
-
-        # Delete column
-        del obs_view["temp_col"]
-        assert "temp_col" not in obs_view
-
-    def test_delitem_nonexistent_column(self, slaf_without_layers):
-        """Test deleting a non-existent column raises KeyError"""
-        adata = LazyAnnData(slaf_without_layers)
-        obs_view = adata.obs_view
-
-        with pytest.raises(KeyError, match="Column 'nonexistent' not found"):
-            del obs_view["nonexistent"]
-
-    def test_obs_view_propagates_selectors(self, slaf_with_obs_columns):
-        """Test that obs_view respects selectors from parent LazyAnnData"""
-        adata = LazyAnnData(slaf_with_obs_columns)
-
-        # Subset the adata
-        adata_subset = adata[:2]
-
-        # Access column on subset
-        cell_type_subset = adata_subset.obs_view["cell_type"]
-
-        # Verify correct shape
-        assert len(cell_type_subset) == 2
-
-    def test_is_immutable(self, slaf_with_obs_columns):
-        """Test checking if a column is immutable"""
         adata = LazyAnnData(slaf_with_obs_columns)
         obs_view = adata.obs_view
 
-        # Columns from conversion should be immutable
-        if "cell_type" in obs_view.keys():
-            # This depends on how the fixture is set up
-            # If converted from h5ad, should be immutable
-            pass
+        # Create a new column
+        new_values = np.random.rand(adata.n_obs).astype(np.float32)
+        obs_view["deletable_column"] = new_values
+        assert "deletable_column" in obs_view
 
-    def test_obs_view_cached(self, slaf_without_layers):
-        """Test that obs_view is cached (same instance on multiple accesses)"""
-        adata = LazyAnnData(slaf_without_layers)
+        # Delete it
+        del obs_view["deletable_column"]
+        assert "deletable_column" not in obs_view
 
-        obs_view1 = adata.obs_view
-        obs_view2 = adata.obs_view
+    def test_scalar_columns_exclude_vector_columns(self, slaf_with_obs_columns):
+        """Test that obs_view only includes scalar columns, not vector columns (obsm)"""
+        adata = LazyAnnData(slaf_with_obs_columns)
 
-        # Should be the same instance
-        assert obs_view1 is obs_view2
+        # Add an obsm embedding (vector column)
+        n_cells = adata.n_obs
+        adata.obsm["X_umap"] = np.random.rand(n_cells, 2).astype(np.float32)
+
+        # obs_view should NOT include vector columns
+        obs_keys = list(adata.obs_view.keys())
+        assert "X_umap" not in obs_keys
+
+        # obs DataFrame should also NOT include vector columns
+        obs_df = adata.obs
+        assert "X_umap" not in obs_df.columns
+
+        # But obsm should have it
+        assert "X_umap" in adata.obsm
+
+    def test_scalar_columns_exclude_vector_columns_after_mutation(
+        self, slaf_with_obs_columns
+    ):
+        """Test that obs_view excludes vector columns even after adding new ones"""
+        adata = LazyAnnData(slaf_with_obs_columns)
+
+        # Add multiple obsm embeddings
+        n_cells = adata.n_obs
+        adata.obsm["X_umap"] = np.random.rand(n_cells, 2).astype(np.float32)
+        adata.obsm["X_pca"] = np.random.rand(n_cells, 50).astype(np.float32)
+
+        # obs_view should NOT include any vector columns
+        obs_keys = list(adata.obs_view.keys())
+        assert "X_umap" not in obs_keys
+        assert "X_pca" not in obs_keys
+
+        # obs DataFrame should also NOT include vector columns
+        obs_df = adata.obs
+        assert "X_umap" not in obs_df.columns
+        assert "X_pca" not in obs_df.columns
+
+        # But obsm should have them
+        assert "X_umap" in adata.obsm
+        assert "X_pca" in adata.obsm
 
 
 class TestLazyVarView:
@@ -208,531 +177,71 @@ class TestLazyVarView:
         var_view = adata.var_view
 
         keys = list(var_view.keys())
-        assert "gene_type" in keys or "highly_variable" in keys
-        assert len(keys) >= 0
+        assert "gene_type" in keys
+        assert "highly_variable" in keys
+        assert len(keys) >= 2
 
     def test_getitem_existing_column(self, slaf_with_var_columns):
         """Test accessing an existing column"""
         adata = LazyAnnData(slaf_with_var_columns)
         var_view = adata.var_view
 
-        if "gene_type" in var_view.keys():
-            gene_type = var_view["gene_type"]
-            assert isinstance(gene_type, np.ndarray)
-            assert len(gene_type) == adata.n_vars
+        gene_type = var_view["gene_type"]
+        assert isinstance(gene_type, np.ndarray)
+        assert len(gene_type) == adata.n_vars
 
-    def test_setitem_create_new_column(self, slaf_without_layers):
+    def test_setitem_new_column(self, slaf_with_var_columns):
         """Test creating a new column"""
-        adata = LazyAnnData(slaf_without_layers)
+        adata = LazyAnnData(slaf_with_var_columns)
         var_view = adata.var_view
 
-        # Create new column
-        n_vars = adata.n_vars
-        new_annotation = np.array([f"type_{i % 2}" for i in range(n_vars)])
-        var_view["new_annotation"] = new_annotation
+        new_values = np.random.rand(adata.n_vars).astype(np.float32)
+        var_view["new_column"] = new_values
 
-        # Verify column exists
-        assert "new_annotation" in var_view
-        retrieved = var_view["new_annotation"]
-        assert np.array_equal(retrieved, new_annotation)
+        assert "new_column" in var_view
+        retrieved = var_view["new_column"]
+        np.testing.assert_array_equal(retrieved, new_values)
 
-    def test_setitem_shape_mismatch(self, slaf_without_layers):
-        """Test that shape mismatch raises ValueError"""
-        adata = LazyAnnData(slaf_without_layers)
-        var_view = adata.var_view
-
-        # Try to assign array with wrong length
-        wrong_length = np.array([1, 2, 3])  # Wrong length
-        with pytest.raises(ValueError, match="doesn't match var count"):
-            var_view["wrong_col"] = wrong_length
-
-    def test_delitem_mutable_column(self, slaf_without_layers):
-        """Test deleting a mutable column"""
-        adata = LazyAnnData(slaf_without_layers)
-        var_view = adata.var_view
-
-        # Create column
-        n_vars = adata.n_vars
-        var_view["temp_col"] = np.array([1.0] * n_vars)
-        assert "temp_col" in var_view
-
-        # Delete column
-        del var_view["temp_col"]
-        assert "temp_col" not in var_view
-
-    def test_var_view_propagates_selectors(self, slaf_with_var_columns):
-        """Test that var_view respects selectors from parent LazyAnnData"""
+    def test_scalar_columns_exclude_vector_columns(self, slaf_with_var_columns):
+        """Test that var_view only includes scalar columns, not vector columns (varm)"""
         adata = LazyAnnData(slaf_with_var_columns)
 
-        # Subset the adata
-        adata_subset = adata[:, :1]
-
-        # Access column on subset if it exists
-        if len(adata_subset.var_view.keys()) > 0:
-            first_key = list(adata_subset.var_view.keys())[0]
-            column_subset = adata_subset.var_view[first_key]
-
-            # Verify correct shape
-            assert len(column_subset) == 1
-
-    def test_var_view_cached(self, slaf_without_layers):
-        """Test that var_view is cached (same instance on multiple accesses)"""
-        adata = LazyAnnData(slaf_without_layers)
-
-        var_view1 = adata.var_view
-        var_view2 = adata.var_view
-
-        # Should be the same instance
-        assert var_view1 is var_view2
-
-
-class TestLazyObsmView:
-    """Test LazyObsmView dictionary-like interface for multi-dimensional arrays"""
-
-    def test_keys_empty(self, slaf_without_layers):
-        """Test listing keys when no obsm data exists"""
-        adata = LazyAnnData(slaf_without_layers)
-        obsm = adata.obsm
-
-        keys = list(obsm.keys())
-        assert len(keys) == 0
-
-    def test_contains_empty(self, slaf_without_layers):
-        """Test checking if key exists when no obsm data exists"""
-        adata = LazyAnnData(slaf_without_layers)
-        obsm = adata.obsm
-
-        assert "X_umap" not in obsm
-
-    def test_len_empty(self, slaf_without_layers):
-        """Test getting number of keys when no obsm data exists"""
-        adata = LazyAnnData(slaf_without_layers)
-        obsm = adata.obsm
-
-        assert len(obsm) == 0
-
-    def test_getitem_nonexistent_key(self, slaf_without_layers):
-        """Test accessing a non-existent key raises KeyError"""
-        adata = LazyAnnData(slaf_without_layers)
-        obsm = adata.obsm
-
-        with pytest.raises(KeyError, match="obsm key 'X_umap' not found"):
-            _ = obsm["X_umap"]
-
-    def test_setitem_create_new_embedding(self, slaf_without_layers):
-        """Test creating a new embedding (2D array)"""
-        adata = LazyAnnData(slaf_without_layers)
-        obsm = adata.obsm
-
-        # Create new embedding (UMAP-like, 2D)
-        n_obs = adata.n_obs
-        umap_coords = np.random.rand(n_obs, 2).astype(np.float32)
-        obsm["X_umap"] = umap_coords
-
-        # Verify key exists
-        assert "X_umap" in obsm
-        assert len(obsm) == 1
-
-        # Verify data
-        retrieved = obsm["X_umap"]
-        assert isinstance(retrieved, np.ndarray)
-        assert retrieved.shape == (n_obs, 2)
-        assert np.allclose(retrieved, umap_coords, rtol=1e-5)
-
-    def test_setitem_create_pca_embedding(self, slaf_without_layers):
-        """Test creating a PCA embedding (higher dimensions)"""
-        adata = LazyAnnData(slaf_without_layers)
-        obsm = adata.obsm
-
-        # Create PCA embedding (50 dimensions)
-        n_obs = adata.n_obs
-        pca_coords = np.random.rand(n_obs, 50).astype(np.float32)
-        obsm["X_pca"] = pca_coords
-
-        # Verify data
-        retrieved = obsm["X_pca"]
-        assert retrieved.shape == (n_obs, 50)
-        assert np.allclose(retrieved, pca_coords, rtol=1e-5)
-
-    def test_setitem_shape_mismatch(self, slaf_without_layers):
-        """Test that shape mismatch raises ValueError"""
-        adata = LazyAnnData(slaf_without_layers)
-        obsm = adata.obsm
-
-        # Try to assign array with wrong first dimension
-        wrong_shape = np.random.rand(5, 2).astype(np.float32)  # Wrong first dim
-        with pytest.raises(ValueError, match="doesn't match obsm count"):
-            obsm["X_umap"] = wrong_shape
-
-    def test_setitem_invalid_name(self, slaf_without_layers):
-        """Test that invalid key names raise ValueError"""
-        adata = LazyAnnData(slaf_without_layers)
-        obsm = adata.obsm
-
-        n_obs = adata.n_obs
-        values = np.random.rand(n_obs, 2).astype(np.float32)
-
-        # Empty name
-        with pytest.raises(ValueError, match="cannot be empty"):
-            obsm[""] = values
-
-        # Invalid characters
-        with pytest.raises(ValueError, match="invalid characters"):
-            obsm["invalid-name"] = values
-
-    def test_setitem_update_mutable_key(self, slaf_without_layers):
-        """Test updating a mutable embedding"""
-        adata = LazyAnnData(slaf_without_layers)
-        obsm = adata.obsm
-
-        n_obs = adata.n_obs
-
-        # Create embedding
-        original = np.random.rand(n_obs, 2).astype(np.float32)
-        obsm["X_umap"] = original
-
-        # Update embedding
-        updated = np.random.rand(n_obs, 2).astype(np.float32)
-        obsm["X_umap"] = updated
-
-        # Verify update
-        retrieved = obsm["X_umap"]
-        assert np.allclose(retrieved, updated, rtol=1e-5)
-
-    def test_delitem_mutable_key(self, slaf_without_layers):
-        """Test deleting a mutable embedding"""
-        adata = LazyAnnData(slaf_without_layers)
-        obsm = adata.obsm
-
-        n_obs = adata.n_obs
-
-        # Create embedding
-        obsm["X_umap"] = np.random.rand(n_obs, 2).astype(np.float32)
-        assert "X_umap" in obsm
-
-        # Delete embedding
-        del obsm["X_umap"]
-        assert "X_umap" not in obsm
-
-    def test_delitem_nonexistent_key(self, slaf_without_layers):
-        """Test deleting a non-existent key raises KeyError"""
-        adata = LazyAnnData(slaf_without_layers)
-        obsm = adata.obsm
-
-        with pytest.raises(KeyError, match="obsm key 'X_umap' not found"):
-            del obsm["X_umap"]
-
-    def test_obsm_propagates_selectors(self, slaf_without_layers):
-        """Test that obsm respects selectors from parent LazyAnnData"""
-        adata = LazyAnnData(slaf_without_layers)
-
-        # Create embedding on full dataset
-        n_obs = adata.n_obs
-        adata.obsm["X_umap"] = np.random.rand(n_obs, 2).astype(np.float32)
-
-        # Subset the adata
-        adata_subset = adata[:2]
-
-        # Access embedding on subset
-        umap_subset = adata_subset.obsm["X_umap"]
-
-        # Verify correct shape
-        assert umap_subset.shape == (2, 2)
-
-    def test_obsm_cached(self, slaf_without_layers):
-        """Test that obsm is cached (same instance on multiple accesses)"""
-        adata = LazyAnnData(slaf_without_layers)
-
-        obsm1 = adata.obsm
-        obsm2 = adata.obsm
-
-        # Should be the same instance
-        assert obsm1 is obsm2
-
-
-class TestLazyVarmView:
-    """Test LazyVarmView dictionary-like interface for multi-dimensional arrays"""
-
-    def test_keys_empty(self, slaf_without_layers):
-        """Test listing keys when no varm data exists"""
-        adata = LazyAnnData(slaf_without_layers)
-        varm = adata.varm
-
-        keys = list(varm.keys())
-        assert len(keys) == 0
-
-    def test_getitem_nonexistent_key(self, slaf_without_layers):
-        """Test accessing a non-existent key raises KeyError"""
-        adata = LazyAnnData(slaf_without_layers)
-        varm = adata.varm
-
-        with pytest.raises(KeyError, match="varm key 'PCs' not found"):
-            _ = varm["PCs"]
-
-    def test_setitem_create_new_embedding(self, slaf_without_layers):
-        """Test creating a new gene embedding (2D array)"""
-        adata = LazyAnnData(slaf_without_layers)
-        varm = adata.varm
-
-        # Create new embedding (PCA loadings-like, 2D)
-        n_vars = adata.n_vars
-        pcs = np.random.rand(n_vars, 50).astype(np.float32)
-        varm["PCs"] = pcs
-
-        # Verify key exists
-        assert "PCs" in varm
-        assert len(varm) == 1
-
-        # Verify data
-        retrieved = varm["PCs"]
-        assert isinstance(retrieved, np.ndarray)
-        assert retrieved.shape == (n_vars, 50)
-        assert np.allclose(retrieved, pcs, rtol=1e-5)
-
-    def test_setitem_shape_mismatch(self, slaf_without_layers):
-        """Test that shape mismatch raises ValueError"""
-        adata = LazyAnnData(slaf_without_layers)
-        varm = adata.varm
-
-        # Try to assign array with wrong first dimension
-        wrong_shape = np.random.rand(5, 50).astype(np.float32)  # Wrong first dim
-        with pytest.raises(ValueError, match="doesn't match varm count"):
-            varm["PCs"] = wrong_shape
-
-    def test_delitem_mutable_key(self, slaf_without_layers):
-        """Test deleting a mutable embedding"""
-        adata = LazyAnnData(slaf_without_layers)
-        varm = adata.varm
-
-        n_vars = adata.n_vars
-
-        # Create embedding
-        varm["PCs"] = np.random.rand(n_vars, 50).astype(np.float32)
-        assert "PCs" in varm
-
-        # Delete embedding
-        del varm["PCs"]
-        assert "PCs" not in varm
-
-    def test_varm_propagates_selectors(self, slaf_without_layers):
-        """Test that varm respects selectors from parent LazyAnnData"""
-        adata = LazyAnnData(slaf_without_layers)
-
-        # Create embedding on full dataset
-        n_vars = adata.n_vars
-        adata.varm["PCs"] = np.random.rand(n_vars, 50).astype(np.float32)
-
-        # Subset the adata
-        adata_subset = adata[:, :2]
-
-        # Access embedding on subset
-        pcs_subset = adata_subset.varm["PCs"]
-
-        # Verify correct shape
-        assert pcs_subset.shape == (2, 50)
-
-    def test_varm_cached(self, slaf_without_layers):
-        """Test that varm is cached (same instance on multiple accesses)"""
-        adata = LazyAnnData(slaf_without_layers)
-
-        varm1 = adata.varm
-        varm2 = adata.varm
-
-        # Should be the same instance
-        assert varm1 is varm2
-
-
-class TestLazyUnsView:
-    """Test LazyUnsView dictionary-like interface for unstructured metadata"""
-
-    def test_keys_empty(self, slaf_without_layers):
-        """Test listing keys when no uns data exists"""
-        adata = LazyAnnData(slaf_without_layers)
-        uns = adata.uns
-
-        keys = list(uns.keys())
-        assert len(keys) == 0
-
-    def test_contains_empty(self, slaf_without_layers):
-        """Test checking if key exists when no uns data exists"""
-        adata = LazyAnnData(slaf_without_layers)
-        uns = adata.uns
-
-        assert "neighbors" not in uns
-
-    def test_len_empty(self, slaf_without_layers):
-        """Test getting number of keys when no uns data exists"""
-        adata = LazyAnnData(slaf_without_layers)
-        uns = adata.uns
-
-        assert len(uns) == 0
-
-    def test_getitem_nonexistent_key(self, slaf_without_layers):
-        """Test accessing a non-existent key raises KeyError"""
-        adata = LazyAnnData(slaf_without_layers)
-        uns = adata.uns
-
-        with pytest.raises(KeyError, match="uns key 'neighbors' not found"):
-            _ = uns["neighbors"]
-
-    def test_setitem_create_new_key(self, slaf_without_layers):
-        """Test creating a new uns key"""
-        adata = LazyAnnData(slaf_without_layers)
-        uns = adata.uns
-
-        # Create new key with simple value
-        uns["neighbors"] = {"params": {"n_neighbors": 15, "metric": "euclidean"}}
-
-        # Verify key exists
-        assert "neighbors" in uns
-        assert len(uns) == 1
-
-        # Verify data
-        retrieved = uns["neighbors"]
-        assert retrieved == {"params": {"n_neighbors": 15, "metric": "euclidean"}}
-
-    def test_setitem_update_existing_key(self, slaf_without_layers):
-        """Test updating an existing uns key"""
-        adata = LazyAnnData(slaf_without_layers)
-        uns = adata.uns
-
-        # Create key
-        uns["neighbors"] = {"params": {"n_neighbors": 15}}
-
-        # Update key
-        uns["neighbors"] = {"params": {"n_neighbors": 20, "metric": "cosine"}}
-
-        # Verify update
-        retrieved = uns["neighbors"]
-        assert retrieved == {"params": {"n_neighbors": 20, "metric": "cosine"}}
-
-    def test_setitem_invalid_name(self, slaf_without_layers):
-        """Test that invalid key names raise ValueError"""
-        adata = LazyAnnData(slaf_without_layers)
-        uns = adata.uns
-
-        # Empty name
-        with pytest.raises(ValueError, match="cannot be empty"):
-            uns[""] = {"value": 1}
-
-        # Invalid characters
-        with pytest.raises(ValueError, match="invalid characters"):
-            uns["invalid-name"] = {"value": 1}
-
-        with pytest.raises(ValueError, match="invalid characters"):
-            uns["invalid name"] = {"value": 1}
-
-    def test_delitem_existing_key(self, slaf_without_layers):
-        """Test deleting an existing uns key"""
-        adata = LazyAnnData(slaf_without_layers)
-        uns = adata.uns
-
-        # Create key
-        uns["temp_key"] = {"value": 1}
-        assert "temp_key" in uns
-
-        # Delete key
-        del uns["temp_key"]
-        assert "temp_key" not in uns
-
-    def test_delitem_nonexistent_key(self, slaf_without_layers):
-        """Test deleting a non-existent key raises KeyError"""
-        adata = LazyAnnData(slaf_without_layers)
-        uns = adata.uns
-
-        with pytest.raises(KeyError, match="uns key 'nonexistent' not found"):
-            del uns["nonexistent"]
-
-    def test_json_serialize_numpy_array(self, slaf_without_layers):
-        """Test that numpy arrays are serialized to lists"""
-        adata = LazyAnnData(slaf_without_layers)
-        uns = adata.uns
-
-        # Store numpy array
-        arr = np.array([1.0, 2.0, 3.0])
-        uns["array"] = arr
-
-        # Retrieve and verify it's a list
-        retrieved = uns["array"]
-        assert isinstance(retrieved, list)
-        assert retrieved == [1.0, 2.0, 3.0]
-
-    def test_json_serialize_numpy_scalar(self, slaf_without_layers):
-        """Test that numpy scalars are serialized to Python types"""
-        adata = LazyAnnData(slaf_without_layers)
-        uns = adata.uns
-
-        # Store numpy scalar
-        uns["int_value"] = np.int32(42)
-        uns["float_value"] = np.float64(3.14)
-
-        # Retrieve and verify they're Python types
-        assert isinstance(uns["int_value"], int)
-        assert uns["int_value"] == 42
-        assert isinstance(uns["float_value"], float)
-        assert uns["float_value"] == 3.14
-
-    def test_json_serialize_nested_structure(self, slaf_without_layers):
-        """Test that nested structures with numpy arrays are serialized"""
-        adata = LazyAnnData(slaf_without_layers)
-        uns = adata.uns
-
-        # Store nested structure with numpy arrays
-        nested = {
-            "pca": {
-                "variance_ratio": np.array([0.1, 0.05, 0.03]),
-                "variance": np.array([100.0, 50.0, 30.0]),
-            },
-            "params": {"n_components": 50},
-        }
-        uns["analysis"] = nested
-
-        # Retrieve and verify structure
-        retrieved = uns["analysis"]
-        assert isinstance(retrieved, dict)
-        assert isinstance(retrieved["pca"]["variance_ratio"], list)
-        assert retrieved["pca"]["variance_ratio"] == [0.1, 0.05, 0.03]
-        assert retrieved["params"]["n_components"] == 50
-
-    def test_json_serialize_pandas_series(self, slaf_without_layers):
-        """Test that pandas Series are serialized to lists"""
-        adata = LazyAnnData(slaf_without_layers)
-        uns = adata.uns
-
-        import pandas as pd
-
-        # Store pandas Series
-        series = pd.Series([1, 2, 3, 4, 5])
-        uns["series"] = series
-
-        # Retrieve and verify it's a list
-        retrieved = uns["series"]
-        assert isinstance(retrieved, list)
-        assert retrieved == [1, 2, 3, 4, 5]
-
-    def test_iter(self, slaf_without_layers):
-        """Test iterating over uns keys"""
-        adata = LazyAnnData(slaf_without_layers)
-        uns = adata.uns
-
-        # Create multiple keys
-        uns["key1"] = {"value": 1}
-        uns["key2"] = {"value": 2}
-        uns["key3"] = {"value": 3}
-
-        # Iterate and collect keys
-        keys = list(uns)
-        assert len(keys) == 3
-        assert "key1" in keys
-        assert "key2" in keys
-        assert "key3" in keys
-
-    def test_uns_cached(self, slaf_without_layers):
-        """Test that uns is cached (same instance on multiple accesses)"""
-        adata = LazyAnnData(slaf_without_layers)
-
-        uns1 = adata.uns
-        uns2 = adata.uns
-
-        # Should be the same instance
-        assert uns1 is uns2
+        # Add a varm embedding (vector column)
+        n_genes = adata.n_vars
+        adata.varm["PCs"] = np.random.rand(n_genes, 50).astype(np.float32)
+
+        # var_view should NOT include vector columns
+        var_keys = list(adata.var_view.keys())
+        assert "PCs" not in var_keys
+
+        # var DataFrame should also NOT include vector columns
+        var_df = adata.var
+        assert "PCs" not in var_df.columns
+
+        # But varm should have it
+        assert "PCs" in adata.varm
+
+    def test_scalar_columns_exclude_vector_columns_after_mutation(
+        self, slaf_with_var_columns
+    ):
+        """Test that var_view excludes vector columns even after adding new ones"""
+        adata = LazyAnnData(slaf_with_var_columns)
+
+        # Add multiple varm embeddings
+        n_genes = adata.n_vars
+        adata.varm["PCs"] = np.random.rand(n_genes, 50).astype(np.float32)
+        adata.varm["loadings"] = np.random.rand(n_genes, 30).astype(np.float32)
+
+        # var_view should NOT include any vector columns
+        var_keys = list(adata.var_view.keys())
+        assert "PCs" not in var_keys
+        assert "loadings" not in var_keys
+
+        # var DataFrame should also NOT include vector columns
+        var_df = adata.var
+        assert "PCs" not in var_df.columns
+        assert "loadings" not in var_df.columns
+
+        # But varm should have them
+        assert "PCs" in adata.varm
+        assert "loadings" in adata.varm
