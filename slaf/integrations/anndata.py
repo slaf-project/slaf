@@ -1137,8 +1137,16 @@ class LazyLayersView(LazyDictionaryViewMixin):
         base_table = expression_df.to_arrow()
 
         # Join with new layer data
-        layer_df = pl.from_arrow(layer_table)
-        base_df = pl.from_arrow(base_table)
+        layer_df_raw = pl.from_arrow(layer_table)
+        base_df_raw = pl.from_arrow(base_table)
+        assert isinstance(layer_df_raw, pl.DataFrame), (
+            "Expected DataFrame from Arrow table"
+        )
+        assert isinstance(base_df_raw, pl.DataFrame), (
+            "Expected DataFrame from Arrow table"
+        )
+        layer_df = layer_df_raw
+        base_df = base_df_raw
 
         # Left join to add layer column (nullable for sparse data)
         combined_df = base_df.join(

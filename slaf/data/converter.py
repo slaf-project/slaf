@@ -2917,7 +2917,11 @@ class SLAFConverter:
             )
 
             # Convert to Polars DataFrame
-            layer_df = pl.from_arrow(layer_coo_table).select(
+            layer_df_raw = pl.from_arrow(layer_coo_table)
+            assert isinstance(layer_df_raw, pl.DataFrame), (
+                "Expected DataFrame from Arrow table"
+            )
+            layer_df = layer_df_raw.select(
                 ["cell_integer_id", "gene_integer_id", "value"]
             )
 

@@ -130,6 +130,9 @@ class FragmentProcessor:
                 if self.table_name == "layers":
                     # Select cell_integer_id, gene_integer_id, and the layer column
                     # Rename layer column to "value" for consistency
+                    assert self.layer_name is not None, (
+                        "layer_name must be provided when table_name is 'layers'"
+                    )
                     lazy_df = lazy_df.select(
                         [
                             "cell_integer_id",
@@ -310,6 +313,9 @@ class FragmentProcessor:
         if self.table_name == "layers":
             # Select cell_integer_id, gene_integer_id, and the layer column
             # Rename layer column to "value" for consistency
+            assert self.layer_name is not None, (
+                "layer_name must be provided when table_name is 'layers'"
+            )
             lazy_df = lazy_df.select(
                 [
                     "cell_integer_id",
@@ -367,6 +373,9 @@ class FragmentProcessor:
 
             # For layers table, select only the relevant layer column
             if self.table_name == "layers":
+                assert self.layer_name is not None, (
+                    "layer_name must be provided when table_name is 'layers'"
+                )
                 lazy_df = lazy_df.select(
                     [
                         "cell_integer_id",

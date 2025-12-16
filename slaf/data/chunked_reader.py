@@ -579,11 +579,13 @@ class ChunkedH5ADReader(BaseChunkedReader):
                 )
 
             # Convert to Polars and rename value column to layer name
-            layer_df = (
-                pl.from_arrow(layer_table)
-                .select(["cell_integer_id", "gene_integer_id", "value"])
-                .rename({"value": layer_name})
+            layer_df_raw = pl.from_arrow(layer_table)
+            assert isinstance(layer_df_raw, pl.DataFrame), (
+                "Expected DataFrame from Arrow table"
             )
+            layer_df = layer_df_raw.select(
+                ["cell_integer_id", "gene_integer_id", "value"]
+            ).rename({"value": layer_name})
 
             # Left join to add layer column
             chunk_layers_table = chunk_layers_table.join(
