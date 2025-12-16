@@ -764,7 +764,54 @@ class LazyExpressionMatrix(LazySparseMixin):
         return scipy.sparse.coo_matrix((data, (rows, cols)), shape=self.shape).tocsr()
 
 
-class LazyLayersView:
+class LazyDictionaryViewMixin:
+    """
+    Base mixin for dictionary-like views (layers, obs, var).
+
+    Provides common dictionary interface methods that are identical across
+    all view types: layers, obs columns, and var columns.
+    """
+
+    def keys(self) -> list[str]:
+        """
+        Return list of keys.
+
+        This method must be implemented by subclasses.
+        """
+        raise NotImplementedError("Subclasses must implement keys()")
+
+    def __contains__(self, key: str) -> bool:
+        """Check if key exists"""
+        return key in self.keys()
+
+    def __len__(self) -> int:
+        """Number of keys"""
+        return len(self.keys())
+
+    def __iter__(self):
+        """Iterate over keys"""
+        return iter(self.keys())
+
+    def _validate_name(self, key: str):
+        """
+        Validate name (alphanumeric + underscore, non-empty).
+
+        Args:
+            key: Name to validate
+
+        Raises:
+            ValueError: If name is empty or contains invalid characters
+        """
+        if not key:
+            raise ValueError("Name cannot be empty")
+        if not key.replace("_", "").isalnum():
+            raise ValueError(
+                f"Name '{key}' contains invalid characters. "
+                "Only alphanumeric characters and underscores are allowed."
+            )
+
+
+class LazyLayersView(LazyDictionaryViewMixin):
     """
     Dictionary-like view of layers with lazy evaluation.
 
@@ -857,18 +904,6 @@ class LazyLayersView:
         # Fallback: query table
         return self._get_layers_from_table()
 
-    def __contains__(self, key: str) -> bool:
-        """Check if layer exists"""
-        return key in self.keys()
-
-    def __len__(self) -> int:
-        """Number of layers"""
-        return len(self.keys())
-
-    def __iter__(self):
-        """Iterate over layer names"""
-        return iter(self.keys())
-
     def __getitem__(self, key: str) -> LazyExpressionMatrix:
         """Get a layer as LazyExpressionMatrix"""
         # Validate layer exists
@@ -896,16 +931,6 @@ class LazyLayersView:
         immutable_layers = layers_config.get("immutable", [])
         return key in immutable_layers
 
-    def _validate_layer_name(self, key: str):
-        """Validate layer name (alphanumeric + underscore, non-empty)"""
-        if not key:
-            raise ValueError("Layer name cannot be empty")
-        if not key.replace("_", "").isalnum():
-            raise ValueError(
-                f"Layer name '{key}' contains invalid characters. "
-                "Only alphanumeric characters and underscores are allowed."
-            )
-
     def __setitem__(
         self, key: str, value: "LazyExpressionMatrix | scipy.sparse.spmatrix"
     ):
@@ -926,7 +951,7 @@ class LazyLayersView:
                        or trying to overwrite an immutable layer.
         """
         # Validate layer name
-        self._validate_layer_name(key)
+        self._validate_name(key)
 
         # Validate shape matches X
         if value.shape != self.lazy_adata.shape:
@@ -1264,6 +1289,1121 @@ class LazyLayersView:
         self._update_config_layers_list([key], add=False)
 
 
+class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
+    """
+    Mixin class for metadata view operations (obs/var columns).
+
+    This mixin provides shared functionality for LazyObsView and LazyVarView,
+    eliminating code duplication. It handles:
+    - Dictionary-like interface (keys, __getitem__, __setitem__, __delitem__)
+    - Column management (create, update, delete)
+    - Config.json synchronization
+    - Selector support
+    - Immutability tracking
+
+    Required attributes (set by subclasses):
+    - table_type: "obs" or "var"
+    - table_name: "cells" or "genes"
+    - id_column: "cell_integer_id" or "gene_integer_id"
+    - lazy_adata: LazyAnnData instance
+    - _slaf_array: SLAFArray instance
+    - _shape: tuple[int, int] shape
+    """
+
+    # Type annotations for required attributes (set by subclasses)
+    table_type: str
+    table_name: str
+    id_column: str
+    lazy_adata: "LazyAnnData"
+    _slaf_array: SLAFArray
+    _shape: tuple[int, int]
+
+    def _get_axis(self) -> int:
+        """Get axis for this view (0 for obs/cells/obsm, 1 for var/genes/varm)"""
+        return 0 if self.table_type in ("obs", "obsm") else 1
+
+    def _get_current_selector(self) -> Any:
+        """Get current selector from parent LazyAnnData"""
+        # Map table_type to actual selector attribute names in LazyAnnData
+        # obsm uses cell selector, varm uses gene selector
+        selector_map = {
+            "obs": "_cell_selector",
+            "var": "_gene_selector",
+            "obsm": "_cell_selector",
+            "varm": "_gene_selector",
+        }
+        selector_attr = selector_map.get(self.table_type)
+        if selector_attr:
+            return getattr(self.lazy_adata, selector_attr, None)
+        return None
+
+    def _get_entity_count(self) -> int:
+        """Get count of entities considering selectors"""
+        selector = self._get_current_selector()
+        axis = self._get_axis()
+        if selector is None:
+            return self._shape[axis]
+        return self._get_selector_size(selector, axis)
+
+    def _sql_condition_to_polars(self, sql_condition: str, id_column: str) -> pl.Expr:
+        """Convert SQL WHERE condition to Polars expression"""
+        if sql_condition == "TRUE":
+            return pl.lit(True)
+        if sql_condition == "FALSE":
+            return pl.lit(False)
+
+        # Handle range: "cell_integer_id >= 0 AND cell_integer_id < 100"
+        if ">=" in sql_condition and "<" in sql_condition:
+            parts = sql_condition.split(" AND ")
+            ge_part = [p for p in parts if ">=" in p][0]
+            lt_part = [p for p in parts if "<" in p][0]
+            ge_value = int(ge_part.split(">=")[1].strip())
+            lt_value = int(lt_part.split("<")[1].strip())
+            return (pl.col(id_column) >= ge_value) & (pl.col(id_column) < lt_value)
+
+        # Handle IN clause: "cell_integer_id IN (0,1,2,3)"
+        if " IN " in sql_condition:
+            values_str = sql_condition.split(" IN ")[1].strip("()")
+            values = [int(v.strip()) for v in values_str.split(",")]
+            return pl.col(id_column).is_in(values)
+
+        # Handle equality: "cell_integer_id = 5"
+        if " = " in sql_condition:
+            value = int(sql_condition.split(" = ")[1].strip())
+            return pl.col(id_column) == value
+
+        return pl.lit(True)  # Fallback: no filtering
+
+    def _build_filtered_query(self, columns: list[str]) -> pl.LazyFrame:
+        """Build filtered query for table with selectors"""
+        table = getattr(self._slaf_array, self.table_name)
+        query = pl.scan_pyarrow_dataset(table).select(columns)
+
+        # Apply selector filtering using mixin utilities
+        selector = self._get_current_selector()
+        if selector is not None:
+            # Convert selector to SQL condition, then to Polars filter
+            axis = self._get_axis()
+            entity_type = "cell" if self.table_type == "obs" else "gene"
+            sql_condition = self._selector_to_sql_condition(
+                selector, axis=axis, entity_type=entity_type
+            )
+            filter_expr = self._sql_condition_to_polars(sql_condition, self.id_column)
+            query = query.filter(filter_expr)
+
+        return query
+
+    def _get_columns_from_config(self) -> list[str]:
+        """Get column names from config.json (fast path)"""
+        config = self._slaf_array.config
+        if self.table_type in config and "available" in config[self.table_type]:
+            return config[self.table_type]["available"]
+        return []
+
+    def _get_columns_from_table(self) -> list[str]:
+        """Get column names by querying table (fallback)"""
+        table = getattr(self._slaf_array, self.table_name, None)
+        if table is None:
+            return []
+
+        try:
+            schema = table.schema
+            column_names = [field.name for field in schema]
+            # Filter out system/internal columns:
+            # - {id_column}: internal integer ID (not user-facing)
+            # - {table_name}_start_index: Lance internal column (if present)
+            system_cols = {self.id_column}
+            # Handle both "cells" -> "cell_start_index" and "genes" -> "gene_start_index"
+            if self.table_name == "cells":
+                system_cols.add("cell_start_index")
+            elif self.table_name == "genes":
+                system_cols.add("gene_start_index")
+            return [col for col in column_names if col not in system_cols]
+        except Exception:
+            return []
+
+    def keys(self) -> list[str]:
+        """List all available column/vector names"""
+        # Route to vector or scalar method based on table_type
+        if self.table_type in ("obsm", "varm"):
+            return self._keys_vector()
+        else:
+            # Scalar column keys
+            # Fast path: read from config.json
+            config_columns = self._get_columns_from_config()
+
+            if config_columns:
+                # Verify consistency with table if possible
+                table_columns = self._get_columns_from_table()
+                if table_columns:
+                    config_set = set(config_columns)
+                    table_set = set(table_columns)
+
+                    # Check for columns in config but not in table (real problem)
+                    missing_in_table = config_set - table_set
+                    if missing_in_table:
+                        import warnings
+
+                        warnings.warn(
+                            f"Column names in config.json ({sorted(missing_in_table)}) "
+                            f"not found in {self.table_name} table. These will be ignored.",
+                            UserWarning,
+                            stacklevel=2,
+                        )
+
+                    # Auto-sync: add columns from table that are missing in config
+                    missing_in_config = table_set - config_set
+                    if missing_in_config:
+                        # Add missing columns to config (treat as immutable if they existed before)
+                        self._sync_missing_columns_to_config(list(missing_in_config))
+                        # Return updated config columns
+                        config_columns = self._get_columns_from_config()
+
+                return config_columns
+
+            # Fallback: query table
+            return self._get_columns_from_table()
+
+    def __getitem__(self, key: str) -> np.ndarray:
+        """Get column/vector as numpy array (respects selectors from parent)"""
+        # Route to vector or scalar method based on table_type
+        if self.table_type in ("obsm", "varm"):
+            return self._get_vector_item(key)
+        else:
+            # Scalar column access
+            if key not in self.keys():
+                raise KeyError(f"Column '{key}' not found")
+
+            # Build filtered query with selectors
+            query = self._build_filtered_query([self.id_column, key])
+            df = query.collect()
+
+            # Sort by integer ID to match order
+            df = df.sort(self.id_column)
+
+            # Extract column values
+            return df[key].to_numpy()
+
+    def _is_immutable(self, key: str) -> bool:
+        """Check if column/vector key is immutable (converted from h5ad)"""
+        # Route to vector or scalar method based on table_type
+        if self.table_type in ("obsm", "varm"):
+            return self._is_immutable_vector(key)
+        else:
+            # Scalar column immutability check
+            config = self._slaf_array.config
+            if self.table_type in config and "immutable" in config[self.table_type]:
+                return key in config[self.table_type]["immutable"]
+            return False
+
+    def _optimize_dtype_for_column(
+        self, data: np.ndarray
+    ) -> tuple[np.ndarray, pa.DataType]:
+        """
+        Optimize dtype for column values.
+
+        If float32 data contains only integers within uint16 range, convert to uint16.
+        Otherwise, use float32.
+
+        Args:
+            data: Array of column values
+
+        Returns:
+            Tuple of (optimized values array, PyArrow data type)
+        """
+        if len(data) == 0:
+            return np.array([], dtype=np.float32), pa.float32()
+
+        # Handle string arrays
+        if data.dtype.kind in [
+            "U",
+            "S",
+            "O",
+        ]:  # Unicode, byte string, or object (often strings)
+            # Convert to string array and use PyArrow string type
+            if data.dtype.kind == "O":
+                # Object array - try to convert to string
+                try:
+                    data = np.array([str(x) for x in data], dtype="U")
+                except (TypeError, ValueError):
+                    # If conversion fails, keep as object
+                    return data, pa.string()
+            # Convert to UTF-8 string array
+            return data.astype("U"), pa.string()
+
+        # Sample data to determine dtype
+        sample_size = min(10000, len(data))
+        sample_data = data[:sample_size]
+
+        # Check if data is integer or float
+        is_integer = np.issubdtype(sample_data.dtype, np.integer)
+        max_value = np.max(data)
+        min_value = np.min(data)
+
+        if is_integer and max_value <= 65535 and min_value >= 0:
+            return data.astype(np.uint16), pa.uint16()
+        elif not is_integer:
+            # Check if float data contains only integer values
+            rounded_data = np.round(data)
+            is_integer_values = np.allclose(data, rounded_data, rtol=1e-10)
+
+            if is_integer_values and max_value <= 65535 and min_value >= 0:
+                return rounded_data.astype(np.uint16), pa.uint16()
+            else:
+                return data.astype(np.float32), pa.float32()
+        else:
+            return data.astype(np.float32), pa.float32()
+
+    def __setitem__(self, key: str, value: np.ndarray | pd.Series):
+        """
+        Create or update a column/vector (eager write - immediate).
+
+        Args:
+            key: Column/vector name (must be alphanumeric + underscore, non-empty)
+            value: numpy array or pandas Series to assign.
+                   Must have length matching entity count (considering selectors).
+
+        Raises:
+            ValueError: If column name is invalid, length doesn't match,
+                       or trying to overwrite an immutable column.
+        """
+        # Route to vector or scalar method based on table_type
+        if self.table_type in ("obsm", "varm"):
+            # Convert to numpy array if needed
+            if isinstance(value, pd.Series):
+                value = value.values
+            value = np.asarray(value)
+            # For vectors, value should be 2D (n_entities, n_dims)
+            if len(value.shape) == 1:
+                # If 1D, treat as single dimension vector
+                value = value.reshape(-1, 1)
+            self._set_vector_item(key, value)
+        else:
+            # Scalar column assignment
+            # Validate column name
+            self._validate_name(key)
+
+            # Validate shape matches entity count (considering selectors)
+            expected_count = self._get_entity_count()
+            entity_name = self.table_type  # "obs" or "var"
+            if len(value) != expected_count:
+                raise ValueError(
+                    f"Column length {len(value)} doesn't match {entity_name} count {expected_count}"
+                )
+
+            # Check if column already exists and is immutable
+            if key in self.keys() and self._is_immutable(key):
+                raise ValueError(
+                    f"Column '{key}' is immutable (converted from h5ad) and cannot be overwritten"
+                )
+
+            # Convert to numpy array
+            if isinstance(value, pd.Series):
+                value = value.values
+            value = np.asarray(value)
+
+            # Optimize dtype
+            values, value_pa_type = self._optimize_dtype_for_column(value)
+
+            # Get integer IDs in order (respecting selectors)
+            selector = self._get_current_selector()
+            table = getattr(self._slaf_array, self.table_name)
+            if selector is None:
+                # No selector - use all entities
+                df = table.to_table().to_pandas()
+                integer_ids = df[self.id_column].values
+            else:
+                # Apply selector to get integer IDs
+                query = self._build_filtered_query([self.id_column])
+                df = query.collect().sort(self.id_column)
+                integer_ids = df[self.id_column].to_numpy()
+
+            # Determine ID column type (uint32 for cells, uint16 for genes)
+            id_pa_type = pa.uint32() if self.table_type == "obs" else pa.uint16()
+
+            # Create PyArrow table with the new column
+            column_table = pa.table(
+                {
+                    self.id_column: pa.array(integer_ids, type=id_pa_type),
+                    key: pa.array(values, type=value_pa_type),
+                }
+            )
+
+            # Write to table
+            table_path = self._slaf_array._join_path(
+                self._slaf_array.slaf_path,
+                self._slaf_array.config.get("tables", {}).get(
+                    self.table_name, f"{self.table_name}.lance"
+                ),
+            )
+
+            if table is None:
+                raise ValueError(f"{self.table_name}.lance table not found")
+
+            # Update table (similar to layers update logic)
+            self._update_table_with_column(column_table, key, table_path)
+
+            # Update config.json atomically
+            self._update_config_columns_list([key], add=True)
+
+    def _update_table_with_column(
+        self, column_table: pa.Table, column_name: str, table_path: str
+    ):
+        """Update existing table with a new/updated column using add_columns() with UDF."""
+        import lance
+
+        table_dataset = getattr(self._slaf_array, self.table_name)
+
+        # Check if column already exists
+        schema = table_dataset.schema
+        column_names = [field.name for field in schema]
+
+        # Drop the old column if it exists (using Lance native method - metadata-only, very fast)
+        if column_name in column_names:
+            table_dataset = table_dataset.drop_columns([column_name])
+            # Reload from path after drop_columns to get the updated dataset
+            table_dataset = lance.dataset(table_path)
+
+        # Convert column data to polars for efficient lookup in UDF
+        column_df = pl.from_arrow(column_table)
+
+        # Create UDF that returns just the new column data
+        def add_column_udf(batch):
+            """
+            UDF to add column by joining batch with column data.
+
+            Receives batch with existing columns (cell_integer_id, etc.),
+            returns RecordBatch with just the new column.
+            """
+            # Convert batch to polars
+            batch_df = pl.from_arrow(batch)
+
+            # Join with column data (left join preserves all rows)
+            result_df = batch_df.join(column_df, on=[self.id_column], how="left")
+
+            # Extract just the new column and convert to single array
+            new_column_chunked = result_df.select([column_name]).to_arrow().column(0)
+            new_column_array = new_column_chunked.combine_chunks()
+
+            # Return RecordBatch with just the new column
+            return pa.RecordBatch.from_arrays(
+                [new_column_array],
+                names=[column_name],
+            )
+
+        # Add the column using add_columns() with UDF
+        table_dataset.add_columns(add_column_udf)
+
+        # Reload table dataset from path to ensure consistency
+        setattr(self._slaf_array, self.table_name, lance.dataset(table_path))
+
+    def _update_config_columns_list(self, column_names: list[str], add: bool):
+        """
+        Update config.json to add or remove columns from available/mutable lists.
+
+        Args:
+            column_names: List of column names to add or remove
+            add: If True, add columns; if False, remove columns
+        """
+        config_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path, "config.json"
+        )
+
+        # Load existing config
+        with self._slaf_array._open_file(config_path) as f:
+            import json
+
+            config = json.load(f)
+
+        # Ensure table config exists
+        if self.table_type not in config:
+            config[self.table_type] = {"available": [], "immutable": [], "mutable": []}
+
+        table_config = config[self.table_type]
+        available = set(table_config.get("available", []))
+        immutable = set(table_config.get("immutable", []))
+        mutable = set(table_config.get("mutable", []))
+
+        if add:
+            # Add columns to available and mutable (new columns are mutable)
+            for column_name in column_names:
+                available.add(column_name)
+                mutable.add(column_name)
+                # Remove from immutable if it was there (shouldn't happen, but be safe)
+                immutable.discard(column_name)
+        else:
+            # Remove columns from all lists
+            for column_name in column_names:
+                available.discard(column_name)
+                mutable.discard(column_name)
+                immutable.discard(column_name)
+
+        # Update config
+        table_config["available"] = sorted(available)
+        table_config["immutable"] = sorted(immutable)
+        table_config["mutable"] = sorted(mutable)
+
+        # Save updated config
+        with self._slaf_array._open_file(config_path, "w") as f:
+            json.dump(config, f, indent=2)
+
+    def _sync_missing_columns_to_config(self, column_names: list[str]):
+        """
+        Sync missing columns from table to config.json.
+        These columns are treated as immutable (they existed before Phase 6.5).
+
+        Args:
+            column_names: List of column names to add to config
+        """
+        if not column_names:
+            return
+
+        config_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path, "config.json"
+        )
+
+        # Load existing config
+        with self._slaf_array._open_file(config_path) as f:
+            import json
+
+            config = json.load(f)
+
+        # Ensure table config exists
+        if self.table_type not in config:
+            config[self.table_type] = {"available": [], "immutable": [], "mutable": []}
+
+        table_config = config[self.table_type]
+        available = set(table_config.get("available", []))
+        immutable = set(table_config.get("immutable", []))
+        mutable = set(table_config.get("mutable", []))
+
+        # Add missing columns to available and immutable (they existed before)
+        for column_name in column_names:
+            available.add(column_name)
+            immutable.add(column_name)
+            # Remove from mutable if it was there (shouldn't happen, but be safe)
+            mutable.discard(column_name)
+
+        # Update config
+        table_config["available"] = sorted(available)
+        table_config["immutable"] = sorted(immutable)
+        table_config["mutable"] = sorted(mutable)
+
+        # Save updated config
+        with self._slaf_array._open_file(config_path, "w") as f:
+            json.dump(config, f, indent=2)
+
+    def __delitem__(self, key: str):
+        """
+        Delete a column/vector (only if mutable).
+
+        Args:
+            key: Column/vector name to delete
+
+        Raises:
+            KeyError: If column/vector doesn't exist
+            ValueError: If column/vector is immutable and cannot be deleted
+        """
+        # Route to vector or scalar method based on table_type
+        if self.table_type in ("obsm", "varm"):
+            self._del_vector_item(key)
+        else:
+            # Scalar column deletion
+            import lance
+
+            # Check if column exists
+            if key not in self.keys():
+                raise KeyError(f"Column '{key}' not found")
+
+            # Check if column is immutable
+            if self._is_immutable(key):
+                raise ValueError(
+                    f"Column '{key}' is immutable (converted from h5ad) and cannot be deleted"
+                )
+
+            # Get table path
+            table_path = self._slaf_array._join_path(
+                self._slaf_array.slaf_path,
+                self._slaf_array.config.get("tables", {}).get(
+                    self.table_name, f"{self.table_name}.lance"
+                ),
+            )
+
+            # Drop the column using Lance's drop_columns() method (metadata-only, very fast)
+            table_dataset = getattr(self._slaf_array, self.table_name)
+            table_dataset = table_dataset.drop_columns([key])
+
+            # Reload table dataset from path to ensure consistency
+            setattr(self._slaf_array, self.table_name, lance.dataset(table_path))
+
+            # Update config.json atomically
+            self._update_config_columns_list([key], add=False)
+
+    # ==================== Vector-specific methods (for obsm/varm) ====================
+
+    def _detect_vector_columns(self) -> dict[str, int]:
+        """
+        Detect FixedSizeListArray columns from schema and return key -> dimension mapping.
+
+        Returns:
+            Dictionary mapping vector key names to their dimensions
+        """
+        table = getattr(self._slaf_array, self.table_name, None)
+        if table is None:
+            return {}
+
+        vector_columns = {}
+        schema = table.schema
+
+        for field in schema:
+            # Check if field is a FixedSizeListArray (vector type)
+            if isinstance(field.type, pa.FixedSizeListType):
+                # Use column name directly as the key
+                key = field.name
+                # Get dimension from FixedSizeListType
+                n_dims = field.type.list_size
+                vector_columns[key] = n_dims
+
+        return vector_columns
+
+    def _get_vector_item(self, key: str) -> np.ndarray:
+        """Retrieve multi-dimensional array (respects selectors from parent)"""
+        if key not in self.keys():
+            raise KeyError(f"{self.table_type} key '{key}' not found")
+
+        # Build query for the vector column (using mixin for filtering)
+        query = self._build_filtered_query([self.id_column, key])
+        df = query.collect()
+
+        # Sort by integer ID
+        df = df.sort(self.id_column)
+
+        # Extract vector column and convert to numpy array
+        # FixedSizeListArray columns are stored as lists/arrays
+        vector_data = df[key].to_numpy()
+
+        # Convert list of arrays to 2D numpy array
+        if len(vector_data) > 0 and isinstance(vector_data[0], list | np.ndarray):
+            return np.array([np.array(v) for v in vector_data])
+        else:
+            # Already in correct format
+            return np.asarray(vector_data)
+
+    def _set_vector_item(self, key: str, value: np.ndarray):
+        """Store multi-dimensional array as FixedSizeListArray column"""
+        import lance
+        import pyarrow as pa
+
+        # Validate shape using mixin utilities (respects selectors)
+        expected_count = self._get_entity_count()
+        if value.shape[0] != expected_count:
+            raise ValueError(
+                f"Array first dimension {value.shape[0]} doesn't match {self.table_type} count {expected_count}"
+            )
+
+        # Validate key name
+        self._validate_name(key)
+
+        # Check immutability
+        if key in self.keys() and self._is_immutable(key):
+            raise ValueError(
+                f"{self.table_type} key '{key}' is immutable and cannot be overwritten"
+            )
+
+        # Convert to numpy array
+        value = np.asarray(value)
+        n_dims = value.shape[1] if len(value.shape) > 1 else 1
+
+        # Get integer IDs in order (respecting selectors)
+        selector = self._get_current_selector()
+        table = getattr(self._slaf_array, self.table_name)
+        if selector is None:
+            # No selector - use all entities
+            df = table.to_table().to_pandas()
+            integer_ids = df[self.id_column].values
+        else:
+            # Apply selector to get integer IDs
+            query = self._build_filtered_query([self.id_column])
+            df = query.collect().sort(self.id_column)
+            integer_ids = df[self.id_column].to_numpy()
+
+        # Create FixedSizeListArray directly from numpy array
+        # Determine value dtype (use float32 for embeddings)
+        value_dtype = pa.float32() if value.dtype.kind == "f" else pa.float32()
+
+        # Flatten the 2D array and create FixedSizeListArray
+        # FixedSizeListArray.from_arrays takes a flat array and list_size
+        flat_values = pa.array(value.flatten(), type=value_dtype)
+        vector_array = pa.FixedSizeListArray.from_arrays(flat_values, n_dims)
+
+        # If overwriting, drop old column first
+        if key in self.keys():
+            table_dataset = getattr(self._slaf_array, self.table_name)
+            table_dataset = table_dataset.drop_columns([key])
+            table_path = self._slaf_array._join_path(
+                self._slaf_array.slaf_path,
+                self._slaf_array.config.get("tables", {}).get(
+                    self.table_name, f"{self.table_name}.lance"
+                ),
+            )
+            setattr(self._slaf_array, self.table_name, lance.dataset(table_path))
+
+        # Create table with id_column and vector column
+        table_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path,
+            self._slaf_array.config.get("tables", {}).get(
+                self.table_name, f"{self.table_name}.lance"
+            ),
+        )
+
+        # Determine ID column type (uint32 for cells, uint16 for genes)
+        id_pa_type = pa.uint32() if self.table_type == "obsm" else pa.uint16()
+
+        # Create table with integer IDs and vector column
+        column_table = pa.table(
+            {
+                self.id_column: pa.array(integer_ids, type=id_pa_type),
+                key: vector_array,
+            }
+        )
+
+        # Update table
+        self._update_table_with_column(column_table, key, table_path)
+
+        # Update config.json
+        self._update_config_vector_list([key], add=True, n_dims=n_dims)
+
+    def _del_vector_item(self, key: str):
+        """Delete vector key (drops the vector column)"""
+        import lance
+
+        if key not in self.keys():
+            raise KeyError(f"{self.table_type} key '{key}' not found")
+
+        if self._is_immutable(key):
+            raise ValueError(
+                f"{self.table_type} key '{key}' is immutable and cannot be deleted"
+            )
+
+        # Drop the vector column
+        table_dataset = getattr(self._slaf_array, self.table_name)
+        table_dataset = table_dataset.drop_columns([key])
+
+        # Reload dataset
+        table_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path,
+            self._slaf_array.config.get("tables", {}).get(
+                self.table_name, f"{self.table_name}.lance"
+            ),
+        )
+        setattr(self._slaf_array, self.table_name, lance.dataset(table_path))
+
+        # Update config.json
+        self._update_config_vector_list([key], add=False)
+
+    def _keys_vector(self) -> list[str]:
+        """List all available vector keys by detecting FixedSizeListArray columns"""
+        # Fast path: read from config.json
+        config = self._slaf_array.config
+        if self.table_type in config and "available" in config[self.table_type]:
+            config_keys = config[self.table_type]["available"]
+            # Verify against schema (auto-sync if needed)
+            schema_keys = list(self._detect_vector_columns().keys())
+            if set(config_keys) != set(schema_keys):
+                # Auto-sync: update config with schema keys
+                missing_in_config = set(schema_keys) - set(config_keys)
+                if missing_in_config:
+                    # Add missing keys to config (treat as immutable if they existed before)
+                    self._update_config_vector_list(list(missing_in_config), add=True)
+                    # Re-read config
+                    config = self._slaf_array.config
+                    return config.get(self.table_type, {}).get("available", [])
+            return config_keys
+
+        # Fallback: detect from schema
+        return list(self._detect_vector_columns().keys())
+
+    def _is_immutable_vector(self, key: str) -> bool:
+        """Check if vector key is immutable"""
+        config = self._slaf_array.config
+        if self.table_type in config and "immutable" in config[self.table_type]:
+            return key in config[self.table_type]["immutable"]
+        return False
+
+    def _update_config_vector_list(
+        self, keys: list[str], add: bool, n_dims: int | None = None
+    ):
+        """Update config.json to add or remove vector keys (unified for obsm/varm)"""
+        config_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path, "config.json"
+        )
+
+        # Load existing config
+        with self._slaf_array._open_file(config_path) as f:
+            import json
+
+            config = json.load(f)
+
+        # Ensure vector config exists
+        if self.table_type not in config:
+            config[self.table_type] = {
+                "available": [],
+                "immutable": [],
+                "mutable": [],
+                "dimensions": {},
+            }
+
+        vector_config = config[self.table_type]
+        available = set(vector_config.get("available", []))
+        immutable = set(vector_config.get("immutable", []))
+        mutable = set(vector_config.get("mutable", []))
+        dimensions = vector_config.get("dimensions", {})
+
+        if add:
+            # Add keys to available and mutable (new keys are mutable)
+            for key in keys:
+                available.add(key)
+                mutable.add(key)
+                immutable.discard(key)
+                if n_dims is not None:
+                    dimensions[key] = n_dims
+        else:
+            # Remove keys from all lists
+            for key in keys:
+                available.discard(key)
+                mutable.discard(key)
+                immutable.discard(key)
+                dimensions.pop(key, None)
+
+        # Update config
+        vector_config["available"] = sorted(available)
+        vector_config["immutable"] = sorted(immutable)
+        vector_config["mutable"] = sorted(mutable)
+        vector_config["dimensions"] = dimensions
+
+        # Save updated config
+        with self._slaf_array._open_file(config_path, "w") as f:
+            json.dump(config, f, indent=2)
+
+
+class LazyObsView(LazyMetadataViewMixin):
+    """
+    Dictionary-like view of obs columns with mutation support.
+
+    LazyObsView provides a dictionary-like interface for accessing and mutating
+    cell metadata columns stored in the cells.lance table. It supports reading
+    columns as numpy arrays and provides methods to create, update, and delete columns.
+
+    Key Features:
+        - Dictionary-like interface: obs_view["col"], "col" in obs_view, len(obs_view)
+        - Lazy evaluation: columns are accessed on-demand
+        - Selector support: respects cell selectors from parent LazyAnnData
+        - Immutability: prevents deletion/modification of converted columns
+        - Config.json consistency: reads from config for fast column discovery
+
+    Examples:
+        >>> # Access a column
+        >>> slaf_array = SLAFArray("data.slaf")
+        >>> adata = LazyAnnData(slaf_array)
+        >>> cluster = adata.obs_view["cluster"]
+        >>> print(f"Cluster array shape: {cluster.shape}")
+        Cluster array shape: (1000,)
+
+        >>> # Create a new column
+        >>> adata.obs_view["new_cluster"] = new_cluster_labels
+        >>> assert "new_cluster" in adata.obs_view
+
+        >>> # List available columns
+        >>> print(list(adata.obs_view.keys()))
+        ['cell_id', 'total_counts', 'cluster', 'new_cluster']
+    """
+
+    def __init__(self, lazy_adata: "LazyAnnData"):
+        """
+        Initialize LazyObsView with LazyAnnData.
+
+        Args:
+            lazy_adata: LazyAnnData instance containing the single-cell data.
+        """
+        super().__init__()
+        self.lazy_adata = lazy_adata
+        self._slaf_array = lazy_adata.slaf
+        # Required by LazySparseMixin
+        self.slaf_array = lazy_adata.slaf
+        self._shape = lazy_adata.shape  # (n_cells, n_genes)
+        self.table_name = "cells"
+        self.id_column = "cell_integer_id"
+        self.table_type = "obs"
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        """Required by LazySparseMixin - uses parent's shape"""
+        return self._shape
+
+
+class LazyVarView(LazyMetadataViewMixin):
+    """
+    Dictionary-like view of var columns with mutation support.
+
+    LazyVarView provides a dictionary-like interface for accessing and mutating
+    gene metadata columns stored in the genes.lance table. It supports reading
+    columns as numpy arrays and provides methods to create, update, and delete columns.
+
+    Key Features:
+        - Dictionary-like interface: var_view["col"], "col" in var_view, len(var_view)
+        - Lazy evaluation: columns are accessed on-demand
+        - Selector support: respects gene selectors from parent LazyAnnData
+        - Immutability: prevents deletion/modification of converted columns
+        - Config.json consistency: reads from config for fast column discovery
+
+    Examples:
+        >>> # Access a column
+        >>> slaf_array = SLAFArray("data.slaf")
+        >>> adata = LazyAnnData(slaf_array)
+        >>> hvg = adata.var_view["highly_variable"]
+        >>> print(f"HVG array shape: {hvg.shape}")
+        HVG array shape: (20000,)
+
+        >>> # Create a new column
+        >>> adata.var_view["new_annotation"] = new_annotations
+        >>> assert "new_annotation" in adata.var_view
+    """
+
+    def __init__(self, lazy_adata: "LazyAnnData"):
+        """
+        Initialize LazyVarView with LazyAnnData.
+
+        Args:
+            lazy_adata: LazyAnnData instance containing the single-cell data.
+        """
+        super().__init__()
+        self.lazy_adata = lazy_adata
+        self._slaf_array = lazy_adata.slaf
+        # Required by LazySparseMixin
+        self.slaf_array = lazy_adata.slaf
+        self._shape = lazy_adata.shape  # (n_cells, n_genes)
+        self.table_name = "genes"
+        self.id_column = "gene_integer_id"
+        self.table_type = "var"
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        """Required by LazySparseMixin - uses parent's shape"""
+        return self._shape
+
+
+class LazyObsmView(LazyMetadataViewMixin):
+    """
+    Dictionary-like view of obsm (multi-dimensional obs annotations).
+
+    LazyObsmView provides a dictionary-like interface for accessing and mutating
+    multi-dimensional cell annotations (e.g., UMAP, PCA embeddings) stored as
+    separate columns in the cells.lance table. Each key maps to a 2D numpy array.
+
+    Key Features:
+        - Dictionary-like interface: obsm["X_umap"], "X_umap" in obsm, len(obsm)
+        - Multi-dimensional arrays: stored as FixedSizeListArray columns (native Lance vector type)
+        - Schema-based detection: automatically detects vector columns from Lance schema
+        - Selector support: respects cell selectors from parent LazyAnnData
+        - Immutability: prevents deletion/modification of converted embeddings
+        - Config.json consistency: reads from config for fast key discovery
+
+    Examples:
+        >>> # Access an embedding
+        >>> slaf_array = SLAFArray("data.slaf")
+        >>> adata = LazyAnnData(slaf_array)
+        >>> umap = adata.obsm["X_umap"]
+        >>> print(f"UMAP shape: {umap.shape}")
+        UMAP shape: (1000, 2)
+
+        >>> # Create a new embedding
+        >>> adata.obsm["X_pca"] = pca_coords  # shape: (1000, 50)
+        >>> assert "X_pca" in adata.obsm
+    """
+
+    def __init__(self, lazy_adata: "LazyAnnData"):
+        """
+        Initialize LazyObsmView with LazyAnnData.
+
+        Args:
+            lazy_adata: LazyAnnData instance containing the single-cell data.
+        """
+        super().__init__()
+        self.lazy_adata = lazy_adata
+        self._slaf_array = lazy_adata.slaf
+        # Required by LazySparseMixin
+        self.slaf_array = lazy_adata.slaf
+        self._shape = lazy_adata.shape  # (n_cells, n_genes)
+        self.table_name = "cells"
+        self.id_column = "cell_integer_id"
+        self.table_type = "obsm"
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        """Required by LazySparseMixin - uses parent's shape"""
+        return self._shape
+
+
+class LazyVarmView(LazyMetadataViewMixin):
+    """
+    Dictionary-like view of varm (multi-dimensional var annotations).
+
+    LazyVarmView provides a dictionary-like interface for accessing and mutating
+    multi-dimensional gene annotations (e.g., PCA loadings) stored as separate
+    columns in the genes.lance table. Each key maps to a 2D numpy array.
+
+    Key Features:
+        - Dictionary-like interface: varm["PCs"], "PCs" in varm, len(varm)
+        - Multi-dimensional arrays: stored as FixedSizeListArray columns (native Lance vector type)
+        - Schema-based detection: automatically detects vector columns from Lance schema
+        - Selector support: respects gene selectors from parent LazyAnnData
+        - Immutability: prevents deletion/modification of converted embeddings
+        - Config.json consistency: reads from config for fast key discovery
+
+    Examples:
+        >>> # Access gene loadings
+        >>> slaf_array = SLAFArray("data.slaf")
+        >>> adata = LazyAnnData(slaf_array)
+        >>> pcs = adata.varm["PCs"]
+        >>> print(f"PCs shape: {pcs.shape}")
+        PCs shape: (20000, 50)
+    """
+
+    def __init__(self, lazy_adata: "LazyAnnData"):
+        """
+        Initialize LazyVarmView with LazyAnnData.
+
+        Args:
+            lazy_adata: LazyAnnData instance containing the single-cell data.
+        """
+        super().__init__()
+        self.lazy_adata = lazy_adata
+        self._slaf_array = lazy_adata.slaf
+        # Required by LazySparseMixin
+        self.slaf_array = lazy_adata.slaf
+        self._shape = lazy_adata.shape  # (n_cells, n_genes)
+        self.table_name = "genes"
+        self.id_column = "gene_integer_id"
+        self.table_type = "varm"
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        """Required by LazySparseMixin - uses parent's shape"""
+        return self._shape
+
+
+class LazyUnsView(LazyDictionaryViewMixin):
+    """
+    Dictionary-like view of uns (unstructured metadata).
+
+    LazyUnsView provides a dictionary-like interface for accessing and mutating
+    unstructured metadata stored in uns.json. Unlike obs/var/obsm/varm, uns
+    metadata is always mutable and stored as JSON.
+
+    Key Features:
+        - Dictionary-like interface: uns["key"], "key" in uns, len(uns)
+        - JSON storage: stored in uns.json file
+        - Always mutable: no immutability tracking
+        - JSON serialization: automatically converts numpy/pandas objects
+
+    Examples:
+        >>> # Store metadata
+        >>> slaf_array = SLAFArray("data.slaf")
+        >>> adata = LazyAnnData(slaf_array)
+        >>> adata.uns["neighbors"] = {"params": {"n_neighbors": 15}}
+        >>> print(adata.uns["neighbors"])
+        {'params': {'n_neighbors': 15}}
+    """
+
+    def __init__(self, lazy_adata: "LazyAnnData"):
+        """
+        Initialize LazyUnsView with LazyAnnData.
+
+        Args:
+            lazy_adata: LazyAnnData instance containing the single-cell data.
+        """
+        self.lazy_adata = lazy_adata
+        self._slaf_array = lazy_adata.slaf
+        self._uns_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path, "uns.json"
+        )
+        self._uns_data: dict | None = None
+
+    def _load_uns(self) -> dict:
+        """Load uns.json if it exists, otherwise return empty dict"""
+        if self._uns_data is not None:
+            return self._uns_data
+
+        if self._slaf_array._path_exists(self._uns_path):
+            with self._slaf_array._open_file(self._uns_path) as f:
+                import json
+
+                self._uns_data = json.load(f)
+        else:
+            self._uns_data = {}
+
+        return self._uns_data
+
+    def keys(self) -> list[str]:
+        """List all available keys"""
+        return list(self._load_uns().keys())
+
+    def __getitem__(self, key: str) -> Any:
+        """Retrieve metadata value"""
+        uns_data = self._load_uns()
+        if key not in uns_data:
+            raise KeyError(f"uns key '{key}' not found")
+        return uns_data[key]
+
+    def __setitem__(self, key: str, value: Any):
+        """Store metadata value"""
+        uns_data = self._load_uns()
+
+        # Validate key name
+        self._validate_name(key)
+
+        # Convert numpy arrays and pandas objects to JSON-serializable
+        value = self._json_serialize(value)
+
+        uns_data[key] = value
+        self._save_uns(uns_data)
+
+    def __delitem__(self, key: str):
+        """Delete metadata key"""
+        uns_data = self._load_uns()
+        if key not in uns_data:
+            raise KeyError(f"uns key '{key}' not found")
+        del uns_data[key]
+        self._save_uns(uns_data)
+
+    def _json_serialize(self, value: Any) -> Any:
+        """Convert value to JSON-serializable format"""
+        import pandas as pd
+
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        elif isinstance(value, np.integer | np.floating):
+            return value.item()
+        elif isinstance(value, pd.Series):
+            return value.tolist()
+        elif isinstance(value, dict):
+            return {k: self._json_serialize(v) for k, v in value.items()}
+        elif isinstance(value, list):
+            return [self._json_serialize(item) for item in value]
+        return value
+
+    def _save_uns(self, uns_data: dict):
+        """Save uns.json atomically"""
+        import json
+
+        # Use same cloud-compatible file writing as config.json
+        with self._slaf_array._open_file(self._uns_path, "w") as f:
+            json.dump(uns_data, f, indent=2)
+
+        # Invalidate cache
+        self._uns_data = uns_data
+
+
 class LazyAnnData(LazySparseMixin):
     """
     AnnData-compatible interface for SLAF data with lazy evaluation.
@@ -1399,6 +2539,142 @@ class LazyAnnData(LazySparseMixin):
         if self._layers is None:
             self._layers = LazyLayersView(self)
         return self._layers
+
+    @property
+    def obs_view(self) -> LazyObsView:
+        """
+        Mutable view of obs columns for mutations.
+
+        Returns a dictionary-like view that provides access to cell metadata columns
+        with support for creating, updating, and deleting columns. This view respects
+        cell selectors from parent LazyAnnData.
+
+        Returns:
+            LazyObsView providing dictionary-like access to obs columns.
+
+        Examples:
+            >>> # Access a column
+            >>> slaf_array = SLAFArray("data.slaf")
+            >>> adata = LazyAnnData(slaf_array)
+            >>> cluster = adata.obs_view["cluster"]
+            >>> print(f"Cluster array shape: {cluster.shape}")
+            Cluster array shape: (1000,)
+
+            >>> # Create a new column
+            >>> adata.obs_view["new_cluster"] = new_cluster_labels
+            >>> assert "new_cluster" in adata.obs_view
+
+            >>> # List available columns
+            >>> print(list(adata.obs_view.keys()))
+            ['cell_id', 'total_counts', 'cluster', 'new_cluster']
+        """
+        if not hasattr(self, "_obs_view"):
+            self._obs_view = LazyObsView(self)
+        return self._obs_view
+
+    @property
+    def var_view(self) -> LazyVarView:
+        """
+        Mutable view of var columns for mutations.
+
+        Returns a dictionary-like view that provides access to gene metadata columns
+        with support for creating, updating, and deleting columns. This view respects
+        gene selectors from parent LazyAnnData.
+
+        Returns:
+            LazyVarView providing dictionary-like access to var columns.
+
+        Examples:
+            >>> # Access a column
+            >>> slaf_array = SLAFArray("data.slaf")
+            >>> adata = LazyAnnData(slaf_array)
+            >>> hvg = adata.var_view["highly_variable"]
+            >>> print(f"HVG array shape: {hvg.shape}")
+            HVG array shape: (20000,)
+
+            >>> # Create a new column
+            >>> adata.var_view["new_annotation"] = new_annotations
+            >>> assert "new_annotation" in adata.var_view
+        """
+        if not hasattr(self, "_var_view"):
+            self._var_view = LazyVarView(self)
+        return self._var_view
+
+    @property
+    def obsm(self) -> LazyObsmView:
+        """
+        Multi-dimensional obs annotations (embeddings, PCA, etc.).
+
+        Returns a dictionary-like view that provides access to multi-dimensional
+        cell annotations stored as separate columns in cells.lance. Each key maps
+        to a 2D numpy array.
+
+        Returns:
+            LazyObsmView providing dictionary-like access to obsm keys.
+
+        Examples:
+            >>> # Access an embedding
+            >>> slaf_array = SLAFArray("data.slaf")
+            >>> adata = LazyAnnData(slaf_array)
+            >>> umap = adata.obsm["X_umap"]
+            >>> print(f"UMAP shape: {umap.shape}")
+            UMAP shape: (1000, 2)
+
+            >>> # Create a new embedding
+            >>> adata.obsm["X_pca"] = pca_coords  # shape: (1000, 50)
+            >>> assert "X_pca" in adata.obsm
+        """
+        if not hasattr(self, "_obsm"):
+            self._obsm = LazyObsmView(self)
+        return self._obsm
+
+    @property
+    def varm(self) -> LazyVarmView:
+        """
+        Multi-dimensional var annotations (gene loadings, etc.).
+
+        Returns a dictionary-like view that provides access to multi-dimensional
+        gene annotations stored as separate columns in genes.lance. Each key maps
+        to a 2D numpy array.
+
+        Returns:
+            LazyVarmView providing dictionary-like access to varm keys.
+
+        Examples:
+            >>> # Access gene loadings
+            >>> slaf_array = SLAFArray("data.slaf")
+            >>> adata = LazyAnnData(slaf_array)
+            >>> pcs = adata.varm["PCs"]
+            >>> print(f"PCs shape: {pcs.shape}")
+            PCs shape: (20000, 50)
+        """
+        if not hasattr(self, "_varm"):
+            self._varm = LazyVarmView(self)
+        return self._varm
+
+    @property
+    def uns(self) -> LazyUnsView:
+        """
+        Unstructured metadata (analysis parameters, etc.).
+
+        Returns a dictionary-like view that provides access to unstructured
+        metadata stored in uns.json. Unlike obs/var/obsm/varm, uns metadata
+        is always mutable and stored as JSON.
+
+        Returns:
+            LazyUnsView providing dictionary-like access to uns keys.
+
+        Examples:
+            >>> # Store metadata
+            >>> slaf_array = SLAFArray("data.slaf")
+            >>> adata = LazyAnnData(slaf_array)
+            >>> adata.uns["neighbors"] = {"params": {"n_neighbors": 15}}
+            >>> print(adata.uns["neighbors"])
+            {'params': {'n_neighbors': 15}}
+        """
+        if not hasattr(self, "_uns"):
+            self._uns = LazyUnsView(self)
+        return self._uns
 
     @property
     def X(self) -> LazyExpressionMatrix:

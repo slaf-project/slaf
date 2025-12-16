@@ -216,7 +216,7 @@ class TestLazyLayersView:
         new_layer = scipy.sparse.csr_matrix([[1, 2], [3, 4], [5, 6]], dtype=np.float32)
 
         # Empty name
-        with pytest.raises(ValueError, match="Layer name cannot be empty"):
+        with pytest.raises(ValueError, match="Name cannot be empty"):
             layers[""] = new_layer
 
         # Invalid characters
