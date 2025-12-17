@@ -208,7 +208,7 @@ class SLAFArray:
             if effective_cache_dir is not None:
                 download_kwargs["cache_dir"] = effective_cache_dir
 
-            local_path = hf_hub_download(**download_kwargs)
+            local_path = hf_hub_download(**download_kwargs)  # type: ignore[arg-type]
         except Exception as e:
             # Provide more context in the error message
             raise FileNotFoundError(
