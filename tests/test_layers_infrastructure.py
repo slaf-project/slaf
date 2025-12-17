@@ -17,6 +17,9 @@ import pytest
 
 from slaf.core.slaf import SLAFArray
 
+# Mark all tests in this file as using SLAFArray instances
+pytestmark = pytest.mark.slaf_array
+
 
 @pytest.fixture
 def temp_slaf_dir():

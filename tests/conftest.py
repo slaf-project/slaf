@@ -13,6 +13,72 @@ from slaf.core.slaf import SLAFArray
 from slaf.data import SLAFConverter
 
 
+def _wait_for_all_slaf_threads(timeout=0.3):
+    """Helper function to wait for all SLAFArray background threads.
+
+    Uses gc.get_objects() but with aggressive warning suppression and early exit.
+    """
+    import time
+    import warnings
+
+    # Suppress all warnings during gc.get_objects() call
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        # Only collect instances with active threads to minimize work
+        slaf_instances_with_threads = []
+        try:
+            # Use a generator to avoid creating a full list
+            for obj in gc.get_objects():
+                if isinstance(obj, SLAFArray):
+                    try:
+                        if (
+                            hasattr(obj, "_metadata_thread")
+                            and obj._metadata_thread
+                            and obj._metadata_thread.is_alive()
+                        ):
+                            slaf_instances_with_threads.append(obj)
+                    except (AttributeError, ReferenceError):
+                        continue
+        except Exception:
+            # If gc.get_objects() fails for any reason, just return
+            return
+
+    # If no active threads, nothing to wait for
+    if not slaf_instances_with_threads:
+        return
+
+    # Wait for all threads with retries
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        all_done = True
+        # Create a copy of the list to iterate over (since we might modify it)
+        for slaf in list(slaf_instances_with_threads):
+            try:
+                if (
+                    hasattr(slaf, "_metadata_thread")
+                    and slaf._metadata_thread
+                    and slaf._metadata_thread.is_alive()
+                ):
+                    all_done = False
+                    # Try to wait for this specific instance (suppress warnings)
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        slaf.wait_for_metadata(
+                            timeout=0.05
+                        )  # Very short timeout per call
+            except (ReferenceError, AttributeError, Exception):
+                # Instance was garbage collected or waiting failed, remove from list
+                if slaf in slaf_instances_with_threads:
+                    slaf_instances_with_threads.remove(slaf)
+                continue
+
+        if all_done:
+            break
+
+        # Small sleep to avoid busy waiting
+        time.sleep(0.01)
+
+
 @pytest.fixture
 def sample_adata():
     """Create a sample AnnData object for testing."""
@@ -440,6 +506,33 @@ def temp_dir():
 
     temp_dir = tempfile.mkdtemp()
     yield temp_dir
+    # Before cleaning up, ensure all background threads that might be accessing
+    # files in this directory have completed
+    gc.collect()
+    import os
+
+    temp_dir_real = os.path.realpath(temp_dir)
+    for obj in gc.get_objects():
+        if isinstance(obj, SLAFArray):
+            # Check if this SLAFArray is using our temp_dir
+            if hasattr(obj, "slaf_path"):
+                try:
+                    slaf_path_str = str(obj.slaf_path)
+                    slaf_path_real = os.path.realpath(slaf_path_str)
+                    # Check if the SLAF path is within our temp_dir
+                    # Use commonpath to ensure proper path matching
+                    common_path = os.path.commonpath([temp_dir_real, slaf_path_real])
+                    if common_path == temp_dir_real:
+                        if (
+                            hasattr(obj, "_metadata_thread")
+                            and obj._metadata_thread
+                            and obj._metadata_thread.is_alive()
+                        ):
+                            obj.wait_for_metadata(timeout=1.0)
+                except (ValueError, OSError):
+                    # Paths don't share a common base, on different drives, or don't exist
+                    # Skip this SLAFArray
+                    pass
     shutil.rmtree(temp_dir)
 
 
@@ -831,19 +924,47 @@ def slaf_with_var_columns(temp_dir):
     return SLAFArray(str(slaf_dir), load_metadata=False)
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def wait_for_background_threads():
-    """Ensure all background threads complete before test cleanup to avoid logging errors."""
+    """Ensure all background threads complete before test cleanup to avoid logging errors.
+
+    This fixture waits for SLAFArray background threads to complete before test cleanup.
+    Most tests should use the temp_dir fixture instead, which handles thread waiting
+    automatically. Use this fixture only if you create SLAFArray instances without
+    using temp_dir.
+
+    Usage:
+        def test_my_slaf_test(wait_for_background_threads):
+            slaf = SLAFArray(...)
+            # test code
+    """
     yield
-    # After each test, wait for any SLAFArray background threads to complete
-    # This prevents loguru from trying to write to closed file handles
-    gc.collect()  # Force garbage collection to find any remaining SLAFArray instances
-    # Find all SLAFArray instances and wait for their metadata threads
-    for obj in gc.get_objects():
-        if isinstance(obj, SLAFArray):
-            if (
-                hasattr(obj, "_metadata_thread")
-                and obj._metadata_thread
-                and obj._metadata_thread.is_alive()
-            ):
-                obj.wait_for_metadata(timeout=1.0)  # Short timeout to avoid hanging
+
+    # Wait for threads after test
+    try:
+        _wait_for_all_slaf_threads(timeout=0.3)
+    except Exception:
+        # If anything goes wrong, just continue - don't fail tests
+        pass
+
+
+@pytest.fixture
+def wait_for_slaf_threads():
+    """Explicit fixture to wait for SLAFArray background threads.
+
+    Use this fixture when you need to wait for threads but don't want to use
+    the @pytest.mark.slaf_array marker.
+
+    Usage:
+        def test_my_slaf_test(wait_for_slaf_threads):
+            slaf = SLAFArray(...)
+            # test code
+    """
+    yield
+
+    # Wait for threads after test
+    try:
+        _wait_for_all_slaf_threads(timeout=0.3)
+    except Exception:
+        # If anything goes wrong, just continue - don't fail tests
+        pass

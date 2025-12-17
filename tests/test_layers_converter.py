@@ -11,8 +11,13 @@ These are unit tests that don't require full end-to-end conversion workflows.
 
 import tempfile
 
+import pytest
+
 from slaf.core.slaf import SLAFArray
 from slaf.data.converter import SLAFConverter
+
+# Mark all tests in this file as using SLAFArray instances
+pytestmark = pytest.mark.slaf_array
 
 
 def test_layers_wide_format(anndata_with_layers):

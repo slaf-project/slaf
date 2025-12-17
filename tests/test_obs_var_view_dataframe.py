@@ -15,6 +15,9 @@ from slaf.core.slaf import SLAFArray
 from slaf.data.converter import SLAFConverter
 from slaf.integrations.anndata import LazyAnnData
 
+# Mark all tests in this file as using SLAFArray instances
+pytestmark = pytest.mark.slaf_array
+
 
 @pytest.fixture
 def anndata_with_metadata():

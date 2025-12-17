@@ -9,6 +9,7 @@ import pytest
 from slaf.core.slaf import SLAFArray
 
 
+@pytest.mark.slaf_array
 class TestSLAFArray:
     """Test SLAFArray functionality"""
 
@@ -825,8 +826,20 @@ class TestSLAFArray:
         slaf_array = SLAFArray.__new__(SLAFArray)
         slaf_array._cache_dir = None
 
+        # Track call arguments to verify positional vs keyword usage
+        call_args_list = []
+
         # Mock hf_hub_download
-        def mock_hf_hub_download(repo_id, filename, repo_type, cache_dir=None):
+        def mock_hf_hub_download(repo_id, filename, *, repo_type=None, cache_dir=None):
+            # Record how the function was called
+            call_args_list.append(
+                {
+                    "repo_id": repo_id,
+                    "filename": filename,
+                    "repo_type": repo_type,
+                    "cache_dir": cache_dir,
+                }
+            )
             # Create a temporary file to simulate downloaded file
             local_file = (
                 tmp_path / f"{repo_id.replace('/', '_')}_{filename.replace('/', '_')}"
@@ -849,12 +862,28 @@ class TestSLAFArray:
         assert "config.json" in local_path
         assert os.path.exists(local_path)
 
+        # Verify that hf_hub_download was called with correct arguments
+        assert len(call_args_list) == 1
+        call_args = call_args_list[0]
+        assert call_args["repo_id"] == "username/repo-name"
+        assert call_args["filename"] == "path/to/slaf/config.json"
+        assert call_args["repo_type"] == "dataset"
+        assert call_args["cache_dir"] is None
+
         # Test downloading with full path
+        call_args_list.clear()
         hf_path_full = "hf://datasets/username/repo-name/path/to/slaf/config.json"
         local_path2 = slaf_array._download_hf_file(hf_path_full)
 
         assert local_path2 is not None
         assert os.path.exists(local_path2)
+
+        # Verify second call
+        assert len(call_args_list) == 1
+        call_args = call_args_list[0]
+        assert call_args["repo_id"] == "username/repo-name"
+        assert call_args["filename"] == "path/to/slaf/config.json"
+        assert call_args["repo_type"] == "dataset"
 
     def test_path_exists_hf_mocked(self, tmp_path, monkeypatch):
         """Test _path_exists for HuggingFace paths with mocked download"""

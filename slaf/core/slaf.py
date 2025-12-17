@@ -194,21 +194,21 @@ class SLAFArray:
 
         # Download file to HuggingFace cache (managed by huggingface_hub)
         try:
-            download_kwargs = {
-                "repo_id": repo_id,
-                "filename": full_filename,
-                "repo_type": "dataset",
-            }
             # Use cache_dir parameter if provided, otherwise fall back to instance cache_dir
             effective_cache_dir = (
                 cache_dir
                 if cache_dir is not None
                 else getattr(self, "_cache_dir", None)
             )
+
+            # hf_hub_download expects repo_id and filename as positional arguments
+            download_kwargs: dict[str, Any] = {
+                "repo_type": "dataset",
+            }
             if effective_cache_dir is not None:
                 download_kwargs["cache_dir"] = effective_cache_dir
 
-            local_path = hf_hub_download(**download_kwargs)  # type: ignore[arg-type]
+            local_path = hf_hub_download(repo_id, full_filename, **download_kwargs)
         except Exception as e:
             # Provide more context in the error message
             raise FileNotFoundError(
