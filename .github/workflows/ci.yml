@@ -281,29 +281,48 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: coverage-data-py*
-          merge-multiple: true
+          merge-multiple: false
           download-files: true
 
       - name: Find highest coverage
         id: highest_coverage
         run: |
           HIGHEST_COVERAGE=0
-          for file in coverage.json*; do
-            if [ -f "$file" ]; then
-              cat > parse_coverage.py << 'EOF'
+          cat > parse_coverage.py << 'EOF'
           import json
           import sys
 
-          with open(sys.argv[1], 'r') as f:
-              data = json.load(f)
-          print(f'{data["totals"]["percent_covered"]:.1f}')
+          try:
+              with open(sys.argv[1], 'r') as f:
+                  content = f.read()
+                  # Try to parse JSON, handling potential issues
+                  data = json.loads(content)
+                  if "totals" in data and "percent_covered" in data["totals"]:
+                      print(f'{data["totals"]["percent_covered"]:.1f}')
+                  else:
+                      print("0.0")
+                      sys.stderr.write(f"Warning: Invalid coverage format in {sys.argv[1]}\n")
+          except json.JSONDecodeError as e:
+              sys.stderr.write(f"Error parsing {sys.argv[1]}: {e}\n")
+              print("0.0")
+          except Exception as e:
+              sys.stderr.write(f"Error reading {sys.argv[1]}: {e}\n")
+              print("0.0")
           EOF
-              COVERAGE=$(python parse_coverage.py "$file")
-              if (( $(echo "$COVERAGE > $HIGHEST_COVERAGE" | bc -l) )); then
+          # Look for coverage.json files in current directory and subdirectories
+          # Use process substitution to avoid subshell issue with while loop
+          while IFS= read -r file; do
+            echo "Parsing coverage file: $file"
+            COVERAGE=$(python parse_coverage.py "$file" 2>&1 | tail -1)
+            # Check if COVERAGE is a valid number
+            if [ -n "$COVERAGE" ] && [ "$COVERAGE" != "0.0" ]; then
+              # Use awk for floating point comparison (pass variables as awk variables)
+              if awk -v cov="$COVERAGE" -v highest="$HIGHEST_COVERAGE" 'BEGIN {exit !(cov > highest)}'; then
                 HIGHEST_COVERAGE=$COVERAGE
+                echo "New highest coverage: $HIGHEST_COVERAGE%"
               fi
             fi
-          done
+          done < <(find . -name "coverage.json" -type f)
           echo "highest_coverage=$HIGHEST_COVERAGE" >> $GITHUB_OUTPUT
           echo "Highest coverage across all Python versions: $HIGHEST_COVERAGE%"
 
