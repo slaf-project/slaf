@@ -10,13 +10,14 @@ SLAF is built on a **SQL-native relational schema** that enables direct SQL quer
 
 #### Relational Schema
 
-SLAF stores single-cell data in three core tables:
+SLAF stores single-cell data in core tables with an extensible schema:
 
-- **`cells` table**: Cell metadata, QC metrics, and annotations with `cell_id` (string) and `cell_integer_id` (integer)
-- **`genes` table**: Gene metadata, annotations, and feature information with `gene_id` (string) and `gene_integer_id` (integer)
+- **`cells` table**: Cell metadata, QC metrics, and annotations with `cell_id` (string) and `cell_integer_id` (integer). Also stores multi-dimensional arrays (obsm) like UMAP coordinates and PCA embeddings as `FixedSizeListArray` columns.
+- **`genes` table**: Gene metadata, annotations, and feature information with `gene_id` (string) and `gene_integer_id` (integer). Also stores multi-dimensional arrays (varm) like PCA loadings as `FixedSizeListArray` columns.
 - **`expression` table**: Sparse expression matrix with `cell_integer_id`, `gene_integer_id`, and `value` columns
+- **`layers` table** (optional): Alternative expression matrices (e.g., `spliced`, `unspliced`, `counts`) stored in wide format with one column per layer, sharing the same `cell_integer_id` and `gene_integer_id` structure as the expression table
 
-The expression table uses integer IDs for efficiency, so you need to JOIN with metadata tables to get string identifiers.
+The expression and layers tables use integer IDs for efficiency, so you need to JOIN with metadata tables to get string identifiers. Multi-dimensional arrays (obsm/varm) are stored alongside scalar metadata in the same tables using Arrow's native `FixedSizeListArray` type for efficient vector operations.
 
 This relational design enables **direct SQL queries** for everything:
 
@@ -115,9 +116,10 @@ Benefits:
 
 SLAF leverages modern OLAP databases and pushdown filters on optimized storage formats rather than in-memory operations:
 
-- **`cells` table**: Cell metadata and QC metrics
-- **`genes` table**: Gene metadata and annotations
+- **`cells` table**: Cell metadata, QC metrics, and multi-dimensional arrays (obsm)
+- **`genes` table**: Gene metadata, annotations, and multi-dimensional arrays (varm)
 - **`expression` table**: Sparse expression matrix data
+- **`layers` table**: Alternative expression matrices (optional, wide format)
 
 Like Polars, SLAF pushes complex operations down to the query engine:
 
@@ -247,24 +249,24 @@ Benefits:
 
 ## Comparison with Other Formats
 
-| Feature                | SLAF | H5AD | Zarr | SOMA |
-| ---------------------- | ---- | ---- | ---- | ---- |
-| **Storage**            |      |      |      |      |
-| Cloud-Native           | ✅   | ❌   | ✅   | ✅   |
-| Sparse Arrays          | ✅   | ✅   | ❌   | ✅   |
-| Chunked Reads          | ✅   | ❌   | ✅   | ✅   |
-| Schema Evolution       | ✅   | ❌   | ✅   | ✅   |
-| **Compute**            |      |      |      |      |
-| SQL Queries            | ✅   | ❌   | ❌   | ❌   |
-| Optimized Query Engine | ✅   | ❌   | ❌   | ✅   |
-| Random Access          | ✅   | ✅   | ✅   | ✅   |
-| **Use Cases**          |      |      |      |      |
-| Scanpy Integration     | ✅   | ✅   | ✅   | ❌   |
-| Lazy Computation       | ✅   | ❌   | ❌   | ❌   |
-| Tokenizers             | ✅   | ❌   | ❌   | ❌   |
-| Dataloaders            | ✅   | ❌   | ❌   | ❌   |
-| Embeddings Support     | 🔄   | ❌   | ❌   | ❌   |
-| Visualization Support  | 🔄   | ✅   | ❌   | ❌   |
+| Feature                | SLAF | H5AD | Zarr | TileDB SOMA |
+| ---------------------- | ---- | ---- | ---- | ----------- |
+| **Storage**            |      |      |      |             |
+| Cloud-Native           | ✅   | ❌   | ✅   | ✅          |
+| Sparse Arrays          | ✅   | ✅   | ❌   | ✅          |
+| Chunked Reads          | ✅   | ❌   | ✅   | ✅          |
+| Schema Evolution       | ✅   | ❌   | ✅   | ✅          |
+| **Compute**            |      |      |      |             |
+| SQL Queries            | ✅   | ❌   | ❌   | ✅          |
+| Optimized Query Engine | ✅   | ❌   | ❌   | ✅          |
+| Random Access          | ✅   | ✅   | ✅   | ✅          |
+| **Use Cases**          |      |      |      |             |
+| Scanpy Integration     | ✅   | ✅   | ✅   | ❌          |
+| Lazy Computation       | ✅   | ❌   | ❌   | ❌          |
+| Tokenizers             | ✅   | ❌   | ❌   | ❌          |
+| Dataloaders            | ✅   | ❌   | ❌   | ❌          |
+| Embeddings Support     | 🔄   | ❌   | ❌   | ❌          |
+| Visualization Support  | 🔄   | ✅   | ❌   | ❌          |
 
 **Legend:**
 

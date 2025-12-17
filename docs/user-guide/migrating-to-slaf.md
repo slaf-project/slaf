@@ -299,7 +299,12 @@ SLAF converts your data to an optimized format that:
 
 - **Enables fast SQL queries** on your data
 - **Works with any size dataset** (memory-efficient processing)
-- **Preserves all metadata** (cell types, gene info, etc.)
+- **Preserves all metadata** including:
+  - Cell and gene annotations (`obs` and `var` columns)
+  - Alternative expression matrices (`layers` like `spliced`, `unspliced`, `counts`)
+  - Multi-dimensional arrays (`obsm` like UMAP coordinates, PCA embeddings)
+  - Gene-level embeddings (`varm` like PCA loadings)
+  - Unstructured metadata (`uns` like analysis parameters)
 
 ## Workflow Examples
 

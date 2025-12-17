@@ -102,8 +102,12 @@ class TestLazyAnnDataCorrectness:
         lazy_adata = LazyAnnData(tiny_slaf)
 
         # Compare metadata essentials
-        compare_metadata_essentials(lazy_adata.obs, tiny_adata.obs, "obs")
-        compare_metadata_essentials(lazy_adata.var, tiny_adata.var, "var")
+        compare_metadata_essentials(
+            lazy_adata.obs._get_dataframe(), tiny_adata.obs, "obs"
+        )
+        compare_metadata_essentials(
+            lazy_adata.var._get_dataframe(), tiny_adata.var, "var"
+        )
 
         # Test obs_names and var_names match
         pd.testing.assert_index_equal(lazy_adata.obs_names, tiny_adata.obs_names)

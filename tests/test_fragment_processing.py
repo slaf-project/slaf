@@ -1212,3 +1212,117 @@ class TestFragmentProcessingEndToEnd:
 
         # All should work without errors
         assert True  # If we get here, no exceptions were raised
+
+
+class TestFragmentProcessorLayers:
+    """Test FragmentProcessor with layers table support"""
+
+    @pytest.fixture
+    def mock_slaf_array_with_layers(self):
+        """Create a mock SLAFArray with layers for testing."""
+        mock_array = Mock()
+
+        # Mock expression fragments
+        mock_fragment1 = Mock()
+        mock_fragment1.to_table.return_value = Mock()
+        mock_fragment2 = Mock()
+        mock_fragment2.to_table.return_value = Mock()
+
+        mock_array.expression.get_fragments.return_value = [
+            mock_fragment1,
+            mock_fragment2,
+        ]
+
+        # Mock layers fragments
+        mock_layers_fragment1 = Mock()
+        mock_layers_fragment1.to_table.return_value = Mock()
+        mock_layers_fragment2 = Mock()
+        mock_layers_fragment2.to_table.return_value = Mock()
+
+        mock_array.layers = Mock()
+        mock_array.layers.get_fragments.return_value = [
+            mock_layers_fragment1,
+            mock_layers_fragment2,
+        ]
+
+        mock_array.shape = (100, 200)
+
+        return mock_array
+
+    def test_fragment_processor_layers_initialization(
+        self, mock_slaf_array_with_layers
+    ):
+        """Test FragmentProcessor initialization with layers table"""
+        processor = FragmentProcessor(
+            mock_slaf_array_with_layers,
+            table_name="layers",
+            layer_name="spliced",
+        )
+
+        assert processor.table_name == "layers"
+        assert processor.layer_name == "spliced"
+        assert processor.n_fragments == 2
+
+    def test_fragment_processor_layers_requires_layer_name(
+        self, mock_slaf_array_with_layers
+    ):
+        """Test that layer_name is required when table_name='layers'"""
+        with pytest.raises(ValueError, match="layer_name must be provided"):
+            FragmentProcessor(
+                mock_slaf_array_with_layers,
+                table_name="layers",
+                layer_name=None,
+            )
+
+    def test_fragment_processor_layers_table_not_available(self):
+        """Test that FragmentProcessor fails when layers table is not available"""
+        mock_array = Mock()
+        mock_array.layers = None
+
+        with pytest.raises(ValueError, match="Layers table not available"):
+            FragmentProcessor(
+                mock_array,
+                table_name="layers",
+                layer_name="spliced",
+            )
+
+    def test_fragment_processor_layers_column_selection(
+        self, mock_slaf_array_with_layers
+    ):
+        """Test that FragmentProcessor selects only the relevant layer column"""
+        processor = FragmentProcessor(
+            mock_slaf_array_with_layers,
+            table_name="layers",
+            layer_name="spliced",
+        )
+
+        with patch("polars.scan_pyarrow_dataset") as mock_scan:
+            # Create a mock LazyFrame with all layer columns
+            sample_data = pl.DataFrame(
+                {
+                    "cell_integer_id": [0, 1],
+                    "gene_integer_id": [0, 1],
+                    "spliced": [1.5, 2.5],
+                    "unspliced": [0.5, 1.5],
+                }
+            )
+            mock_lazy_df = sample_data.lazy()
+            mock_scan.return_value = mock_lazy_df
+
+            # Build pipeline - should select only spliced column
+            pipeline = processor.build_lazy_pipeline("log1p")
+
+            # Verify that select was called to filter columns
+            # The actual column selection happens in _process_single_fragment
+            assert pipeline is not None
+            mock_scan.assert_called()
+
+    def test_fragment_processor_expression_table_default(
+        self, mock_slaf_array_with_layers
+    ):
+        """Test that FragmentProcessor defaults to expression table"""
+        processor = FragmentProcessor(mock_slaf_array_with_layers)
+
+        assert processor.table_name == "expression"
+        assert processor.layer_name is None
+        assert processor.n_fragments == 2

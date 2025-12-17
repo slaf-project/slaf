@@ -477,3 +477,348 @@ def chunked_converter():
     from slaf.data.converter import SLAFConverter
 
     return SLAFConverter(chunked=True, chunk_size=1000)
+
+
+@pytest.fixture
+def slaf_with_layers(temp_dir):
+    """Create a SLAFArray with layers for unit testing."""
+    import json
+
+    import lance
+    import pyarrow as pa
+
+    # Create a temporary SLAF directory
+    slaf_dir = Path(temp_dir) / "test_layers.slaf"
+    slaf_dir.mkdir()
+
+    # Create basic tables
+    expression_data = pa.table(
+        {
+            "cell_integer_id": [0, 0, 1, 1, 2, 2],
+            "gene_integer_id": [0, 1, 0, 1, 0, 1],
+            "value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        }
+    )
+    cells_data = pa.table(
+        {
+            "cell_integer_id": [0, 1, 2],
+            "cell_id": ["cell_0", "cell_1", "cell_2"],
+        }
+    )
+    genes_data = pa.table(
+        {
+            "gene_integer_id": [0, 1],
+            "gene_id": ["gene_0", "gene_1"],
+        }
+    )
+
+    # Create layers table (wide format: one column per layer)
+    layers_data = pa.table(
+        {
+            "cell_integer_id": [0, 0, 1, 1, 2, 2],
+            "gene_integer_id": [0, 1, 0, 1, 0, 1],
+            "spliced": [1.5, 2.5, 3.5, 4.5, 5.5, 6.5],
+            "unspliced": [0.5, 1.5, 2.5, 3.5, 4.5, 5.5],
+        }
+    )
+
+    # Write Lance datasets
+    lance.write_dataset(expression_data, str(slaf_dir / "expression.lance"))
+    lance.write_dataset(cells_data, str(slaf_dir / "cells.lance"))
+    lance.write_dataset(genes_data, str(slaf_dir / "genes.lance"))
+    lance.write_dataset(layers_data, str(slaf_dir / "layers.lance"))
+
+    # Create config.json with layers
+    config = {
+        "format_version": "0.4",
+        "array_shape": [3, 2],
+        "n_cells": 3,
+        "n_genes": 2,
+        "tables": {
+            "expression": "expression.lance",
+            "cells": "cells.lance",
+            "genes": "genes.lance",
+            "layers": "layers.lance",
+        },
+        "layers": {
+            "available": ["spliced", "unspliced"],
+            "immutable": ["spliced", "unspliced"],
+            "mutable": [],
+        },
+        "optimizations": {
+            "use_integer_keys": True,
+            "optimize_storage": True,
+        },
+        "metadata": {
+            "expression_count": 6,
+            "sparsity": 0.0,
+            "density": 1.0,
+            "total_possible_elements": 6,
+        },
+    }
+
+    with open(slaf_dir / "config.json", "w") as f:
+        json.dump(config, f, indent=2)
+
+    # Return SLAFArray instance (with load_metadata=False to avoid async issues in tests)
+    return SLAFArray(str(slaf_dir), load_metadata=False)
+
+
+@pytest.fixture
+def slaf_without_layers(temp_dir):
+    """Create a SLAFArray without layers for backward compatibility testing."""
+    import json
+
+    import lance
+    import pyarrow as pa
+
+    # Create a temporary SLAF directory
+    slaf_dir = Path(temp_dir) / "test_no_layers.slaf"
+    slaf_dir.mkdir()
+
+    # Create basic tables
+    expression_data = pa.table(
+        {
+            "cell_integer_id": [0, 0, 1, 1, 2, 2],
+            "gene_integer_id": [0, 1, 0, 1, 0, 1],
+            "value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        }
+    )
+    cells_data = pa.table(
+        {
+            "cell_integer_id": [0, 1, 2],
+            "cell_id": ["cell_0", "cell_1", "cell_2"],
+        }
+    )
+    genes_data = pa.table(
+        {
+            "gene_integer_id": [0, 1],
+            "gene_id": ["gene_0", "gene_1"],
+        }
+    )
+
+    # Write Lance datasets
+    lance.write_dataset(expression_data, str(slaf_dir / "expression.lance"))
+    lance.write_dataset(cells_data, str(slaf_dir / "cells.lance"))
+    lance.write_dataset(genes_data, str(slaf_dir / "genes.lance"))
+
+    # Create config.json without layers (format 0.4 but no layers)
+    config = {
+        "format_version": "0.4",
+        "array_shape": [3, 2],
+        "n_cells": 3,
+        "n_genes": 2,
+        "tables": {
+            "expression": "expression.lance",
+            "cells": "cells.lance",
+            "genes": "genes.lance",
+        },
+        "optimizations": {
+            "use_integer_keys": True,
+            "optimize_storage": True,
+        },
+        "metadata": {
+            "expression_count": 6,
+            "sparsity": 0.0,
+            "density": 1.0,
+            "total_possible_elements": 6,
+        },
+    }
+
+    with open(slaf_dir / "config.json", "w") as f:
+        json.dump(config, f, indent=2)
+
+    # Return SLAFArray instance (with load_metadata=False to avoid async issues in tests)
+    return SLAFArray(str(slaf_dir), load_metadata=False)
+
+
+@pytest.fixture
+def anndata_with_layers():
+    """Create an AnnData object with layers for testing (reusable fixture)"""
+    # Set random seed for reproducible tests
+    np.random.seed(42)
+
+    n_cells, n_genes = 10, 5
+
+    # Create expression matrix
+    X = csr_matrix(np.random.rand(n_cells, n_genes), dtype=np.float32)
+    adata = sc.AnnData(X=X)
+    adata.obs_names = [f"cell_{i}" for i in range(n_cells)]
+    adata.var_names = [f"gene_{i}" for i in range(n_genes)]
+
+    # Add layers
+    adata.layers["spliced"] = csr_matrix(
+        np.random.rand(n_cells, n_genes), dtype=np.float32
+    )
+    adata.layers["unspliced"] = csr_matrix(
+        np.random.rand(n_cells, n_genes), dtype=np.float32
+    )
+
+    return adata
+
+
+@pytest.fixture
+def anndata_without_layers():
+    """Create an AnnData object without layers for testing (reusable fixture)"""
+    # Set random seed for reproducible tests
+    np.random.seed(42)
+
+    n_cells, n_genes = 10, 5
+
+    # Create expression matrix
+    X = csr_matrix(np.random.rand(n_cells, n_genes), dtype=np.float32)
+    adata = sc.AnnData(X=X)
+    adata.obs_names = [f"cell_{i}" for i in range(n_cells)]
+    adata.var_names = [f"gene_{i}" for i in range(n_genes)]
+
+    return adata
+
+
+@pytest.fixture
+def slaf_with_obs_columns(temp_dir):
+    """Create a SLAFArray with obs columns for unit testing."""
+    import json
+
+    import lance
+    import pyarrow as pa
+
+    # Create a temporary SLAF directory
+    slaf_dir = Path(temp_dir) / "test_obs_columns.slaf"
+    slaf_dir.mkdir()
+
+    # Create basic tables
+    expression_data = pa.table(
+        {
+            "cell_integer_id": [0, 0, 1, 1, 2, 2],
+            "gene_integer_id": [0, 1, 0, 1, 0, 1],
+            "value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        }
+    )
+    cells_data = pa.table(
+        {
+            "cell_integer_id": [0, 1, 2],
+            "cell_id": ["cell_0", "cell_1", "cell_2"],
+            "cell_type": ["T-cell", "B-cell", "T-cell"],
+            "total_counts": [3.0, 7.0, 11.0],
+        }
+    )
+    genes_data = pa.table(
+        {
+            "gene_integer_id": [0, 1],
+            "gene_id": ["gene_0", "gene_1"],
+        }
+    )
+
+    # Write Lance datasets
+    lance.write_dataset(expression_data, str(slaf_dir / "expression.lance"))
+    lance.write_dataset(cells_data, str(slaf_dir / "cells.lance"))
+    lance.write_dataset(genes_data, str(slaf_dir / "genes.lance"))
+
+    # Create config.json with obs columns
+    config = {
+        "format_version": "0.4",
+        "array_shape": [3, 2],
+        "n_cells": 3,
+        "n_genes": 2,
+        "tables": {
+            "expression": "expression.lance",
+            "cells": "cells.lance",
+            "genes": "genes.lance",
+        },
+        "obs": {
+            "available": ["cell_id", "cell_type", "total_counts"],
+            "immutable": ["cell_id", "cell_type", "total_counts"],
+            "mutable": [],
+        },
+        "optimizations": {
+            "use_integer_keys": True,
+            "optimize_storage": True,
+        },
+        "metadata": {
+            "expression_count": 6,
+            "sparsity": 0.0,
+            "density": 1.0,
+            "total_possible_elements": 6,
+        },
+    }
+
+    with open(slaf_dir / "config.json", "w") as f:
+        json.dump(config, f, indent=2)
+
+    # Return SLAFArray instance
+    return SLAFArray(str(slaf_dir), load_metadata=False)
+
+
+@pytest.fixture
+def slaf_with_var_columns(temp_dir):
+    """Create a SLAFArray with var columns for unit testing."""
+    import json
+
+    import lance
+    import pyarrow as pa
+
+    # Create a temporary SLAF directory
+    slaf_dir = Path(temp_dir) / "test_var_columns.slaf"
+    slaf_dir.mkdir()
+
+    # Create basic tables
+    expression_data = pa.table(
+        {
+            "cell_integer_id": [0, 0, 1, 1, 2, 2],
+            "gene_integer_id": [0, 1, 0, 1, 0, 1],
+            "value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        }
+    )
+    cells_data = pa.table(
+        {
+            "cell_integer_id": [0, 1, 2],
+            "cell_id": ["cell_0", "cell_1", "cell_2"],
+        }
+    )
+    genes_data = pa.table(
+        {
+            "gene_integer_id": [0, 1],
+            "gene_id": ["gene_0", "gene_1"],
+            "gene_type": ["protein_coding", "lncRNA"],
+            "highly_variable": [True, False],
+        }
+    )
+
+    # Write Lance datasets
+    lance.write_dataset(expression_data, str(slaf_dir / "expression.lance"))
+    lance.write_dataset(cells_data, str(slaf_dir / "cells.lance"))
+    lance.write_dataset(genes_data, str(slaf_dir / "genes.lance"))
+
+    # Create config.json with var columns
+    config = {
+        "format_version": "0.4",
+        "array_shape": [3, 2],
+        "n_cells": 3,
+        "n_genes": 2,
+        "tables": {
+            "expression": "expression.lance",
+            "cells": "cells.lance",
+            "genes": "genes.lance",
+        },
+        "var": {
+            "available": ["gene_id", "gene_type", "highly_variable"],
+            "immutable": ["gene_id", "gene_type", "highly_variable"],
+            "mutable": [],
+        },
+        "optimizations": {
+            "use_integer_keys": True,
+            "optimize_storage": True,
+        },
+        "metadata": {
+            "expression_count": 6,
+            "sparsity": 0.0,
+            "density": 1.0,
+            "total_possible_elements": 6,
+        },
+    }
+
+    with open(slaf_dir / "config.json", "w") as f:
+        json.dump(config, f, indent=2)
+
+    # Return SLAFArray instance
+    return SLAFArray(str(slaf_dir), load_metadata=False)

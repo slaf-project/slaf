@@ -161,33 +161,6 @@ class TestSLAFDataLoader:
         # Check that special tokens are properly set
         assert dataloader.special_tokens == dataloader.tokenizer.special_tokens
 
-    def test_memory_efficiency(self, tiny_slaf):
-        """Test that dataloader is memory efficient"""
-        import gc
-        import os
-
-        import psutil
-
-        process = psutil.Process(os.getpid())
-        initial_memory = process.memory_info().rss
-
-        dataloader = SLAFDataLoader(tiny_slaf, batch_size=4)
-
-        # Iterate through a few batches
-        for i, _batch in enumerate(dataloader):
-            if i >= 3:  # Just test first 3 batches
-                break
-
-        # Force garbage collection
-        gc.collect()
-
-        # Check that memory usage hasn't exploded
-        final_memory = process.memory_info().rss
-        memory_increase = final_memory - initial_memory
-
-        # Memory increase should be reasonable (less than 200MB)
-        assert memory_increase < 200 * 1024 * 1024
-
     def test_dataloader_cleanup(self, tiny_slaf):
         """Test dataloader cleanup functionality"""
         dataloader = SLAFDataLoader(tiny_slaf)

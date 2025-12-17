@@ -137,7 +137,7 @@ class TestLazyPreprocessingCorrectness:
 
         # Test that the lazy implementation can identify cells that would be filtered
         # by checking the cell metadata directly using the obs DataFrame
-        obs_df = lazy_adata.obs
+        obs_df = lazy_adata.obs._get_dataframe()  # Get DataFrame from view
         if "total_counts" in obs_df.columns and "n_genes_by_counts" in obs_df.columns:
             # Filter cells based on metadata columns
             cell_qc = obs_df[

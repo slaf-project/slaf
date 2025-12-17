@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.14.6"
+__generated_with = "0.17.0"
 app = marimo.App(width="medium")
 
 
@@ -9,11 +9,13 @@ def _():
     import time
 
     import marimo as mo
+    import numpy as np
+    from scipy.sparse import csr_matrix
 
     from slaf.integrations import scanpy as slaf_scanpy
     from slaf.integrations.anndata import read_slaf
 
-    return mo, read_slaf, slaf_scanpy, time
+    return csr_matrix, mo, np, read_slaf, slaf_scanpy, time
 
 
 @app.cell
@@ -94,7 +96,6 @@ def _(adata):
     print("   - No data is loaded until you call .compute()")
     print("   - Operations are composed efficiently")
     print("   - Memory usage stays low")
-
     return
 
 
@@ -271,7 +272,6 @@ def _(adata_fresh, slaf_scanpy):
     print(
         f"   Transformations: {list(slice_multi._transformations.keys()) if hasattr(slice_multi, '_transformations') else 'None'}"
     )
-
     return adata_processed, slice_multi, slice_transformed
 
 
@@ -334,7 +334,7 @@ def _(read_slaf):
 
 
 @app.cell
-def _(adata_preserve, slaf_scanpy):
+def _(adata_preserve, np, slaf_scanpy):
     # Demonstrate transformation preservation
     print("🔄 Transformation Preservation")
     print("=" * 35)
@@ -377,8 +377,6 @@ def _(adata_preserve, slaf_scanpy):
     )
 
     # Boolean mask slicing
-    import numpy as np
-
     cell_mask = np.zeros(adata_transformed.shape[0], dtype=bool)
     cell_mask[50:250] = True
     gene_mask = np.zeros(adata_transformed.shape[1], dtype=bool)
@@ -395,7 +393,6 @@ def _(adata_preserve, slaf_scanpy):
     print(
         f"   Transformations preserved: {list(step_slice._transformations.keys()) if hasattr(step_slice, '_transformations') else 'None'}"
     )
-
     return single_step_slice, slice_after, transformed_slice
 
 
@@ -434,7 +431,6 @@ def _(single_step_slice, slice_after, time, transformed_slice):
         print(f"   Shape: {result3.shape}")
 
     verify_transformation_preservation()
-
     return
 
 
@@ -554,7 +550,6 @@ def _(read_slaf):
         f"\nKey insight: Lazy loading uses {lazy_memory:.1f} MB vs eager loading {end_memory:.1f} MB"
     )
     print(f"Memory savings: {((end_memory - lazy_memory) / end_memory * 100):.1f}%")
-
     return
 
 
@@ -606,7 +601,6 @@ def _(read_slaf, slaf_scanpy):
     high_counts_mask = adata_advanced.obs["total_counts"] > 2000
     high_counts_cells = adata_advanced[high_counts_mask, :]
     print(f"   High count cells: {high_counts_cells.shape}")
-
     return
 
 
@@ -716,7 +710,291 @@ def _():
     print("   ✅ Check object types: type(adata)")
     print("   ✅ Check transformations: adata._transformations")
     print("   ✅ Use .info() for dataset overview")
+    return
 
+
+@app.cell
+def _(mo):
+    mo.md(
+        """
+    ## 11. Working with Layers
+
+    SLAF supports AnnData layers (alternative expression matrices) stored in the `layers.lance` table.
+
+    Let's create a synthetic dataset with layers, convert it to SLAF, and demonstrate layer operations:
+    """
+    )
+    return
+
+
+@app.cell
+def _(csr_matrix, np):
+    # Create synthetic AnnData with layers, obsm, varm, and uns for demonstration
+    import scanpy as sc
+
+    # Create a small synthetic dataset
+    n_cells, n_genes = 200, 500
+    np.random.seed(42)
+
+    # Main expression matrix
+    X = csr_matrix(np.random.lognormal(0, 1, (n_cells, n_genes)).astype(np.float32))
+
+    # Create AnnData object
+    adata_synthetic = sc.AnnData(X=X)
+
+    # Add obs metadata
+    adata_synthetic.obs["cell_type"] = np.random.choice(
+        ["T_cell", "B_cell", "NK_cell"], n_cells
+    )
+    adata_synthetic.obs["total_counts"] = X.sum(axis=1).A1
+
+    # Add var metadata
+    adata_synthetic.var["highly_variable"] = np.random.choice(
+        [True, False], n_genes, p=[0.2, 0.8]
+    )
+
+    # Add layers (alternative expression matrices)
+    adata_synthetic.layers["spliced"] = csr_matrix(
+        np.random.lognormal(0, 1, (n_cells, n_genes)).astype(np.float32)
+    )
+    adata_synthetic.layers["unspliced"] = csr_matrix(
+        np.random.lognormal(0, 1, (n_cells, n_genes)).astype(np.float32)
+    )
+
+    # Add obsm (cell embeddings)
+    adata_synthetic.obsm["X_umap"] = np.random.randn(n_cells, 2).astype(np.float32)
+    adata_synthetic.obsm["X_pca"] = np.random.randn(n_cells, 50).astype(np.float32)
+
+    # Add varm (gene embeddings)
+    adata_synthetic.varm["PCs"] = np.random.randn(n_genes, 50).astype(np.float32)
+
+    # Add uns (unstructured metadata)
+    adata_synthetic.uns["neighbors"] = {
+        "params": {"n_neighbors": 15, "metric": "euclidean"}
+    }
+    adata_synthetic.uns["pca"] = {
+        "variance_ratio": np.random.rand(50).tolist(),
+        "variance": np.random.rand(50).tolist(),
+    }
+
+    print(
+        f"✅ Created synthetic AnnData: {adata_synthetic.shape[0]} cells × {adata_synthetic.shape[1]} genes"
+    )
+    print(f"   Layers: {list(adata_synthetic.layers.keys())}")
+    print(f"   Obsm: {list(adata_synthetic.obsm.keys())}")
+    print(f"   Varm: {list(adata_synthetic.varm.keys())}")
+    print(f"   Uns: {list(adata_synthetic.uns.keys())}")
+    return (adata_synthetic,)
+
+
+@app.cell
+def _(adata_synthetic):
+    # Convert synthetic AnnData to SLAF format
+    import os
+    import tempfile
+
+    from slaf.data.converter import SLAFConverter
+
+    # Create temporary directory for SLAF dataset
+    temp_dir = tempfile.mkdtemp()
+    slaf_path = os.path.join(temp_dir, "synthetic_with_metadata.slaf")
+
+    # Convert to SLAF (use chunked=False for small in-memory AnnData objects)
+    converter = SLAFConverter(chunked=False)
+    converter.convert_anndata(adata_synthetic, slaf_path)
+    print(f"✅ Converted synthetic dataset to SLAF: {slaf_path}")
+    return (slaf_path,)
+
+
+@app.cell
+def _(mo):
+    mo.md(
+        """
+    ## 12. Working with Metadata Views
+
+    SLAF provides lazy views for all AnnData metadata objects (obs, var, obsm, varm, uns):
+    """
+    )
+    return
+
+
+@app.cell
+def _(read_slaf, slaf_path):
+    # Load the converted SLAF dataset with all metadata
+    adata_metadata = read_slaf(slaf_path)
+    print(
+        f"✅ Loaded SLAF dataset: {adata_metadata.shape[0]} cells × {adata_metadata.shape[1]} genes"
+    )
+    return (adata_metadata,)
+
+
+@app.cell
+def _(adata_metadata, csr_matrix):
+    def demonstrate_layers():
+        print("📚 Working with Layers")
+        print("=" * 30)
+
+        print("1. Check available layers:")
+        available_layers = list(adata_metadata.layers.keys())
+        print(f"   Available layers: {available_layers}")
+        print(f"   Number of layers: {len(available_layers)}")
+
+        print("\n2. Access a layer:")
+        if available_layers:
+            layer_name = available_layers[0]
+            layer_matrix = adata_metadata.layers[layer_name]
+            print(f"   Layer '{layer_name}' type: {type(layer_matrix)}")
+            print(f"   Layer shape: {layer_matrix.shape}")
+            print(f"   Layer is lazy: {hasattr(layer_matrix, 'compute')}")
+
+        print("\n3. Compute a layer (lazy evaluation):")
+        if available_layers:
+            layer_name = available_layers[0]
+            layer_matrix = adata_metadata.layers[layer_name]
+            layer_data = layer_matrix.compute()
+            print(
+                f"   Computed '{layer_name}': {type(layer_data)}, shape {layer_data.shape}"
+            )
+
+        print("\n4. Create a new layer:")
+        # Create a simple normalized layer as example
+        normalized = adata_metadata.X.compute()
+        # Simple normalization example
+        normalized = normalized / normalized.sum(axis=1) * 10000
+        adata_metadata.layers["normalized"] = csr_matrix(normalized)
+        print("   Created 'normalized' layer")
+        print(f"   Updated layers: {list(adata_metadata.layers.keys())}")
+
+        print("\n5. Layer operations:")
+        print("   - Dictionary-like interface: layers['name'], 'name' in layers")
+        print("   - Lazy evaluation: layers['name'].compute()")
+        print("   - Immutability: Converted layers are protected from deletion")
+        print("   - Wide format: Stored in layers.lance table (one column per layer)")
+
+    demonstrate_layers()
+    return
+
+
+@app.cell
+def _(adata_metadata):
+    def demonstrate_metadata_views():
+        print("📊 Working with Metadata Views")
+        print("=" * 35)
+
+        print("1. Obs (cell metadata) - DataFrame-like interface:")
+        print(f"   Available columns: {list(adata_metadata.obs.columns)[:5]}...")
+        print(f"   Number of columns: {len(adata_metadata.obs.columns)}")
+        print("   - DataFrame-like: obs.columns, obs.head(), obs['col']")
+        print("   - Dict-like: 'col' in obs, len(obs)")
+        print("   - Mutations: obs['new_col'] = values")
+
+        print("\n2. Var (gene metadata) - DataFrame-like interface:")
+        print(f"   Available columns: {list(adata_metadata.var.columns)[:5]}...")
+        print(f"   Number of columns: {len(adata_metadata.var.columns)}")
+        print("   - Same interface as obs")
+        print("   - Mutations: var['new_col'] = values")
+
+        print("\n3. Obsm (cell embeddings) - Dictionary-like interface:")
+        obsm_keys = list(adata_metadata.obsm.keys())
+        if obsm_keys:
+            print(f"   Available keys: {obsm_keys}")
+            for key in obsm_keys[:2]:  # Show first 2
+                arr = adata_metadata.obsm[key]
+                print(f"   - {key}: shape {arr.shape}, type {type(arr)}")
+        else:
+            print("   No obsm keys found (can add: adata.obsm['X_umap'] = coords)")
+
+        print("\n4. Varm (gene embeddings) - Dictionary-like interface:")
+        varm_keys = list(adata_metadata.varm.keys())
+        if varm_keys:
+            print(f"   Available keys: {varm_keys}")
+            for key in varm_keys[:2]:  # Show first 2
+                arr = adata_metadata.varm[key]
+                print(f"   - {key}: shape {arr.shape}, type {type(arr)}")
+        else:
+            print("   No varm keys found (can add: adata.varm['PCs'] = loadings)")
+
+        print("\n5. Uns (unstructured metadata) - Dictionary-like interface:")
+        uns_keys = list(adata_metadata.uns.keys())
+        if uns_keys:
+            print(f"   Available keys: {uns_keys}")
+            print(f"   Example: {list(uns_keys)[:3]}")
+        else:
+            print("   No uns keys found (can add: adata.uns['analysis'] = {...})")
+
+        print("\n6. Key features:")
+        print("   - Lazy evaluation: Metadata accessed on-demand")
+        print("   - Immutability: Converted columns/keys are protected")
+        print("   - Subsetting: Views respect cell/gene selectors")
+        print("   - Persistence: Changes are saved to Lance tables")
+
+    demonstrate_metadata_views()
+    return
+
+
+@app.cell
+def _(adata_metadata, np):
+    def demonstrate_metadata_mutations():
+        print("✏️ Metadata Mutations Example")
+        print("=" * 35)
+
+        print("1. Create obs column:")
+        cluster_labels = np.random.choice(["A", "B", "C"], adata_metadata.n_obs)
+        adata_metadata.obs["clusters"] = cluster_labels
+        print(
+            f"   ✅ Created 'clusters' column with {len(np.unique(cluster_labels))} unique values"
+        )
+        print("   Column is immediately saved to cells.lance")
+
+        print("\n2. Create var column:")
+        hvg_flags = np.random.choice([True, False], adata_metadata.n_vars, p=[0.3, 0.7])
+        adata_metadata.var["is_hvg"] = hvg_flags
+        print(
+            f"   ✅ Created 'is_hvg' column: {hvg_flags.sum()} genes marked as highly variable"
+        )
+        print("   Column is immediately saved to genes.lance")
+
+        print("\n3. Store obsm (cell embeddings):")
+        # Create a new embedding (different from existing X_umap)
+        new_embedding = np.random.randn(adata_metadata.n_obs, 3).astype(np.float32)
+        adata_metadata.obsm["X_custom"] = new_embedding
+        print(f"   ✅ Created 'X_custom' embedding: shape {new_embedding.shape}")
+        print("   Stored as FixedSizeListArray in cells.lance")
+        print(f"   Available obsm keys: {list(adata_metadata.obsm.keys())}")
+
+        print("\n4. Store varm (gene embeddings):")
+        # Create a new gene embedding (different from existing PCs)
+        new_loadings = np.random.randn(adata_metadata.n_vars, 20).astype(np.float32)
+        adata_metadata.varm["custom_loadings"] = new_loadings
+        print(f"   ✅ Created 'custom_loadings' embedding: shape {new_loadings.shape}")
+        print("   Stored as FixedSizeListArray in genes.lance")
+        print(f"   Available varm keys: {list(adata_metadata.varm.keys())}")
+
+        print("\n5. Store uns (unstructured metadata):")
+        adata_metadata.uns["custom_analysis"] = {
+            "params": {"n_neighbors": 15, "resolution": 0.5}
+        }
+        print("   ✅ Created 'custom_analysis' key in uns")
+        print("   Stored in uns.json file")
+        print(f"   Available uns keys: {list(adata_metadata.uns.keys())}")
+
+        print("\n6. Delete mutable columns/keys:")
+        # Delete the columns/keys we just created (they're mutable)
+        del adata_metadata.obs["clusters"]
+        print("   ✅ Deleted 'clusters' column (mutable)")
+        del adata_metadata.var["is_hvg"]
+        print("   ✅ Deleted 'is_hvg' column (mutable)")
+        del adata_metadata.obsm["X_custom"]
+        print("   ✅ Deleted 'X_custom' embedding (mutable)")
+        del adata_metadata.varm["custom_loadings"]
+        print("   ✅ Deleted 'custom_loadings' embedding (mutable)")
+        del adata_metadata.uns["custom_analysis"]
+        print("   ✅ Deleted 'custom_analysis' key from uns")
+        print(
+            "\n   Note: Immutable columns/keys (converted from h5ad) cannot be deleted"
+        )
+
+    demonstrate_metadata_mutations()
     return
 
 
@@ -735,6 +1013,8 @@ def _(mo):
     5. **Performance**: Build complex pipelines instantly, compute only when needed
     6. **Memory Efficiency**: Significant memory savings compared to eager loading
     7. **Best Practices**: Guidelines for optimal lazy evaluation usage
+    8. **Layers**: Alternative expression matrices stored in layers.lance (wide format)
+    9. **Metadata Views**: Full support for obs, var, obsm, varm, and uns with lazy evaluation
 
     **Next Steps:**
     - **03-ml-training-pipeline.py**: Complete ML training workflows with tokenizers and dataloaders

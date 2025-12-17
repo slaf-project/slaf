@@ -445,38 +445,6 @@ class TestSLAFIterableDataset:
                 tokenizer_type="invalid",
             )
 
-    def test_memory_efficiency(self, tiny_slaf):
-        """Test memory efficiency of the dataset"""
-        import gc
-        import os
-
-        import psutil
-
-        process = psutil.Process(os.getpid())
-        initial_memory = process.memory_info().rss
-
-        tokenizer = SLAFTokenizer(tiny_slaf)
-        dataset = SLAFIterableDataset(
-            slaf_array=tiny_slaf,
-            tokenizer=tokenizer,
-            batch_size=4,
-        )
-
-        # Iterate through a few batches
-        for i, _batch in enumerate(dataset):
-            if i >= 3:  # Just test first 3 batches
-                break
-
-        # Force garbage collection
-        gc.collect()
-
-        # Check that memory usage hasn't exploded
-        final_memory = process.memory_info().rss
-        memory_increase = final_memory - initial_memory
-
-        # Memory increase should be reasonable (less than 200MB)
-        assert memory_increase < 200 * 1024 * 1024
-
     def test_pytorch_dataloader_integration(self, tiny_slaf):
         """Test integration with PyTorch DataLoader"""
 

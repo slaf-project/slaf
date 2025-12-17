@@ -233,6 +233,60 @@ expression_matrix = t_cells.X.compute()
 print(f"Computed expression: {expression_matrix.shape}")
 ```
 
+## Working with Metadata and Layers
+
+SLAF provides lazy views for all AnnData metadata objects, allowing you to read, modify, and create metadata efficiently:
+
+```python
+from slaf.integrations.anndata import read_slaf
+
+# Load as lazy AnnData
+adata = read_slaf(slaf_path)
+
+# Access and modify obs columns (cell metadata)
+print("Available obs columns:", list(adata.obs.columns))
+adata.obs["new_cluster"] = cluster_labels  # Create new column
+print(f"Cluster distribution:\n{adata.obs['new_cluster'].value_counts()}")
+
+# Access and modify var columns (gene metadata)
+print("Available var columns:", list(adata.var.columns))
+adata.var["is_highly_variable"] = hvg_flags  # Create new column
+
+# Store multi-dimensional arrays (obsm - cell embeddings)
+import numpy as np
+umap_coords = compute_umap(adata)  # Your function returning (n_cells, 2) array
+adata.obsm["X_umap"] = umap_coords
+print(f"UMAP shape: {adata.obsm['X_umap'].shape}")
+
+# Store gene-level embeddings (varm)
+pca_loadings = compute_pca_loadings(adata)  # Your function returning (n_genes, 50) array
+adata.varm["PCs"] = pca_loadings
+print(f"PCA loadings shape: {adata.varm['PCs'].shape}")
+
+# Store unstructured metadata (uns)
+adata.uns["neighbors"] = {"params": {"n_neighbors": 15, "metric": "euclidean"}}
+adata.uns["pca"] = {"variance_ratio": variance_ratios.tolist()}
+print("Unstructured metadata keys:", list(adata.uns.keys()))
+
+# Access layers (alternative expression matrices)
+if "spliced" in adata.layers:
+    spliced_matrix = adata.layers["spliced"].compute()
+    print(f"Spliced layer shape: {spliced_matrix.shape}")
+
+# Create new layers
+normalized = adata.X.copy()
+# ... apply normalization ...
+adata.layers["normalized"] = normalized
+print("Available layers:", list(adata.layers.keys()))
+```
+
+**Key Features:**
+
+- **DataFrame-like access**: `obs` and `var` behave like pandas DataFrames
+- **Dictionary-like interface**: `layers`, `obsm`, `varm`, and `uns` use dict-like syntax
+- **Lazy evaluation**: Metadata is accessed on-demand
+- **Immutability protection**: Columns/keys converted from h5ad are protected from accidental deletion
+
 ## Lazy Scanpy Preprocessing
 
 SLAF provides lazy versions of scanpy preprocessing functions

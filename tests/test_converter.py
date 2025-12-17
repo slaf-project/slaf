@@ -36,7 +36,7 @@ class TestSLAFConverter:
         # Check config version
         with open(output_path / "config.json") as f:
             config = json.load(f)
-        assert config["format_version"] == "0.3"
+        assert config["format_version"] == "0.4"
 
     def test_expression_data_consistency(self, small_sample_adata, tmp_path):
         """Test that expression data is consistent in COO format"""
@@ -252,7 +252,7 @@ class TestSLAFConverter:
             config = json.load(f)
 
         # Check format version
-        assert config["format_version"] == "0.3"
+        assert config["format_version"] == "0.4"
 
         # Check that metadata section exists
         assert "metadata" in config
@@ -2113,3 +2113,201 @@ class TestSLAFConverter:
         # Verify conversion completed successfully
         assert output_path.exists()
         assert (output_path / "expression.lance").exists()
+
+    # Layer conversion tests
+    def test_convert_h5ad_chunked_with_layers(self, tmp_path, anndata_with_layers):
+        """Test chunked conversion from h5ad with layers"""
+        # Use shared fixture - 10 cells is sufficient for chunk_size=5 (creates 2 chunks)
+        # Save fixture to h5ad for chunked conversion
+        h5ad_path = tmp_path / "test.h5ad"
+        anndata_with_layers.write(h5ad_path)
+
+        # Convert with chunked processing
+        output_path = tmp_path / "test_chunked_layers.slaf"
+        converter = SLAFConverter(
+            chunked=True,
+            chunk_size=5,  # Small chunk size for testing
+            use_optimized_dtypes=False,
+            compact_after_write=False,
+        )
+        converter.convert(str(h5ad_path), str(output_path))
+
+        # Verify output structure
+        assert (output_path / "expression.lance").exists()
+        assert (output_path / "layers.lance").exists()
+        assert (output_path / "cells.lance").exists()
+        assert (output_path / "genes.lance").exists()
+        assert (output_path / "config.json").exists()
+
+        # Verify config has layers metadata
+        with open(output_path / "config.json") as f:
+            config = json.load(f)
+
+        assert config["format_version"] == "0.4"
+        assert "layers" in config
+        assert set(config["layers"]["available"]) == {"spliced", "unspliced"}
+        assert "layers" in config["tables"]
+
+        # Verify layers table schema (wide format)
+        layers_dataset = lance.dataset(output_path / "layers.lance")
+        schema = layers_dataset.schema
+        column_names = [field.name for field in schema]
+        assert "cell_integer_id" in column_names
+        assert "gene_integer_id" in column_names
+        assert "spliced" in column_names
+        assert "unspliced" in column_names
+
+        # Verify shape matches fixture
+        assert config["array_shape"] == [
+            anndata_with_layers.n_obs,
+            anndata_with_layers.n_vars,
+        ]
+
+    def test_convert_multiple_files_with_consistent_layers(
+        self, tmp_path, anndata_with_layers
+    ):
+        """Test multi-file conversion with consistent layers across files"""
+        # Use shared fixture - create multiple files with same structure but different cell names
+        # to simulate multiple files with consistent layers
+        files = []
+        n_cells_per_file = anndata_with_layers.n_obs
+        n_genes = anndata_with_layers.n_vars
+
+        for i in range(3):
+            # Create a copy of the fixture with unique cell names for each file
+            adata = anndata_with_layers.copy()
+            adata.obs_names = [f"cell_{i}_{j}" for j in range(n_cells_per_file)]
+            # Keep same gene names across files (as expected for multi-file conversion)
+
+            h5ad_path = tmp_path / f"file_{i}.h5ad"
+            adata.write(h5ad_path)
+            files.append(str(h5ad_path))
+
+        # Convert multiple files
+        output_path = tmp_path / "test_multifile_layers.slaf"
+        converter = SLAFConverter(
+            chunked=True,
+            chunk_size=5,
+            use_optimized_dtypes=False,
+            compact_after_write=False,
+        )
+        converter.convert(files, str(output_path))
+
+        # Verify output structure
+        assert (output_path / "expression.lance").exists()
+        assert (output_path / "layers.lance").exists()
+        assert (output_path / "config.json").exists()
+
+        # Verify config has layers metadata
+        with open(output_path / "config.json") as f:
+            config = json.load(f)
+
+        assert config["format_version"] == "0.4"
+        assert "layers" in config
+        assert set(config["layers"]["available"]) == {"spliced", "unspliced"}
+        assert "layers" in config["tables"]
+
+        # Verify layers table has correct number of rows (all cell-gene pairs)
+        layers_dataset = lance.dataset(output_path / "layers.lance")
+        total_cells = n_cells_per_file * 3
+        total_rows = total_cells * n_genes
+        assert len(layers_dataset.to_table()) == total_rows
+
+        # Verify cell_integer_id range is correct (0 to total_cells-1)
+        layers_df = layers_dataset.to_table().to_pandas()
+        assert layers_df["cell_integer_id"].min() == 0
+        assert layers_df["cell_integer_id"].max() == total_cells - 1
+
+    def test_convert_multiple_files_with_inconsistent_layers(
+        self, tmp_path, anndata_with_layers, anndata_without_layers
+    ):
+        """Test multi-file conversion with inconsistent layers (should warn and skip)"""
+        # Use shared fixtures - create files with inconsistent layers
+        files = []
+        n_cells_per_file = anndata_with_layers.n_obs
+        _n_genes = anndata_with_layers.n_vars
+
+        for i in range(3):
+            if i == 0:
+                # File 0: has both layers (use fixture)
+                adata = anndata_with_layers.copy()
+                adata.obs_names = [f"cell_{i}_{j}" for j in range(n_cells_per_file)]
+            elif i == 1:
+                # File 1: has only spliced layer (modify fixture)
+                adata = anndata_with_layers.copy()
+                adata.obs_names = [f"cell_{i}_{j}" for j in range(n_cells_per_file)]
+                # Remove unspliced layer
+                del adata.layers["unspliced"]
+            else:
+                # File 2: no layers (use fixture without layers)
+                adata = anndata_without_layers.copy()
+                adata.obs_names = [f"cell_{i}_{j}" for j in range(n_cells_per_file)]
+
+            h5ad_path = tmp_path / f"file_{i}.h5ad"
+            adata.write(h5ad_path)
+            files.append(str(h5ad_path))
+
+        # Convert multiple files
+        output_path = tmp_path / "test_multifile_inconsistent_layers.slaf"
+        converter = SLAFConverter(
+            chunked=True,
+            chunk_size=5,
+            use_optimized_dtypes=False,
+            compact_after_write=False,
+        )
+        converter.convert(files, str(output_path))
+
+        # Verify output structure (layers.lance should NOT exist)
+        assert (output_path / "expression.lance").exists()
+        assert not (output_path / "layers.lance").exists()
+        assert (output_path / "config.json").exists()
+
+        # Verify config does NOT have layers metadata
+        with open(output_path / "config.json") as f:
+            config = json.load(f)
+
+        assert config["format_version"] == "0.4"
+        assert "layers" not in config
+        assert "layers" not in config["tables"]
+
+    def test_convert_multiple_files_without_layers(
+        self, tmp_path, anndata_without_layers
+    ):
+        """Test multi-file conversion without layers (backward compatibility)"""
+        # Use shared fixture - create multiple files with same structure but different cell names
+        files = []
+        n_cells_per_file = anndata_without_layers.n_obs
+        _n_genes = anndata_without_layers.n_vars
+
+        for i in range(3):
+            # Create a copy of the fixture with unique cell names for each file
+            adata = anndata_without_layers.copy()
+            adata.obs_names = [f"cell_{i}_{j}" for j in range(n_cells_per_file)]
+            # Keep same gene names across files (as expected for multi-file conversion)
+
+            h5ad_path = tmp_path / f"file_{i}.h5ad"
+            adata.write(h5ad_path)
+            files.append(str(h5ad_path))
+
+        # Convert multiple files
+        output_path = tmp_path / "test_multifile_no_layers.slaf"
+        converter = SLAFConverter(
+            chunked=True,
+            chunk_size=5,
+            use_optimized_dtypes=False,
+            compact_after_write=False,
+        )
+        converter.convert(files, str(output_path))
+
+        # Verify output structure (layers.lance should NOT exist)
+        assert (output_path / "expression.lance").exists()
+        assert not (output_path / "layers.lance").exists()
+        assert (output_path / "config.json").exists()
+
+        # Verify config does NOT have layers metadata
+        with open(output_path / "config.json") as f:
+            config = json.load(f)
+
+        assert config["format_version"] == "0.4"
+        assert "layers" not in config
+        assert "layers" not in config["tables"]

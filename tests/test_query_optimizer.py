@@ -437,3 +437,66 @@ class TestPerformanceMetrics:
         summary = metrics.get_performance_summary()
         assert isinstance(summary, dict)
         assert len(summary) == 0
+
+
+class TestQueryOptimizerLayers:
+    """Test QueryOptimizer with layers table support"""
+
+    def test_build_submatrix_query_layers(self):
+        """Test build_submatrix_query for layers table (wide format)"""
+        sql_query = QueryOptimizer.build_submatrix_query(
+            cell_selector=slice(0, 2),
+            gene_selector=slice(0, 1),
+            cell_count=3,
+            gene_count=2,
+            table_name="layers",
+            layer_name="spliced",
+        )
+
+        # Verify query format (wide format: select layer column directly)
+        assert "SELECT" in sql_query
+        assert "FROM layers" in sql_query
+        assert "spliced as value" in sql_query
+        assert "cell_integer_id" in sql_query
+        assert "gene_integer_id" in sql_query
+
+        # Should not have IS NOT NULL clause (we removed it)
+        assert "IS NOT NULL" not in sql_query
+
+    def test_build_submatrix_query_layers_requires_layer_name(self):
+        """Test that layer_name is required for layers table"""
+        with pytest.raises(ValueError, match="layer_name must be provided"):
+            QueryOptimizer.build_submatrix_query(table_name="layers", layer_name=None)
+
+    def test_build_submatrix_query_expression_table(self):
+        """Test build_submatrix_query for expression table (backward compatibility)"""
+        sql_query = QueryOptimizer.build_submatrix_query(
+            cell_selector=slice(0, 2),
+            gene_selector=slice(0, 1),
+            cell_count=3,
+            gene_count=2,
+            table_name="expression",
+            layer_name=None,
+        )
+
+        # Verify query format
+        assert "SELECT" in sql_query
+        assert "FROM expression" in sql_query
+        assert "SELECT *" in sql_query  # Expression table selects all columns
+
+    def test_build_submatrix_query_layers_with_selectors(self):
+        """Test build_submatrix_query for layers with cell/gene selectors"""
+        sql_query = QueryOptimizer.build_submatrix_query(
+            cell_selector=[0, 1],
+            gene_selector=[0],
+            cell_count=3,
+            gene_count=2,
+            table_name="layers",
+            layer_name="unspliced",
+        )
+
+        # Verify query includes selectors
+        assert "FROM layers" in sql_query
+        assert "unspliced as value" in sql_query
+        assert "cell_integer_id" in sql_query
+        assert "gene_integer_id" in sql_query
