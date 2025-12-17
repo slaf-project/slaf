@@ -15,10 +15,14 @@ import tempfile
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from slaf.core.slaf import SLAFArray
 from slaf.data.converter import SLAFConverter
 from slaf.integrations.anndata import LazyAnnData
+
+# Mark all tests in this file as using SLAFArray instances
+pytestmark = pytest.mark.slaf_array
 
 
 def test_create_new_obs_column(anndata_without_layers):
@@ -599,39 +603,39 @@ def test_create_multiple_obsm_embeddings(anndata_without_layers):
         assert slaf2.config.get("obsm", {}).get("dimensions", {}).get("X_tsne") == 2
 
 
-def test_create_new_uns_key(anndata_without_layers):
+def test_create_new_uns_key(anndata_without_layers, temp_dir):
     """Test creating a new uns key (eager write - immediate)"""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Convert AnnData to SLAF
-        converter = SLAFConverter(
-            use_optimized_dtypes=False,
-            compact_after_write=False,
-            chunked=False,
-        )
-        converter.convert_anndata(anndata_without_layers, tmpdir)
+    tmpdir = temp_dir
+    # Convert AnnData to SLAF
+    converter = SLAFConverter(
+        use_optimized_dtypes=False,
+        compact_after_write=False,
+        chunked=False,
+    )
+    converter.convert_anndata(anndata_without_layers, tmpdir)
 
-        # Load SLAF dataset
-        slaf = SLAFArray(tmpdir)
-        adata = LazyAnnData(slaf)
+    # Load SLAF dataset
+    slaf = SLAFArray(tmpdir)
+    adata = LazyAnnData(slaf)
 
-        # Create a new uns key
-        adata.uns["neighbors"] = {"params": {"n_neighbors": 15, "metric": "euclidean"}}
+    # Create a new uns key
+    adata.uns["neighbors"] = {"params": {"n_neighbors": 15, "metric": "euclidean"}}
 
-        # Key should be available immediately (eager write)
-        assert "neighbors" in adata.uns
-        assert len(adata.uns) >= 1
+    # Key should be available immediately (eager write)
+    assert "neighbors" in adata.uns
+    assert len(adata.uns) >= 1
 
-        # Verify data
-        retrieved = adata.uns["neighbors"]
-        assert retrieved == {"params": {"n_neighbors": 15, "metric": "euclidean"}}
+    # Verify data
+    retrieved = adata.uns["neighbors"]
+    assert retrieved == {"params": {"n_neighbors": 15, "metric": "euclidean"}}
 
-        # Reload dataset and verify key persists
-        slaf2 = SLAFArray(tmpdir)
-        adata2 = LazyAnnData(slaf2)
+    # Reload dataset and verify key persists
+    slaf2 = SLAFArray(tmpdir)
+    adata2 = LazyAnnData(slaf2)
 
-        assert "neighbors" in adata2.uns
-        retrieved2 = adata2.uns["neighbors"]
-        assert retrieved2 == {"params": {"n_neighbors": 15, "metric": "euclidean"}}
+    assert "neighbors" in adata2.uns
+    retrieved2 = adata2.uns["neighbors"]
+    assert retrieved2 == {"params": {"n_neighbors": 15, "metric": "euclidean"}}
 
 
 def test_update_uns_key(anndata_without_layers):
@@ -666,74 +670,74 @@ def test_update_uns_key(anndata_without_layers):
         assert retrieved2 == {"params": {"n_neighbors": 20, "metric": "cosine"}}
 
 
-def test_delete_uns_key(anndata_without_layers):
+def test_delete_uns_key(anndata_without_layers, temp_dir):
     """Test deleting an uns key"""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Convert AnnData to SLAF
-        converter = SLAFConverter(
-            use_optimized_dtypes=False,
-            compact_after_write=False,
-            chunked=False,
-        )
-        converter.convert_anndata(anndata_without_layers, tmpdir)
+    tmpdir = temp_dir
+    # Convert AnnData to SLAF
+    converter = SLAFConverter(
+        use_optimized_dtypes=False,
+        compact_after_write=False,
+        chunked=False,
+    )
+    converter.convert_anndata(anndata_without_layers, tmpdir)
 
-        # Load SLAF dataset
-        slaf = SLAFArray(tmpdir)
-        adata = LazyAnnData(slaf)
+    # Load SLAF dataset
+    slaf = SLAFArray(tmpdir)
+    adata = LazyAnnData(slaf)
 
-        # Create key
-        adata.uns["temp_key"] = {"value": 1}
-        assert "temp_key" in adata.uns
+    # Create key
+    adata.uns["temp_key"] = {"value": 1}
+    assert "temp_key" in adata.uns
 
-        # Delete key
-        del adata.uns["temp_key"]
-        assert "temp_key" not in adata.uns
+    # Delete key
+    del adata.uns["temp_key"]
+    assert "temp_key" not in adata.uns
 
-        # Reload and verify deletion
-        slaf2 = SLAFArray(tmpdir)
-        adata2 = LazyAnnData(slaf2)
-        assert "temp_key" not in adata2.uns
+    # Reload and verify deletion
+    slaf2 = SLAFArray(tmpdir)
+    adata2 = LazyAnnData(slaf2)
+    assert "temp_key" not in adata2.uns
 
 
-def test_uns_json_serialization(anndata_without_layers):
+def test_uns_json_serialization(anndata_without_layers, temp_dir):
     """Test that uns properly serializes numpy arrays and pandas objects"""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Convert AnnData to SLAF
-        converter = SLAFConverter(
-            use_optimized_dtypes=False,
-            compact_after_write=False,
-            chunked=False,
-        )
-        converter.convert_anndata(anndata_without_layers, tmpdir)
+    tmpdir = temp_dir
+    # Convert AnnData to SLAF
+    converter = SLAFConverter(
+        use_optimized_dtypes=False,
+        compact_after_write=False,
+        chunked=False,
+    )
+    converter.convert_anndata(anndata_without_layers, tmpdir)
 
-        # Load SLAF dataset
-        slaf = SLAFArray(tmpdir)
-        adata = LazyAnnData(slaf)
+    # Load SLAF dataset
+    slaf = SLAFArray(tmpdir)
+    adata = LazyAnnData(slaf)
 
-        # Store various types that need serialization
-        adata.uns["pca"] = {
-            "variance_ratio": np.array([0.1, 0.05, 0.03, 0.02]),
-            "variance": np.array([100.0, 50.0, 30.0, 20.0]),
-            "n_components": np.int32(50),
-        }
+    # Store various types that need serialization
+    adata.uns["pca"] = {
+        "variance_ratio": np.array([0.1, 0.05, 0.03, 0.02]),
+        "variance": np.array([100.0, 50.0, 30.0, 20.0]),
+        "n_components": np.int32(50),
+    }
 
-        import pandas as pd
+    import pandas as pd
 
-        adata.uns["series_data"] = pd.Series([1, 2, 3, 4, 5])
+    adata.uns["series_data"] = pd.Series([1, 2, 3, 4, 5])
 
-        # Reload and verify serialization
-        slaf2 = SLAFArray(tmpdir)
-        adata2 = LazyAnnData(slaf2)
+    # Reload and verify serialization
+    slaf2 = SLAFArray(tmpdir)
+    adata2 = LazyAnnData(slaf2)
 
-        pca_data = adata2.uns["pca"]
-        assert isinstance(pca_data["variance_ratio"], list)
-        assert pca_data["variance_ratio"] == [0.1, 0.05, 0.03, 0.02]
-        assert isinstance(pca_data["n_components"], int)
-        assert pca_data["n_components"] == 50
+    pca_data = adata2.uns["pca"]
+    assert isinstance(pca_data["variance_ratio"], list)
+    assert pca_data["variance_ratio"] == [0.1, 0.05, 0.03, 0.02]
+    assert isinstance(pca_data["n_components"], int)
+    assert pca_data["n_components"] == 50
 
-        series_data = adata2.uns["series_data"]
-        assert isinstance(series_data, list)
-        assert series_data == [1, 2, 3, 4, 5]
+    series_data = adata2.uns["series_data"]
+    assert isinstance(series_data, list)
+    assert series_data == [1, 2, 3, 4, 5]
 
 
 def test_create_multiple_uns_keys(anndata_without_layers):
@@ -771,47 +775,47 @@ def test_create_multiple_uns_keys(anndata_without_layers):
         assert len(adata2.uns) == 3
 
 
-def test_uns_nested_structure(anndata_without_layers):
+def test_uns_nested_structure(anndata_without_layers, temp_dir):
     """Test storing and retrieving nested structures in uns"""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Convert AnnData to SLAF
-        converter = SLAFConverter(
-            use_optimized_dtypes=False,
-            compact_after_write=False,
-            chunked=False,
-        )
-        converter.convert_anndata(anndata_without_layers, tmpdir)
+    tmpdir = temp_dir
+    # Convert AnnData to SLAF
+    converter = SLAFConverter(
+        use_optimized_dtypes=False,
+        compact_after_write=False,
+        chunked=False,
+    )
+    converter.convert_anndata(anndata_without_layers, tmpdir)
 
-        # Load SLAF dataset
-        slaf = SLAFArray(tmpdir)
-        adata = LazyAnnData(slaf)
+    # Load SLAF dataset
+    slaf = SLAFArray(tmpdir)
+    adata = LazyAnnData(slaf)
 
-        # Store deeply nested structure
-        nested = {
-            "analysis": {
-                "pca": {
-                    "variance_ratio": np.array([0.1, 0.05]),
-                    "params": {"n_components": 50},
-                },
-                "umap": {
-                    "params": {"n_neighbors": 15, "min_dist": 0.1},
-                },
+    # Store deeply nested structure
+    nested = {
+        "analysis": {
+            "pca": {
+                "variance_ratio": np.array([0.1, 0.05]),
+                "params": {"n_components": 50},
             },
-            "clustering": {
-                "leiden": {"params": {"resolution": 0.5}},
+            "umap": {
+                "params": {"n_neighbors": 15, "min_dist": 0.1},
             },
-        }
-        adata.uns["results"] = nested
+        },
+        "clustering": {
+            "leiden": {"params": {"resolution": 0.5}},
+        },
+    }
+    adata.uns["results"] = nested
 
-        # Reload and verify nested structure
-        slaf2 = SLAFArray(tmpdir)
-        adata2 = LazyAnnData(slaf2)
+    # Reload and verify nested structure
+    slaf2 = SLAFArray(tmpdir)
+    adata2 = LazyAnnData(slaf2)
 
-        results = adata2.uns["results"]
-        assert isinstance(results["analysis"]["pca"]["variance_ratio"], list)
-        assert results["analysis"]["pca"]["variance_ratio"] == [0.1, 0.05]
-        assert results["analysis"]["pca"]["params"]["n_components"] == 50
-        assert results["clustering"]["leiden"]["params"]["resolution"] == 0.5
+    results = adata2.uns["results"]
+    assert isinstance(results["analysis"]["pca"]["variance_ratio"], list)
+    assert results["analysis"]["pca"]["variance_ratio"] == [0.1, 0.05]
+    assert results["analysis"]["pca"]["params"]["n_components"] == 50
+    assert results["clustering"]["leiden"]["params"]["resolution"] == 0.5
 
 
 def test_obs_cache_invalidation_on_column_add(anndata_without_layers):

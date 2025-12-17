@@ -21,6 +21,9 @@ from slaf.integrations.anndata import LazyAnnData
 
 # Fixtures (anndata_with_layers, anndata_without_layers) are imported from conftest.py
 
+# Mark all tests in this file as using SLAFArray instances
+pytestmark = pytest.mark.slaf_array
+
 
 def test_convert_anndata_with_layers(anndata_with_layers):
     """Test converting AnnData with layers to SLAF format"""

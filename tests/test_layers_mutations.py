@@ -22,6 +22,9 @@ from slaf.integrations.anndata import LazyAnnData
 
 # Fixtures (anndata_with_layers, anndata_without_layers) are imported from conftest.py
 
+# Mark all tests in this file as using SLAFArray instances
+pytestmark = pytest.mark.slaf_array
+
 
 def test_create_new_layer(anndata_without_layers):
     """Test creating a new layer (eager write - immediate)"""
