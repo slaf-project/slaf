@@ -709,19 +709,25 @@ class LazyExpressionMatrix(LazySparseMixin):
         else:
             transformations = {}
 
-        # Try SQL-level transformations first
-        if transformations:
-            sql_result = self._apply_sql_transformations(
-                self._cell_selector, self._gene_selector, transformations
-            )
-            if sql_result is not None:
-                return self._reconstruct_sparse_matrix(
-                    sql_result, self._cell_selector, self._gene_selector
+        # For layers table, use Lance's native filter pushdown instead of SQL to avoid Substrait issues
+        if self.table_name == "layers":
+            base_result = self._query_layers_with_lance()
+        else:
+            # Try SQL-level transformations first
+            if transformations:
+                sql_result = self._apply_sql_transformations(
+                    self._cell_selector, self._gene_selector, transformations
                 )
+                if sql_result is not None:
+                    return self._reconstruct_sparse_matrix(
+                        sql_result, self._cell_selector, self._gene_selector
+                    )
 
-        # Fall back to base query + numpy transformations
-        base_query = self._build_submatrix_sql(self._cell_selector, self._gene_selector)
-        base_result = self.slaf_array.query(base_query)
+            # Fall back to base query + numpy transformations
+            base_query = self._build_submatrix_sql(
+                self._cell_selector, self._gene_selector
+            )
+            base_result = self.slaf_array.query(base_query)
 
         # Reconstruct base matrix
         base_matrix = self._reconstruct_sparse_matrix(
@@ -738,6 +744,64 @@ class LazyExpressionMatrix(LazySparseMixin):
             )
 
         return base_matrix
+
+    def _query_layers_with_lance(self) -> pl.DataFrame:
+        """
+        Query layers table using Lance's native filter pushdown (avoids Substrait issues).
+
+        This method uses Lance's native `to_table()` with SQL filter strings, which
+        provides efficient filter pushdown without the Substrait casting issues that
+        occur with Polars' scan_pyarrow_dataset.
+
+        According to https://lance.org/guide/read_and_write/#reading-lance-dataset,
+        Lance supports native SQL filter pushdown which is more efficient and reliable
+        than going through Polars' PyArrow dataset scanning.
+
+        Args:
+            Returns Polars DataFrame with columns: cell_integer_id, gene_integer_id, value
+        """
+        if self.slaf_array.layers is None:
+            raise ValueError("Layers table not available in this dataset")
+        if self.layer_name is None:
+            raise ValueError("layer_name must be provided when table_name='layers'")
+
+        # Build SQL filter conditions for cell and gene selectors
+        cell_condition = self._selector_to_sql_condition(
+            self._cell_selector, axis=0, entity_type="cell"
+        )
+        gene_condition = self._selector_to_sql_condition(
+            self._gene_selector, axis=1, entity_type="gene"
+        )
+
+        # Compose filter string (combine cell and gene conditions with AND)
+        filter_parts = []
+        if cell_condition != "TRUE":
+            filter_parts.append(cell_condition)
+        if gene_condition != "TRUE":
+            filter_parts.append(gene_condition)
+        # Also filter out NULL values for the layer column (sparse representation)
+        filter_parts.append(f"{self.layer_name} IS NOT NULL")
+
+        # Compose final filter string
+        if filter_parts:
+            filter_str = " AND ".join(filter_parts)
+        else:
+            filter_str = f"{self.layer_name} IS NOT NULL"
+
+        # Use Lance's native to_table() with filter pushdown
+        # Select only the columns we need
+        table = self.slaf_array.layers.to_table(
+            columns=["cell_integer_id", "gene_integer_id", self.layer_name],
+            filter=filter_str,
+        )
+
+        # Convert to Polars DataFrame
+        df = pl.from_arrow(table)
+
+        # Rename layer column to "value" for consistency with expression table
+        df = df.rename({self.layer_name: "value"})
+
+        return df
 
     def _convert_to_sparse_matrix(
         self, result_df: pl.DataFrame
