@@ -796,7 +796,8 @@ class LazyExpressionMatrix(LazySparseMixin):
         )
 
         # Convert to Polars DataFrame
-        df = pl.from_arrow(table)
+        # Type cast: to_table() with multiple columns always returns a DataFrame
+        df: pl.DataFrame = pl.from_arrow(table)  # type: ignore[assignment]
 
         # Rename layer column to "value" for consistency with expression table
         df = df.rename({self.layer_name: "value"})
