@@ -102,11 +102,19 @@ slaf convert large_data.h5ad output.slaf --chunk-size 100000
 
 # Create indices for faster queries
 slaf convert large_data.h5ad output.slaf --create-indices
+
+# Control fragment size (important for HuggingFace uploads)
+# Default: 100M rows per fragment (stays under 10k file limit)
+slaf convert large_data.h5ad output.slaf --max-rows-per-file 100000000
 ```
 
 ```python
 # Python API for large datasets
-converter = SLAFConverter(chunk_size=100000, create_indices=True)
+converter = SLAFConverter(
+    chunk_size=100000,
+    create_indices=True,
+    max_rows_per_file=100_000_000,  # Default: 100M (stays under HuggingFace's 10k limit)
+)
 converter.convert("large_data.h5ad", "output.slaf")
 ```
 
@@ -238,6 +246,10 @@ slaf convert data.h5ad output.slaf --verbose
 slaf convert data_folder/ output.slaf --skip-validation
 slaf append new_data.h5ad existing.slaf --skip-validation
 
+# Control fragment size (for HuggingFace uploads or large datasets)
+# Default: 100M rows per fragment (stays under HuggingFace's 10k file limit)
+slaf convert large_data.h5ad output.slaf --max-rows-per-file 200000000
+
 # TileDB-specific options
 slaf convert data.tiledb output.slaf --tiledb-collection RNA
 ```
@@ -252,6 +264,8 @@ converter = SLAFConverter(
     optimize_storage=True,      # Smaller files (default)
     use_optimized_dtypes=True,  # Better compression (default)
     tiledb_collection_name="RNA",  # TileDB collection name (default: "RNA")
+    max_rows_per_file=100_000_000,  # Max rows per fragment (default: 100M)
+                                    # Increase for fewer fragments (e.g., for HuggingFace)
 )
 
 converter.convert("data.h5ad", "output.slaf")
