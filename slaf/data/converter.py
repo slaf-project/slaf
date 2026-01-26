@@ -90,6 +90,7 @@ class SLAFConverter:
         compact_after_write: bool = False,  # Compact dataset after writing for optimal storage (disabled by default to avoid manifest corruption)
         tiledb_collection_name: str = "RNA",  # Collection name for TileDB format
         enable_checkpointing: bool = True,  # Enable checkpointing for long-running conversions
+        max_rows_per_file: int = 100_000_000,  # Max rows per Lance fragment (default: 100M to stay under HuggingFace's 10k file limit)
     ):
         """
         Initialize converter with optimization options.
@@ -118,6 +119,10 @@ class SLAFConverter:
             enable_checkpointing: Enable checkpointing for long-running conversions.
                                 This allows resuming from the last completed chunk if the
                                 conversion is interrupted. Default: True.
+            max_rows_per_file: Maximum number of rows per Lance fragment file.
+                             Larger values create fewer fragments but larger files.
+                             Default: 100M to stay under HuggingFace's 10k file limit.
+                             For very large datasets, increase this value to reduce fragment count.
 
         Examples:
             >>> # Default optimization (recommended)
@@ -146,6 +151,7 @@ class SLAFConverter:
         self.compact_after_write = compact_after_write
         self.tiledb_collection_name = tiledb_collection_name
         self.enable_checkpointing = enable_checkpointing
+        self.max_rows_per_file = max_rows_per_file
 
     def _is_cloud_path(self, path: str) -> bool:
         """Check if path is a cloud storage path."""
@@ -1695,7 +1701,7 @@ class SLAFConverter:
             expression_path,
             mode="overwrite",
             schema=schema,
-            max_rows_per_file=10000000,  # 10M rows per file to avoid memory issues
+            max_rows_per_file=self.max_rows_per_file,
             enable_v2_manifest_paths=self.enable_v2_manifest,
             data_storage_version="2.1",
         )
@@ -1763,7 +1769,7 @@ class SLAFConverter:
                 chunk_table,
                 expression_path,
                 mode="append",
-                max_rows_per_file=10000000,  # 10M rows per file to avoid memory issues
+                max_rows_per_file=self.max_rows_per_file,
                 enable_v2_manifest_paths=self.enable_v2_manifest,
                 data_storage_version="2.1",
             )
@@ -1967,7 +1973,7 @@ class SLAFConverter:
                 table_path,
                 mode="overwrite",
                 schema=schema,
-                max_rows_per_file=10000000,  # 10M rows per file to avoid memory issues
+                max_rows_per_file=self.max_rows_per_file,
                 enable_v2_manifest_paths=self.enable_v2_manifest,
                 data_storage_version="2.1",
             )
@@ -2087,7 +2093,7 @@ class SLAFConverter:
                     chunk_table,
                     table_path,
                     mode="append",
-                    max_rows_per_file=10000000,  # 10M rows per file to avoid memory issues
+                    max_rows_per_file=self.max_rows_per_file,
                     enable_v2_manifest_paths=self.enable_v2_manifest,
                     data_storage_version="2.1",
                 )
@@ -2240,7 +2246,7 @@ class SLAFConverter:
                         adjusted_chunk,
                         expression_path,
                         mode="overwrite",
-                        max_rows_per_file=10000000,
+                        max_rows_per_file=self.max_rows_per_file,
                         enable_v2_manifest_paths=self.enable_v2_manifest,
                         data_storage_version="2.1",
                     )
@@ -2250,7 +2256,7 @@ class SLAFConverter:
                         adjusted_chunk,
                         expression_path,
                         mode="append",
-                        max_rows_per_file=10000000,
+                        max_rows_per_file=self.max_rows_per_file,
                         enable_v2_manifest_paths=self.enable_v2_manifest,
                         data_storage_version="2.1",
                     )
@@ -2953,7 +2959,7 @@ class SLAFConverter:
             combined_layers,
             layers_path,
             mode="overwrite",
-            max_rows_per_file=10000000,  # Same as expression table
+            max_rows_per_file=self.max_rows_per_file,
             enable_v2_manifest_paths=self.enable_v2_manifest,
             data_storage_version="2.1",
         )
@@ -3351,7 +3357,7 @@ class SLAFConverter:
                 lance.write_dataset(
                     table,
                     table_path,
-                    max_rows_per_file=10000000,  # 10M rows per file to avoid memory issues
+                    max_rows_per_file=self.max_rows_per_file,
                     enable_v2_manifest_paths=self.enable_v2_manifest,
                     data_storage_version="2.1",
                 )

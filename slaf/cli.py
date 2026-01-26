@@ -301,6 +301,11 @@ def convert(
         "--skip-validation",
         help="Skip validation if already validated (for performance)",
     ),
+    max_rows_per_file: int = typer.Option(
+        100_000_000,
+        "--max-rows-per-file",
+        help="Maximum rows per Lance fragment file (default: 100M to stay under HuggingFace's 10k file limit)",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ):
     """Convert single-cell datasets to SLAF format with optimized storage."""
@@ -335,6 +340,7 @@ def convert(
             enable_v2_manifest=enable_v2_manifest,
             compact_after_write=compact_after_write,
             tiledb_collection_name=tiledb_collection_name,
+            max_rows_per_file=max_rows_per_file,
         )
 
         # Use the new converter with auto-detection

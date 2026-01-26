@@ -541,6 +541,7 @@ class TestCLI:
                     enable_v2_manifest=True,
                     compact_after_write=False,
                     tiledb_collection_name="RNA",
+                    max_rows_per_file=100_000_000,
                 )
 
     @patch("slaf.cli.check_dependencies")
@@ -978,6 +979,7 @@ class TestCLI:
                         enable_v2_manifest=True,
                         compact_after_write=False,
                         tiledb_collection_name="RNA",
+                        max_rows_per_file=100_000_000,
                     )
 
     @patch("slaf.cli.check_dependencies")
@@ -1019,6 +1021,7 @@ class TestCLI:
                     enable_v2_manifest=True,
                     compact_after_write=False,
                     tiledb_collection_name="RNA",
+                    max_rows_per_file=100_000_000,
                 )
 
     @patch("slaf.cli.check_dependencies")
@@ -1060,6 +1063,7 @@ class TestCLI:
             enable_v2_manifest=True,
             compact_after_write=False,
             tiledb_collection_name="RNA",
+            max_rows_per_file=100_000_000,
         )
 
     def test_convert_help_text_contains_chunked_info(self, runner):
