@@ -17,6 +17,17 @@ except ImportError:
     SMART_OPEN_AVAILABLE = False
     logger.warning("smart-open not available. Install with: pip install smart-open[s3]")
 
+# Import huggingface_hub for HuggingFace dataset support
+try:
+    from huggingface_hub import hf_hub_download
+
+    HF_HUB_AVAILABLE = True
+except ImportError:
+    HF_HUB_AVAILABLE = False
+    logger.warning(
+        "huggingface_hub not available. Install with: pip install huggingface_hub"
+    )
+
 
 def display_ascii_art():
     """Display SLAF ASCII art logo"""
@@ -87,9 +98,124 @@ class SLAFArray:
         Cloud dataset: (5000, 25000)
     """
 
+    # Type annotations for instance variables
+    _cached_config_path: str | None
+    _cache_dir: str | None
+
     def _is_cloud_path(self, path: str) -> bool:
         """Check if path is a cloud storage path."""
         return path.startswith(("s3://", "gs://", "azure://", "r2://"))
+
+    def _is_hf_path(self, path: str) -> bool:
+        """Check if path is a huggingface storage path."""
+        return path.startswith("hf://")
+
+    def _parse_hf_path(self, path: str) -> tuple[str, str]:
+        """
+        Parse HuggingFace path to extract repo_id and file path.
+
+        Args:
+            path: HuggingFace path in format hf://datasets/username/repo-name[/path/to/slaf]
+                 The "datasets" prefix is stripped, repo_id is extracted as username/repo-name,
+                 and the remaining path is the path within the repo.
+
+        Returns:
+            Tuple of (repo_id, file_path) where repo_id is "username/repo-name"
+            and file_path is the path within the repo
+
+        Examples:
+            >>> _parse_hf_path("hf://datasets/username/repo-name")
+            ('username/repo-name', '')
+            >>> _parse_hf_path("hf://datasets/username/repo-name/path/to/slaf")
+            ('username/repo-name', 'path/to/slaf')
+            >>> _parse_hf_path("hf://datasets/username/repo-name/path/to/slaf/config.json")
+            ('username/repo-name', 'path/to/slaf/config.json')
+        """
+        if not path.startswith("hf://"):
+            raise ValueError(f"Not a HuggingFace path: {path}")
+
+        # Remove hf:// prefix
+        path_without_prefix = path[5:]  # len("hf://") = 5
+
+        # Split into parts
+        parts = path_without_prefix.split("/")
+
+        # Check if first part is "datasets" and strip it
+        if parts and parts[0] == "datasets":
+            parts = parts[1:]
+
+        # HuggingFace repo_id is always username/repo-name (2 parts)
+        if len(parts) < 2:
+            raise ValueError(
+                f"Invalid HuggingFace path: {path}. "
+                "Expected format: hf://datasets/username/repo-name[/path/to/slaf]"
+            )
+
+        # First 2 parts form the repo_id (username/repo-name)
+        repo_id = "/".join(parts[:2])
+        # Rest is the path within the repo
+        file_path = "/".join(parts[2:]) if len(parts) > 2 else ""
+
+        return repo_id, file_path
+
+    def _download_hf_file(
+        self, hf_path: str, filename: str | None = None, cache_dir: str | None = None
+    ) -> str:
+        """
+        Download a file from HuggingFace to local cache.
+
+        Args:
+            hf_path: HuggingFace path (e.g., "hf://datasets/repo/path/to/slaf")
+            filename: Optional filename to append to the path (e.g., "config.json").
+                     If provided, it will be joined with the path from hf_path.
+                     If None, uses the file_path from hf_path directly.
+            cache_dir: Optional cache directory. If None, uses huggingface_hub's default cache.
+
+        Returns:
+            Local path to the downloaded file
+        """
+        if not HF_HUB_AVAILABLE:
+            raise ImportError(
+                "huggingface_hub required for HuggingFace dataset support. "
+                "Install with: pip install huggingface_hub"
+            )
+
+        repo_id, file_path = self._parse_hf_path(hf_path)
+
+        # Construct the full filename within the repo
+        if filename:
+            # Join the path from hf_path with the filename
+            full_filename = "/".join([file_path, filename]) if file_path else filename
+        else:
+            # Use the file_path directly (should be a full file path)
+            if not file_path:
+                raise ValueError(f"HuggingFace path must include file path: {hf_path}")
+            full_filename = file_path
+
+        # Download file to HuggingFace cache (managed by huggingface_hub)
+        try:
+            # Use cache_dir parameter if provided, otherwise fall back to instance cache_dir
+            effective_cache_dir = (
+                cache_dir
+                if cache_dir is not None
+                else getattr(self, "_cache_dir", None)
+            )
+
+            # hf_hub_download expects repo_id and filename as positional arguments
+            download_kwargs: dict[str, Any] = {
+                "repo_type": "dataset",
+            }
+            if effective_cache_dir is not None:
+                download_kwargs["cache_dir"] = effective_cache_dir
+
+            local_path = hf_hub_download(repo_id, full_filename, **download_kwargs)
+        except Exception as e:
+            # Provide more context in the error message
+            raise FileNotFoundError(
+                f"Failed to download file '{full_filename}' from HuggingFace dataset '{repo_id}': {e}"
+            ) from e
+
+        return local_path
 
     def _path_exists(self, path: str) -> bool:
         """Check if path exists, works with both local and cloud paths."""
@@ -107,40 +233,78 @@ class SLAFArray:
                 return True
             except Exception:
                 return False
+        elif self._is_hf_path(path):
+            try:
+                # Try to download config.json to validate existence
+                # The path is the base path, so we append config.json
+                # Use the instance's cache_dir if available
+                cache_dir = getattr(self, "_cache_dir", None)
+                self._download_hf_file(path, "config.json", cache_dir=cache_dir)
+                return True
+            except Exception as e:
+                # Log the error for debugging
+                logger.debug(f"Failed to download config.json from {path}: {e}")
+                return False
         else:
             # For local paths, check if it's a directory
             return os.path.exists(path) and os.path.isdir(path)
 
     def _open_file(self, path: str, mode: str = "r"):
-        """Open file with cloud storage compatibility."""
+        """
+        Open file with cloud storage and HuggingFace compatibility.
+
+        For HuggingFace paths, downloads the file to local cache first.
+        """
         if self._is_cloud_path(path):
             if not SMART_OPEN_AVAILABLE:
                 raise ImportError("smart-open required for cloud storage operations")
             return smart_open(path, mode)
+        elif self._is_hf_path(path):
+            # For HuggingFace paths, download to cache and open locally
+            # The path should already include the full file path
+            # If it's a joined path (base + filename), parse and download
+            # Check if this is config.json and we have a cached path
+            if path.endswith("config.json") and self._cached_config_path:
+                local_path = self._cached_config_path
+            else:
+                cache_dir = getattr(self, "_cache_dir", None)
+                local_path = self._download_hf_file(path, cache_dir=cache_dir)
+                # Cache the config.json path for future use
+                if path.endswith("config.json"):
+                    self._cached_config_path = local_path
+            return open(local_path, mode)
         else:
             return open(path, mode)
 
     def _join_path(self, base_path: str, *paths: str) -> str:
-        """Join paths, works with both local and cloud paths."""
+        """Join paths, works with local, cloud, and HuggingFace paths."""
         if self._is_cloud_path(base_path):
             # For cloud paths, use forward slashes
+            return "/".join([base_path.rstrip("/")] + [p.lstrip("/") for p in paths])
+        elif self._is_hf_path(base_path):
+            # For HuggingFace paths, use forward slashes
             return "/".join([base_path.rstrip("/")] + [p.lstrip("/") for p in paths])
         else:
             # For local paths, use os.path.join
             return os.path.join(base_path, *paths)
 
-    def __init__(self, slaf_path: str, load_metadata: bool = True):
+    def __init__(
+        self, slaf_path: str, load_metadata: bool = True, cache_dir: str | None = None
+    ):
         """
         Initialize SLAF array from a SLAF dataset directory.
 
         Args:
             slaf_path: Path to SLAF directory containing config.json and .lance files.
                        The directory should contain the dataset configuration and Lance tables.
-                       Supports both local paths and cloud storage (S3, GCS, Azure, etc.).
+                       Supports local paths, cloud storage (S3, GCS, Azure, etc.), and
+                       HuggingFace datasets (hf:// protocol).
             load_metadata: If True, load cell and gene metadata (obs/var) in background.
                           If False, skip metadata loading for faster initialization, especially
                           useful for cloud datasets. Metadata can still be loaded on-demand when
                           accessing obs/var properties. Default: True.
+            cache_dir: Optional cache directory for HuggingFace datasets. If None, uses
+                      huggingface_hub's default cache location. Only used for hf:// paths.
 
         Raises:
             FileNotFoundError: If the SLAF config file is not found at the specified path.
@@ -165,6 +329,11 @@ class SLAFArray:
             >>> print(f"Metadata loaded: {slaf_array.is_metadata_ready()}")
             Metadata loaded: True
 
+            >>> # Load from HuggingFace dataset
+            >>> slaf_array = SLAFArray("hf://datasets/repo/test-slaf")
+            >>> print(f"HuggingFace dataset: {slaf_array.shape}")
+            HuggingFace dataset: (1000, 20000)
+
             >>> # Error handling for missing directory
             >>> try:
             ...     slaf_array = SLAFArray("nonexistent/path")
@@ -178,14 +347,16 @@ class SLAFArray:
 
         self.slaf_path = slaf_path
         self._load_metadata_enabled = load_metadata
+        self._cache_dir = cache_dir
+        # Store cached config.json path for HuggingFace datasets
+        self._cached_config_path = None
 
-        # Validate dataset exists
+        # Validate dataset exists (after setting cache_dir so it can be used)
         if not self._path_exists(self.slaf_path):
             raise FileNotFoundError(f"SLAF dataset not found: {self.slaf_path}")
 
         # Load configuration
         config_path = self._join_path(self.slaf_path, "config.json")
-
         with self._open_file(config_path) as f:
             self.config = json.load(f)
 
@@ -234,6 +405,11 @@ class SLAFArray:
         if self._is_cloud_path(self.slaf_path):
             # For cloud paths, extract the last part after the last slash
             dataset_name = self.slaf_path.split("/")[-1]
+        elif self._is_hf_path(self.slaf_path):
+            # For HuggingFace paths, extract repo_id and path
+            repo_id, file_path = self._parse_hf_path(self.slaf_path)
+            # Use the last part of the path as dataset name, or repo_id if no path
+            dataset_name = file_path.split("/")[-1] if file_path else repo_id
         else:
             # For local paths, use os.path.basename
             dataset_name = os.path.basename(self.slaf_path)

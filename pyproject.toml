@@ -29,6 +29,7 @@ dependencies = [
     "lance-namespace-urllib3-client>=0.3.1",
     "boto3>=1.40.10",
     "smart-open[s3]>=7.4.1",
+    "huggingface-hub>=0.36.0",
 ]
 
 [project.optional-dependencies]
