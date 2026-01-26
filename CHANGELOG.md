@@ -1,45 +1,41 @@
 # Changelog
 
-## [0.3.1] - 2025-11-06
+## [0.3.2] - 2026-01-26
 
 ### Added
-- 335c18b pyproject.toml version accidental upgrade fix
-- 37e8f08 removes outdated benchmark tests
-- 5731c0c minor maintenance
-- 95c94cd increase timeout tolerance for cloud data loaders
-- d8b9531 expose queue size as a parameter
-- 218d6ab bug fixes in reading and writing config.json
-- 5ae1f6e existence check bug fix
-- fadd2df SLAFArray should be compatible with cloud paths
-- 98c4229 add n_genes_by_counts as a pre-computed candidate for gene counts
-- f148ada better path checks and more logging
-- 26eecac corner case for metadata with checkpointing + logging
-- 7cd9141 handle list of str in convert
-- f06c23c bug fix and performance refactor for converter
-- 63a11f1 advanced checkpointing for long running conversions
-- c8c049d use smart open instead of open to handle cloud io
-- d686293 update mocks in tests
-- 15c9f6e removes pathlib because it's not reliable with cloud URIs
-- 400365f fix bug in s3 path handling
-- c35da9a prefix check // -> /
-- b9ade88 pass Path instead of str to lance.write_dataset
-- 2375ec6 existence check for remote path before creation
-- 99f2f2e sort glob order
-- 6ce721f fix mtx file format detection
-- cab6388 update backward compatibility tests issues
-- 2bf3c0f swap input output order in docs for append
-- bbc3188 tests for multi file conversion and append functionality
-- 33607e9 update conversion docs
-- e595d5b multifile conversion and append functionality
-- c799ffa remove fluff in docs
-- 2e5cda5 add bionemo scdl to external dataloader benchmarks
-- d0db0ee updated benchmarks
-- 8d7c651 better memory usage
-- 9116114 warmup and pushdown filtering for tiledb benchmarks
-- 3e82da4 blog index and typos
-- 4bf96a7 typo fix
-- 48e5fd7 typo fix
-- 5c1882f wordsmithing
-- 7c8ffe7 mixture of scanners blog post
-- 93f1e45 docstrings for tiledb dataloaders
-- 83d6606 pypi badge
+- f78b969 allow maximum rows per fragment to be controllable
+- f3f9d00 change coverage parsing to work with pytest.ini change
+- 8e18498 type and tests refactoring
+- 21c6557 mypy error on ci
+- 66e2482 unit tests for hf remote dataset
+- 36b9e0e add support for slaf on remote huggingface datasets via hf:// protocol
+- a1704cb mypy errors in ci fixed
+- e59bc65 bump polars version
+- 781dd5c adds pushdown filtering for layers
+- 812245c end to end tests for layers and metadata
+- 52c3d36 resolve mypy errors
+- 5a70606 docs and examples for layers and metadata
+- 92e3836 obs_view -> obs; var_view -> var; obs -> obs_deprecated; var -> var_deprecated
+- a79b705 return dataframe with obs_view or var_view are accessed
+- 229f769 remove spurious tests
+- b6c1380 conversion support for obsm, varm, uns
+- d511ab6 tests for cache invalidation lifecycle
+- 7df6792 cache invalidation on mutation + tests for uns
+- 0b80122 mixin refactor for DRY + obs, var, obsm, varm views with tests
+- 980c138 implement layer deletion and tests
+- cca2c91 unit tests for layer assignment
+- cb93491 implement layer assignment to lazy anndata
+- 09868c0 unit tests for conversion from h5ad with layers
+- 7605312 handle chunked writes and multi file conversion scenario for layers
+- 93cab14 adds basic layer conversion support for anndata
+- c672402 test: Phase 2 - Add unit tests for layers access
+- 6830c6b feat: Phase 2 - Add layers access support
+- 806eae2 feat: Add layers infrastructure (Phase 1, format v0.4)
+- 8ac5a9a CSC -> CSR typo fix
+- 00478a5 update ml benchmarks docs and add charts
+- d3492b6 update benchmarks with annbatch
+- 4a5a911 handle dot in fieldname responsibly: lance doesn't like this
+- 0e10d93 mypy errors
+- 4074a54 optionally don't load metadata in SLAFArray
+- b5b17cb parallelize fragment reads for cloud data loader
+- 098bef1 update badge
