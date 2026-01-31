@@ -9,7 +9,7 @@ repo_url: https://github.com/slaf-project/slaf
 edit_uri: edit/main/docs/
 
 # Copyright
-copyright: Copyright &copy; 2025 Pavan Ramkumar
+copyright: Copyright &copy; 2026 Pavan Ramkumar
 
 # Theme
 theme:
@@ -179,6 +179,7 @@ nav:
       - Benchmarks: development/benchmarks.md
   - Blog:
       - Blog Home: blog/index.md
+      - SLAF on Hugging Face: blog/huggingface.md
       - Introducing SLAF: blog/introducing-slaf.md
       - Blazing Fast Dataloaders: blog/blazing-fast-dataloaders.md
       - Mixture of Scanners: blog/blazing-fast-dataloaders-2.md
