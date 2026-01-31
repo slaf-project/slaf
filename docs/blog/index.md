@@ -4,6 +4,12 @@ Welcome to the SLAF blog, where we share insights, technical deep dives, and upd
 
 ## Latest Posts
 
+### [SLAF on Hugging Face: Stream Single-Cell Data Without the Download](huggingface.md)
+
+_Last updated: January 30, 2026_
+
+We're releasing three SLAF single-cell transcriptomics datasets (> 100M cells) on the Hugging Face Hub (Tahoe-100M, Parse-10M, X-Atlas-Orion), and with Lance's new `hf://` support you can stream data directly from Hugging Face for exploratory data analysis, batch processing, and training without full downloads. This post covers what we're releasing, how to use them, and what Lance-on-HuggingFace means for AI/ML beyond single-cell genomics.
+
 ### [Blazing Fast Dataloaders #2: Ignatius takes a trip to the Library of Congress](blazing-fast-dataloaders-2.md)
 
 _Last updated: September 8, 2025_
