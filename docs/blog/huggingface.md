@@ -1,14 +1,14 @@
-# SLAF on Hugging Face: Streamable Without the Download
+# SLAF on Hugging Face
 
 ---
 
 We're excited to share that **SLAF datasets are now freely available and streamable on Hugging Face** 🎉
 
-1. Three open single-cell datasets in SLAF format are live at [huggingface.co/slaf-project](https://huggingface.co/slaf-project).
+1. Three open single-cell transcriptomics datasets in SLAF format are live at [huggingface.co/slaf-project](https://huggingface.co/slaf-project).
 
 2. These datasets are streamable directly from the Huggingface Hub to your compute for exploratory analysis, batch processing, or training without bulk downloads.
 
-If you work with 10M+ cell datasets, you've hit the ceiling of "download the h5ad and load it in memory." SLAF on Hugging Face is alternative: same Scanpy-style workflows, streamed from the Hub. Beyond single-cell, the [lance-format org](https://huggingface.co/lance-format) is already hosting Lance across text, image, video, and robotics—today.
+If you work with 10M+ cell datasets, you've hit the ceiling of "download the h5ad and load it in memory." SLAF on Hugging Face is the alternative: same workflows, streamed from the Hub. Beyond single-cell, the [lance-format org](https://huggingface.co/lance-format) is already hosting Lance across text, image, video, and robotics today.
 
 ---
 
@@ -22,11 +22,11 @@ We're releasing three popular datasets spanning different biology and scale in S
 | **Parse Biosciences**  | 10M cells  | [Parse-10M](https://huggingface.co/datasets/slaf-project/Parse-10M)         | Cytokine-stimulated PBMCs across multiple donors             |
 | **Xaira Therapeutics** | 6M cells   | [X-Atlas-Orion](https://huggingface.co/datasets/slaf-project/X-Atlas-Orion) | Genome-wide deeply sequenced CRISPR screen on two cell lines |
 
+Point your code at a `hf://datasets/slaf-project/<repo>` URI and stream.
+
 !!! warning "Licenses"
 
     Note that Tahoe is the most permissive license, whereas Parse and Xaira are free to use or reshare with attribution for non-profit use. Specific licenses and links to original versions are available in the repos.
-
-Point your code at a `hf://datasets/slaf-project/<repo>` URI and stream.
 
 !!! tip "Heed the rate limits"
 
@@ -34,9 +34,27 @@ Point your code at a `hf://datasets/slaf-project/<repo>` URI and stream.
 
 ---
 
+## The Status Quo and Who We're Building For
+
+Before we get into how streaming works, it helps to see what we're moving away from and who we're building for.
+
+**The problem.** The status quo for large single-cell (and many other) datasets is: copy from a public bucket to your own, then pull into local storage, load into memory with format-specific readers, and hit the usual limits: egress cost, network throughput, I/O concurrency underutilization due to the Python GIL, RAM ceilings, and libraries that perform single-threaded ops. Every researcher, app, and workload often ends up with their own copy and pipeline.
+
+![Status quo: bottlenecks in the traditional h5ad workflow. Egress, network, I/O, GIL, RAM, single-threaded scipy.sparse](figures/status-quo.png)
+
+_Figure 1: Status quo workload in depth._
+
+**Who we're building for.** SLAF is designed for multiple personas: computational biologists who want to explore data without bulk downloads, data engineers who need to distribute at scale without egress blow-up, AI/ML researchers training large models efficiently, product engineers building interactive visualization on big data without self-hosting, and agent engineers who need subagents to read from a commodity sandbox. Those are exactly the personas that benefit from "point at `hf://`, stream, don't download."
+
+![Personas SLAF aims to support](figures/personas.png)
+
+_Figure 2: Personas SLAF needed to support._
+
+---
+
 ## Lance + Hugging Face: Stream to Your Compute
 
-Hugging Face has invested heavily in **streaming at scale**—fewer startup requests, faster resolution, and an [fsspec-compatible `hf://` filesystem](https://huggingface.co/docs/huggingface_hub/guides/hf_file_system) so that any fsspec-capable library can read from the Hub without a full download. Lance's **`hf://`** support plugs into that: a Lance dataset can live on the Hugging Face Hub and be opened like this:
+Hugging Face has invested heavily in **streaming at scale**: fewer startup requests, faster resolution, and an [fsspec-compatible `hf://` filesystem](https://huggingface.co/docs/huggingface_hub/guides/hf_file_system) so that any fsspec-capable library can read from the Hub without a full download. Lance's **`hf://`** support plugs into that: a Lance dataset can live on the Hugging Face Hub and be opened like this:
 
 ```python
 import lance
@@ -46,7 +64,7 @@ for batch in ds.to_batches(batch_size=256):
     ...
 ```
 
-No `git clone`, no `huggingface-cli download` of the full dataset—just a URI and an iterator. That makes it possible to run **exploratory analysis**, **batch jobs**, and **training jobs** directly from Hugging Face, subject to plan-specific rate limits.
+A URI and an iterator without `huggingface-cli download` makes it possible to run **exploratory analysis**, **batch jobs**, and **training jobs** directly from Hugging Face, subject to plan-specific rate limits.
 
 ---
 
@@ -133,9 +151,21 @@ Same API as with a local or S3 path; only the URI changes. The dataloader's pref
 
 ---
 
+## One Store, Many Consumers: The SLAF Vision
+
+The three use cases above: exploratory data analysis, batch processing, and training, all point at the same `hf://` datasets and stream only what they need. That's the SLAF vision operationlized: one public store (Lance in a bucket or on the Hub) feeding many consumers: researcher notebooks (Polars, LazyAnnData), training pipelines (Polars, SLAFDataLoader, PyTorch), visualization apps (Polars, LanceDB), batch pipelines, and agent sandboxes. That architecture eliminates repeated egress and duplicate copies, and enables true concurrency, multithreading, commodity RAM/CPU, and independent scaling of compute. Hugging Face is one of the ways we get that "public bucket" in front of everyone: same datasets, same `hf://` path, streamed on demand.
+
+![SLAF vision: one public Lance store feeding many consumers, eliminating egress and duplication, enabling concurrency and scaling](figures/vision.png)
+
+_Figure 3: The SLAF vision: one store, many consumers._
+
+Putting SLAF on the Hub brings that vision closer: streaming from a central, well-known store without bulk downloads, so more of these workloads can run against the same data the same way.
+
+---
+
 ## How This Happened: The Backstory
 
-Lance-on-HuggingFace didn't happen in a vacuum. It sits on top of Hugging Face's investment in **streaming at scale** and their **fsspec-compatible `hf://` filesystem**—and it started with a concrete use case: making Lance (and SLAF) readable from the Hub without downloading hundreds of GB.
+Lance-on-HuggingFace didn't happen in a vacuum. It sits on top of Hugging Face's investment in **streaming at scale** and their **fsspec-compatible `hf://` filesystem**, starting with a concrete use case: making Lance (and SLAF) readable from the Hub without downloading hundreds of GB.
 
 ### The Hugging Face side: streaming and the `hf://` filesystem
 
@@ -172,7 +202,7 @@ For more context, see Hugging Face's [Streaming datasets: 100× More Efficient](
 
 ---
 
-## Beyond Single-Cell: What Lance on Hugging Face Means for AI/ML
+## Beyond Single-Cell Genomics: What Lance on Hugging Face Means for AI/ML
 
 Lance-on-HuggingFace isn't just for single-cell genomics or SLAF. The [**lance-format** org on Hugging Face](https://huggingface.co/lance-format) already hosts Lance datasets across modalities, all streamable via `hf://`:
 
@@ -183,8 +213,24 @@ Lance-on-HuggingFace isn't just for single-cell genomics or SLAF. The [**lance-f
 
 The pattern is the same everywhere: **publish once on the Hub, point Lance (or SLAF) at `hf://`, stream only what you need.** That reduces duplication, speeds up iteration, and makes it easier to run large-scale training and batch jobs from a central, well-known platform.
 
-We're excited to see how the community uses Lance and SLAF on Hugging Face and eager to expand support for popular datasets.
+### Future workloads: embeddings, vector search, and "update rarely"
+
+The integration also opens the door to emerging AI/ML workloads on SLAF's roadmap: embedding data management, multimodal data apps, and low-latency vector search; all with the same "store on the Hub, stream to your compute" idea.
+
+**Embedding data management.** Suppose you want scGPT or Transcriptformer embeddings on your private dataset. You can run batch inference pipelines directly off Lance on Hugging Face: stream cells from `hf://`, compute embeddings via serverless [Inference Endpoints](https://huggingface.co/inference-endpoints) or [Hugging Face Jobs](https://huggingface.co/docs/huggingface-jobs) on Hugging Face compute, and write results back into Lance tables on the Hub. You can mix and match inference, batch compute, and storage to your preferred alternatives to Hugging Face; the common thread is Lance and streaming, with Hugging Face making the plumbing convenient.
+
+**Apps that need vector search.** Suppose you want a data app that uses nearest-neighbor search on embeddings to interactively apply cell typing to a new private dataset. Store embeddings in Lance tables on the Hub, attach a vector index (e.g. via [LanceDB](https://lancedb.com/)), and stream search results to your app. No need to download the full table or run your own vector store.
+
+**Upgrading embeddings without 100× copies.** When a new version of a third-party embedding model ships, you don't have to clone the dataset and re-embed everything. In Lance, adding a new embedding version is just a new column in your table on Hugging Face; you backfill only that column and leave the rest of the data untouched. That shifts the vision from **"store once, stream everywhere"** to **"store once, update rarely, stream everywhere"**, where "update rarely" is exactly this kind of inference-endpoint–driven embedding lifecycle.
+
+### What this unlocks for Lance and Hugging Face
+
+For **Lance**, the integration opens a new distribution channel: teams that already distribute multimodal datasets or embeddings on the Hub represent a beachhead, and Lance can expand into managed offerings and richer tooling for such teams. For **Hugging Face**, it strengthens a path to stickiness around end-to-end AI/ML workloads: not just data distribution, but streaming, [distributed training on HF compute](https://huggingface.co/docs/huggingface-jobs), batch inference, open vector and multimodal data lake use cases, and hybrid search applications via LanceDB and Lance. We're super excited to see how both ecosystems evolve.
+
+For the broader Lance × Hugging Face story including multimodal blobs, vector search, and training-friendly storage, see LanceDB's post [**Lance × Hugging Face: A New Era of Sharing Multimodal Data on the Hub**](https://lancedb.com/blog/lance-x-huggingface-a-new-era-of-sharing-multimodal-data/).
+
+We're excited to see how the community uses Lance and SLAF on Hugging Face and eager to expand support for more datasets.
 
 ---
 
-**Single-cell folks:** Try [Parse-10M](https://huggingface.co/datasets/slaf-project/Parse-10M) or [Tahoe-100M](https://huggingface.co/datasets/slaf-project/Tahoe-100M) from the Hub this week—point `SLAFArray` or `read_slaf` at `hf://datasets/slaf-project/<repo>` and run a query or a training loop without downloading. Install: `pip install slafdb[ml]`. For more, see the [SLAF documentation](https://slaf-project.github.io/slaf/) and the [slaf-project org on Hugging Face](https://huggingface.co/slaf-project).
+**Single-cell folks:** Try [Parse-10M](https://huggingface.co/datasets/slaf-project/Parse-10M) or [Tahoe-100M](https://huggingface.co/datasets/slaf-project/Tahoe-100M) from the Hub this week: point `SLAFArray` or `read_slaf` at `hf://datasets/slaf-project/<repo>` and run a query or a training loop without downloading. Install: `pip install slafdb[ml]`. For more, see the [SLAF documentation](https://slaf-project.github.io/slaf/) and the [slaf-project org on Hugging Face](https://huggingface.co/slaf-project).
