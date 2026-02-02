@@ -178,7 +178,7 @@ Lance-on-HuggingFace isn't just for single-cell genomics or SLAF. The [**lance-f
 
 - **Long-form text**: [fineweb-edu](https://huggingface.co/datasets/lance-format/fineweb-edu) (1.5B+ rows) and other tabular text datasets for pretraining and fine-tuning.
 - **Images**: [laion-1m](https://huggingface.co/datasets/lance-format/laion-1m) and similar image (and image–text) collections with optional embeddings and vector search.
-- **Video**: [openvid-lance](https://huggingface.co/datasets/lance-format/openvid-lance) and related video datasets for multimodal training.
+- **Video**: [openvid-lance](https://huggingface.co/datasets/lance-format/Openvid-1M) and related video datasets for multimodal training.
 - **Robotics**: [lerobot_xvla-soft-fold](https://huggingface.co/datasets/lance-format/lerobot_xvla-soft-fold) and other robotics traces in Lance format for imitation and foundation models.
 
 The pattern is the same everywhere: **publish once on the Hub, point Lance (or SLAF) at `hf://`, stream only what you need.** That reduces duplication, speeds up iteration, and makes it easier to run large-scale training and batch jobs from a central, well-known platform.
