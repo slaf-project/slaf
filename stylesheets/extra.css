@@ -1,0 +1,1001 @@
+/* Custom styles for SLAF documentation */
+
+/* API Documentation Visual Separation */
+.doc-contents {
+  margin-bottom: 2rem;
+}
+
+.doc-contents .doc-heading {
+  border-bottom: 2px solid var(--md-primary-fg-color);
+  padding-bottom: 0.5rem;
+  margin-bottom: 1.5rem;
+  margin-top: 2rem;
+}
+
+.doc-contents .doc-heading:first-child {
+  margin-top: 0;
+}
+
+/* Function/Method separation */
+.doc-contents .doc-function {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-bottom: 2rem;
+  background: var(--md-default-bg-color);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.doc-contents .doc-function:hover {
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+  border-color: var(--md-primary-fg-color);
+}
+
+/* Method signature styling */
+.doc-contents .doc-signature {
+  background: var(--md-code-bg-color);
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1rem 0;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  border-left: 4px solid var(--md-primary-fg-color);
+}
+
+/* Parameter lists */
+.doc-contents .doc-parameter-list {
+  background: var(--md-default-bg-color);
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1rem 0;
+  border: 1px solid var(--md-default-fg-color--lightest);
+}
+
+.doc-contents .doc-parameter-list dt {
+  font-weight: bold;
+  color: var(--md-primary-fg-color);
+}
+
+/* Example code blocks */
+.doc-contents .doc-examples {
+  background: var(--md-code-bg-color);
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 1rem 0;
+  border-left: 4px solid #4caf50;
+}
+
+/* Class vs Method distinction */
+.doc-contents .doc-class {
+  border: 2px solid var(--md-primary-fg-color);
+  border-radius: 8px;
+  padding: 2rem;
+  margin-bottom: 3rem;
+  background: linear-gradient(135deg, var(--md-default-bg-color) 0%, var(--md-primary-fg-color--lightest) 100%);
+}
+
+.doc-contents .doc-method {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 6px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  background: var(--md-default-bg-color);
+}
+
+/* Property styling */
+.doc-contents .doc-property {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 6px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  background: var(--md-default-bg-color);
+  border-left: 4px solid #ff9800;
+}
+
+/* Hero section styling */
+.hero {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 2rem 0;
+  margin-bottom: 2rem;
+}
+
+.hero h1 {
+  font-size: 3rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+}
+
+.hero p {
+  font-size: 1.2rem;
+  opacity: 0.9;
+}
+
+/* Card grid styling */
+.grid.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1.5rem;
+  margin: 2rem 0;
+}
+
+.grid.cards > * {
+  background: var(--md-default-bg-color);
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 8px;
+  padding: 1.5rem;
+  transition: all 0.3s ease;
+}
+
+.grid.cards > *:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+  border-color: var(--md-primary-fg-color);
+}
+
+/* Feature highlights */
+.feature-highlight {
+  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+  color: white;
+  padding: 1rem;
+  border-radius: 8px;
+  margin: 1rem 0;
+}
+
+.feature-highlight h3 {
+  color: white;
+  margin-top: 0;
+}
+
+/* Code block enhancements */
+.highlight {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.highlight pre {
+  margin: 0;
+  padding: 1rem;
+}
+
+/* Enhanced syntax highlighting for all code blocks */
+
+/* Python syntax highlighting */
+.highlight .k { color: #ff79c6; } /* Keyword */
+.highlight .s1 { color: #f1fa8c; } /* Single quote string */
+.highlight .s2 { color: #50fa7b; } /* Double quote string */
+.highlight .s3 { color: #8be9fd; } /* Triple quote string */
+.highlight .mi { color: #bd93f9; } /* Number */
+.highlight .o { color: #ff79c6; } /* Operator */
+.highlight .c1 { color: #6272a4; } /* Comment */
+.highlight .c2 { color: #ff5555; } /* Comment special */
+.highlight .nb { color: #8be9fd; } /* Name builtin */
+.highlight .nc { color: #50fa7b; } /* Name class */
+.highlight .nd { color: #ff79c6; } /* Name decorator */
+.highlight .nf { color: #50fa7b; } /* Name function */
+.highlight .nn { color: #8be9fd; } /* Name namespace */
+.highlight .nt { color: #ff79c6; } /* Name tag */
+.highlight .nv { color: #f8f8f2; } /* Name variable */
+.highlight .p { color: #f8f8f2; } /* Punctuation */
+
+/* SQL syntax highlighting */
+.highlight .k { color: #ff79c6; } /* Keyword */
+.highlight .s1 { color: #f1fa8c; } /* String */
+.highlight .s2 { color: #50fa7b; } /* Double quote string */
+.highlight .mi { color: #bd93f9; } /* Number */
+.highlight .o { color: #ff79c6; } /* Operator */
+.highlight .c1 { color: #6272a4; } /* Comment */
+.highlight .c2 { color: #ff5555; } /* Comment special */
+.highlight .nb { color: #8be9fd; } /* Name builtin */
+.highlight .nc { color: #50fa7b; } /* Name class */
+.highlight .nf { color: #50fa7b; } /* Name function */
+.highlight .nv { color: #f8f8f2; } /* Name variable */
+.highlight .p { color: #f8f8f2; } /* Punctuation */
+
+/* Shell/Bash syntax highlighting */
+.highlight .k { color: #ff79c6; } /* Keyword */
+.highlight .s1 { color: #f1fa8c; } /* Single quote string */
+.highlight .s2 { color: #50fa7b; } /* Double quote string */
+.highlight .mi { color: #bd93f9; } /* Number */
+.highlight .o { color: #ff79c6; } /* Operator */
+.highlight .c1 { color: #6272a4; } /* Comment */
+.highlight .c2 { color: #ff5555; } /* Comment special */
+.highlight .nb { color: #8be9fd; } /* Name builtin */
+.highlight .nc { color: #50fa7b; } /* Name class */
+.highlight .nf { color: #50fa7b; } /* Name function */
+.highlight .nv { color: #f8f8f2; } /* Name variable */
+.highlight .p { color: #f8f8f2; } /* Punctuation */
+
+/* Dark mode specific enhancements */
+[data-md-color-scheme="slate"] .highlight .s1 {
+  color: #f1fa8c !important; /* Brighter yellow for better visibility */
+}
+
+[data-md-color-scheme="slate"] .highlight .s2 {
+  color: #50fa7b !important; /* Bright green for double quotes */
+}
+
+[data-md-color-scheme="slate"] .highlight .s3 {
+  color: #8be9fd !important; /* Light blue for triple quotes */
+}
+
+[data-md-color-scheme="slate"] .highlight .c1 {
+  color: #6272a4 !important; /* Muted blue for comments */
+}
+
+[data-md-color-scheme="slate"] .highlight .c2 {
+  color: #ff5555 !important; /* Red for special comments */
+}
+
+/* Enhanced cyan visibility in dark mode */
+[data-md-color-scheme="slate"] .highlight .nb {
+  color: #00d4ff !important; /* Brighter cyan for built-ins like print, len */
+}
+
+[data-md-color-scheme="slate"] .highlight .nn {
+  color: #00d4ff !important; /* Brighter cyan for namespaces */
+}
+
+[data-md-color-scheme="slate"] .highlight .nt {
+  color: #00d4ff !important; /* Brighter cyan for type hints */
+}
+
+[data-md-color-scheme="slate"] .highlight .nd {
+  color: #ff79c6 !important; /* Pink for decorators */
+}
+
+/* Light mode specific enhancements with better contrast */
+[data-md-color-scheme="default"] .highlight .s1 {
+  color: #b8860b !important; /* Darker gold for better contrast */
+}
+
+[data-md-color-scheme="default"] .highlight .s2 {
+  color: #006400 !important; /* Darker green for double quotes */
+}
+
+[data-md-color-scheme="default"] .highlight .s3 {
+  color: #000080 !important; /* Navy blue for triple quotes */
+}
+
+[data-md-color-scheme="default"] .highlight .c1 {
+  color: #483d8b !important; /* Darker slate blue for comments */
+}
+
+[data-md-color-scheme="default"] .highlight .c2 {
+  color: #b22222 !important; /* Darker crimson for special comments */
+}
+
+/* Enhanced contrast for light mode */
+[data-md-color-scheme="default"] .highlight .nb {
+  color: #0066cc !important; /* Dark blue for built-ins like print, len */
+}
+
+[data-md-color-scheme="default"] .highlight .nn {
+  color: #0066cc !important; /* Dark blue for namespaces */
+}
+
+[data-md-color-scheme="default"] .highlight .nt {
+  color: #0066cc !important; /* Dark blue for type hints */
+}
+
+[data-md-color-scheme="default"] .highlight .nd {
+  color: #8b008b !important; /* Dark magenta for decorators */
+}
+
+[data-md-color-scheme="default"] .highlight .nf {
+  color: #228b22 !important; /* Dark green for functions */
+}
+
+[data-md-color-scheme="default"] .highlight .nc {
+  color: #228b22 !important; /* Dark green for classes */
+}
+
+[data-md-color-scheme="default"] .highlight .k {
+  color: #8b008b !important; /* Dark magenta for keywords */
+}
+
+[data-md-color-scheme="default"] .highlight .o {
+  color: #8b008b !important; /* Dark magenta for operators */
+}
+
+[data-md-color-scheme="default"] .highlight .mi {
+  color: #8b008b !important; /* Dark magenta for numbers */
+}
+
+[data-md-color-scheme="default"] .highlight .nv {
+  color: #000000 !important; /* Black for variables */
+}
+
+[data-md-color-scheme="default"] .highlight .p {
+  color: #000000 !important; /* Black for punctuation */
+}
+
+/* Performance metrics */
+.performance-metric {
+  display: inline-block;
+  background: var(--md-primary-fg-color);
+  color: var(--md-primary-bg-color);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-weight: bold;
+  margin: 0 0.25rem;
+}
+
+/* Comparison table styling */
+.comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 2rem 0;
+}
+
+.comparison-table th,
+.comparison-table td {
+  padding: 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--md-default-fg-color--lightest);
+}
+
+.comparison-table th {
+  background: var(--md-primary-fg-color);
+  color: var(--md-primary-bg-color);
+  font-weight: bold;
+}
+
+.comparison-table tr:hover {
+  background: var(--md-default-fg-color--lightest);
+}
+
+/* Status indicators */
+.status-indicator {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  margin-right: 0.5rem;
+}
+
+.status-indicator.success {
+  background: #4caf50;
+}
+
+.status-indicator.error {
+  background: #f44336;
+}
+
+/* Callout boxes */
+.callout {
+  padding: 1rem;
+  border-radius: 8px;
+  margin: 1rem 0;
+  border-left: 4px solid;
+}
+
+.callout.info {
+  background: rgba(33, 150, 243, 0.1);
+  border-left-color: #2196f3;
+}
+
+.callout.warning {
+  background: rgba(255, 193, 7, 0.1);
+  border-left-color: #ffc107;
+}
+
+.callout.success {
+  background: rgba(76, 175, 80, 0.1);
+  border-left-color: #4caf50;
+}
+
+.callout.error {
+  background: rgba(244, 67, 54, 0.1);
+  border-left-color: #f44336;
+}
+
+/* Navigation enhancements */
+.md-nav__link {
+  transition: color 0.3s ease;
+}
+
+.md-nav__link:hover {
+  color: var(--md-primary-fg-color);
+}
+
+/* Search enhancements */
+.md-search__input {
+  border-radius: 20px;
+}
+
+/* Footer styling */
+.md-footer {
+  background: var(--md-default-bg-color);
+  border-top: 1px solid var(--md-default-fg-color--lightest);
+}
+
+body {
+  overflow-x: hidden;
+}
+
+.md-footer {
+  position: relative !important;
+  left: 0 !important;
+  width: 100vw !important;
+  margin-left: 0 !important;
+  box-sizing: border-box;
+  z-index: 1000 !important;
+  border-radius: 0 !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  overflow-x: visible !important;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .grid.cards {
+    grid-template-columns: 1fr;
+  }
+
+  .hero h1 {
+    font-size: 2rem;
+  }
+
+  .hero p {
+    font-size: 1rem;
+  }
+}
+
+/* Dark mode adjustments */
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color: #1a1a1a;
+  --md-default-fg-color: #ffffff;
+  --md-default-fg-color--light: #b0b0b0;
+  --md-default-fg-color--lighter: #808080;
+  --md-default-fg-color--lightest: #404040;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--md-default-fg-color--lightest);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--md-primary-fg-color);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--md-primary-fg-color--light);
+}
+
+/* Animation for cards */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.grid.cards > * {
+  animation: fadeInUp 0.6s ease-out;
+}
+
+/* Code copy button styling */
+.md-clipboard {
+  color: var(--md-default-fg-color--light);
+  transition: all 0.3s ease;
+  opacity: 0.7;
+}
+
+.md-clipboard:hover {
+  color: var(--md-primary-fg-color);
+  opacity: 1;
+  transform: scale(1.1);
+}
+
+/* Enhanced copy button styling for better visibility */
+.highlight .md-clipboard {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 4px;
+  padding: 0.25rem;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  z-index: 10;
+}
+
+/* Dark mode copy button styling */
+[data-md-color-scheme="slate"] .highlight .md-clipboard {
+  background: rgba(0, 0, 0, 0.8);
+  color: var(--md-default-fg-color);
+}
+
+/* Copy button hover effects */
+.highlight .md-clipboard:hover {
+  background: var(--md-primary-fg-color);
+  color: var(--md-primary-bg-color);
+  transform: scale(1.05);
+}
+
+/* Ensure code blocks have relative positioning for copy button */
+.highlight {
+  position: relative;
+}
+
+/* Copy button animation */
+@keyframes copySuccess {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.2); }
+  100% { transform: scale(1); }
+}
+
+.md-clipboard--success {
+  animation: copySuccess 0.3s ease-in-out;
+  color: #4caf50 !important;
+}
+
+/* Make copy button more visible on hover */
+.highlight:hover .md-clipboard {
+  opacity: 1;
+}
+
+/* Language-specific copy button styling */
+.highlight[data-lang="bash"] .md-clipboard,
+.highlight[data-lang="shell"] .md-clipboard,
+.highlight[data-lang="sh"] .md-clipboard {
+  background: rgba(40, 167, 69, 0.9);
+  color: white;
+}
+
+.highlight[data-lang="python"] .md-clipboard,
+.highlight[data-lang="py"] .md-clipboard {
+  background: rgba(54, 93, 140, 0.9);
+  color: white;
+}
+
+.highlight[data-lang="sql"] .md-clipboard {
+  background: rgba(255, 193, 7, 0.9);
+  color: #333;
+}
+
+/* Dark mode language-specific styling */
+[data-md-color-scheme="slate"] .highlight[data-lang="bash"] .md-clipboard,
+[data-md-color-scheme="slate"] .highlight[data-lang="shell"] .md-clipboard,
+[data-md-color-scheme="slate"] .highlight[data-lang="sh"] .md-clipboard {
+  background: rgba(40, 167, 69, 0.8);
+}
+
+[data-md-color-scheme="slate"] .highlight[data-lang="python"] .md-clipboard,
+[data-md-color-scheme="slate"] .highlight[data-lang="py"] .md-clipboard {
+  background: rgba(54, 93, 140, 0.8);
+}
+
+[data-md-color-scheme="slate"] .highlight[data-lang="sql"] .md-clipboard {
+  background: rgba(255, 193, 7, 0.8);
+  color: #333;
+}
+
+/* Copy button accessibility improvements */
+.md-clipboard:focus {
+  outline: 2px solid var(--md-primary-fg-color);
+  outline-offset: 2px;
+}
+
+/* Ensure copy button is always accessible */
+.md-clipboard {
+  cursor: pointer;
+  user-select: none;
+}
+
+/* Mobile-friendly copy button sizing */
+@media (max-width: 768px) {
+  .highlight .md-clipboard {
+    padding: 0.5rem;
+    top: 0.25rem;
+    right: 0.25rem;
+  }
+}
+
+/* Admonition enhancements */
+.admonition {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.admonition-title {
+  font-weight: bold;
+}
+
+/* Table of contents styling */
+.md-nav__title {
+  font-weight: bold;
+}
+
+/* Sidebar styling */
+.md-sidebar {
+  background: var(--md-default-bg-color);
+}
+
+/* Header styling */
+.md-header {
+  background: var(--md-primary-fg-color);
+  color: var(--md-primary-bg-color);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* Logo styling */
+.md-header__button {
+  color: var(--md-primary-bg-color);
+}
+
+/* Search results styling */
+.md-search__scrollwrap {
+  background: var(--md-default-bg-color);
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 8px;
+}
+
+/* Mobile menu styling */
+.md-nav__source {
+  background: var(--md-primary-fg-color);
+  color: var(--md-primary-bg-color);
+}
+
+/* Ensure primary sidebar is on the left */
+.md-sidebar--primary {
+  order: 1;
+  position: fixed;
+  left: 0;
+  top: 48px; /* Account for header height */
+  width: 240px;
+  height: calc(100vh - 48px);
+  z-index: 1;
+}
+
+.md-sidebar--secondary {
+  order: 2;
+  display: none !important;
+}
+
+/* Customize the navigation drawer */
+.md-nav__drawer {
+  background-color: var(--md-primary-fg-color);
+}
+
+/* Ensure proper spacing for main content */
+.md-content {
+  margin-left: 240px; /* Match sidebar width */
+  padding-left: 1rem;
+}
+
+/* Customize the hamburger menu button */
+.md-nav__button {
+  color: var(--md-primary-fg-color);
+}
+
+/* Ensure TOC follows properly */
+.md-sidebar__scrollwrap {
+  scrollbar-width: thin;
+}
+
+/* Add indentation for sub-pages */
+.md-nav__list .md-nav__list {
+  margin-left: 1rem;
+}
+
+.md-nav__list .md-nav__list .md-nav__list {
+  margin-left: 1.5rem;
+}
+
+.md-nav__list .md-nav__list .md-nav__list .md-nav__list {
+  margin-left: 2rem;
+}
+
+/* Style nested navigation items */
+.md-nav__list .md-nav__list .md-nav__link {
+  padding-left: 1rem;
+  font-size: 0.9em;
+}
+
+.md-nav__list .md-nav__list .md-nav__list .md-nav__link {
+  padding-left: 1.5rem;
+  font-size: 0.85em;
+}
+
+.md-nav__list .md-nav__list .md-nav__list .md-nav__list .md-nav__link {
+  padding-left: 2rem;
+  font-size: 0.8em;
+}
+
+/* Custom styling for the heart and code icons on homepage */
+.heart {
+  color: #e91e63;
+}
+
+.code {
+  color: #2196f3;
+}
+
+/* Ensure iframe examples display properly */
+iframe {
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+/* Custom styling for cards on homepage */
+.grid.cards {
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1rem;
+}
+
+.grid.cards > * {
+  display: flex;
+  flex-direction: column;
+  padding: 1rem;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 8px;
+  background-color: var(--md-default-bg-color);
+  transition: all 0.2s ease;
+}
+
+.grid.cards > *:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+/* Ensure proper spacing for navigation */
+.md-nav__list {
+  margin: 0;
+  padding: 0;
+}
+
+.md-nav__item {
+  margin: 0;
+}
+
+/* Custom styling for the main content area */
+.md-main__inner {
+  margin-top: 0;
+}
+
+/* Ensure proper layout on mobile */
+@media (max-width: 76.1875em) {
+  .md-sidebar--primary {
+    display: none;
+  }
+
+  .md-sidebar--secondary {
+    display: none;
+  }
+
+  .md-content {
+    margin-left: 0;
+    padding-left: 0;
+  }
+}
+
+/* Hide the right Table of Contents sidebar */
+.md-sidebar--secondary {
+  display: none !important;
+}
+/* Ensure the left sidebar (navigation) is always visible on desktop */
+@media (min-width: 76.1875em) {
+  .md-sidebar--primary {
+    display: block !important;
+  }
+}
+
+/* Additional styles for SLAF documentation */
+
+
+
+/* Improve sticky header behavior */
+.md-header {
+  box-shadow: 0 0 0.2rem rgba(0,0,0,.1), 0 0.2rem 0.4rem rgba(0,0,0,.1);
+}
+
+/* Ensure proper spacing for fixed header */
+body {
+  padding-top: 0;
+}
+
+/* Improve header icon appearance */
+.md-header__button.md-logo {
+  padding: 0.2rem;
+}
+
+.md-header__button.md-logo img {
+  border-radius: 4px;
+  transition: opacity 0.2s ease;
+}
+
+.md-header__button.md-logo img:hover {
+  opacity: 0.8;
+}
+
+/* Ensure content doesn't overlap with fixed header */
+.md-content {
+  scroll-margin-top: 4rem;
+}
+
+/* Smooth scrolling for anchor links */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Responsive layout optimizations for index page */
+@media (max-width: 768px) {
+  .grid.cards {
+    grid-template-columns: 1fr !important;
+    gap: 1rem !important;
+  }
+
+  .grid {
+    grid-template-columns: 1fr !important;
+    gap: 1rem !important;
+  }
+
+  h1 {
+    font-size: 2rem !important;
+    margin-bottom: 1rem !important;
+  }
+
+  h2 {
+    font-size: 1.5rem !important;
+    margin-top: 2rem !important;
+    margin-bottom: 1rem !important;
+  }
+
+  h3 {
+    font-size: 1.25rem !important;
+    margin-top: 1.5rem !important;
+    margin-bottom: 0.75rem !important;
+  }
+
+  p {
+    margin-bottom: 1rem !important;
+  }
+
+  .md-content {
+    padding-top: 0.5rem !important;
+  }
+
+  /* Compact spacing for mobile */
+  .grid.cards {
+    margin: 1rem 0 !important;
+  }
+
+  .grid.cards .card {
+    margin-bottom: 0.75rem !important;
+    padding: 0.75rem !important;
+  }
+
+  /* Reduce blockquote spacing */
+  blockquote {
+    margin: 0.75rem 0 !important;
+    padding: 0.5rem 0.75rem !important;
+  }
+
+  /* Compact code blocks */
+  .md-typeset pre {
+    margin: 0.75rem 0 !important;
+  }
+}
+
+/* Compact spacing for desktop */
+@media (min-width: 769px) {
+  .grid.cards {
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)) !important;
+    gap: 1rem !important;
+  }
+
+  .grid {
+    gap: 1.5rem !important;
+  }
+
+  h1 {
+    margin-bottom: 1.5rem !important;
+  }
+
+  h2 {
+    margin-top: 2.5rem !important;
+    margin-bottom: 1rem !important;
+  }
+
+  h3 {
+    margin-top: 2rem !important;
+    margin-bottom: 0.75rem !important;
+  }
+}
+
+/* Optimize card layout */
+.grid.cards {
+  margin: 1.5rem 0 !important;
+}
+
+.grid.cards .card {
+  margin-bottom: 1rem !important;
+  padding: 1rem !important;
+}
+
+/* Reduce excessive whitespace */
+.md-content {
+  padding-top: 0.5rem !important;
+}
+
+/* Compact blockquotes */
+blockquote {
+  margin: 1rem 0 !important;
+  padding: 0.75rem 1rem !important;
+}
+
+/* Optimize code blocks */
+.md-typeset pre {
+  margin: 1rem 0 !important;
+}
+
+/* Hero section responsive layout */
+.hero-section {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  margin: 2rem 0;
+  flex-wrap: wrap;
+}
+
+.logo-container {
+  flex-shrink: 0;
+}
+
+.hero-text {
+  flex: 1;
+  min-width: 300px;
+  font-size: 1.2rem;
+  line-height: 1.6;
+}
+
+/* Responsive logo sizing */
+.light-logo, .dark-logo {
+  width: 350px;
+  height: auto;
+  transition: width 0.3s ease;
+}
+
+/* Mobile layout - stack vertically */
+@media (max-width: 768px) {
+  .hero-section {
+    flex-direction: column;
+    text-align: center;
+    gap: 1rem;
+  }
+
+  .logo-container {
+    order: 1;
+  }
+
+  .hero-text {
+    order: 2;
+    min-width: auto;
+    font-size: 1.1rem;
+  }
+
+  .light-logo, .dark-logo {
+    width: 300px !important;
+  }
+}
+
+/* Small mobile - smaller logo */
+@media (max-width: 480px) {
+  .light-logo, .dark-logo {
+    width: 250px !important;
+  }
+
+  .hero-text {
+    font-size: 1rem;
+  }
+}
