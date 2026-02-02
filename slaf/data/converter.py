@@ -1027,6 +1027,10 @@ class SLAFConverter:
 
                         # Recreate the cells dataset with source_file column
                         updated_cells_table = pa.table(existing_cells_df)
+                        # Cast large_string to string so subsequent appends match schema
+                        updated_cells_table = self._cast_table_string_columns_to_utf8(
+                            updated_cells_table, ["cell_id"]
+                        )
                         lance.write_dataset(
                             updated_cells_table,
                             os.path.join(existing_slaf_path, "cells.lance"),
@@ -1746,18 +1750,18 @@ class SLAFConverter:
                 cell_names = reader.obs_names
                 gene_names = reader.var_names
 
-                # Create string ID arrays
+                # Create string ID arrays (use pa.string() for lance compatibility)
                 cell_integer_ids = chunk_table.column("cell_integer_id").to_numpy()
                 gene_integer_ids = chunk_table.column("gene_integer_id").to_numpy()
 
                 cell_ids = cell_names[cell_integer_ids].astype(str)
                 gene_ids = gene_names[gene_integer_ids].astype(str)
 
-                # Create new table with string IDs
+                # Create new table with string IDs (explicit utf8 string for lance)
                 chunk_table = pa.table(
                     {
-                        "cell_id": pa.array(cell_ids),
-                        "gene_id": pa.array(gene_ids),
+                        "cell_id": pa.array(cell_ids, type=pa.string()),
+                        "gene_id": pa.array(gene_ids, type=pa.string()),
                         "cell_integer_id": chunk_table.column("cell_integer_id"),
                         "gene_integer_id": chunk_table.column("gene_integer_id"),
                         "value": chunk_table.column("value"),
@@ -2053,18 +2057,18 @@ class SLAFConverter:
                     cell_names = reader.obs_names
                     gene_names = reader.var_names
 
-                    # Create string ID arrays
+                    # Create string ID arrays (use pa.string() for lance compatibility)
                     cell_integer_ids = chunk_table.column("cell_integer_id").to_numpy()
                     gene_integer_ids = chunk_table.column("gene_integer_id").to_numpy()
 
                     cell_ids = cell_names[cell_integer_ids].astype(str)
                     gene_ids = gene_names[gene_integer_ids].astype(str)
 
-                    # Create new table with string IDs
+                    # Create new table with string IDs (explicit utf8 string for lance)
                     chunk_table = pa.table(
                         {
-                            "cell_id": pa.array(cell_ids),
-                            "gene_id": pa.array(gene_ids),
+                            "cell_id": pa.array(cell_ids, type=pa.string()),
+                            "gene_id": pa.array(gene_ids, type=pa.string()),
                             "cell_integer_id": chunk_table.column("cell_integer_id"),
                             "gene_integer_id": chunk_table.column("gene_integer_id"),
                             "value": chunk_table.column("value"),
@@ -3342,7 +3346,21 @@ class SLAFConverter:
             logger.debug(f"Sanitized column names: {column_mapping}")
 
         table = pa.table(result_df)
+        table = self._cast_table_string_columns_to_utf8(table, [entity_id_col])
+        return table
 
+    def _cast_table_string_columns_to_utf8(
+        self, table: pa.Table, column_names: list[str]
+    ) -> pa.Table:
+        """Cast large_string columns to string (utf8) for lance schema consistency."""
+        for name in column_names:
+            if table.schema.get_field_index(name) < 0:
+                continue
+            col_idx = table.schema.get_field_index(name)
+            field = table.schema.field(col_idx)
+            if field.type == pa.large_string():
+                arr = table.column(name)
+                table = table.set_column(col_idx, name, arr.cast(pa.string()))
         return table
 
     def _write_lance_tables(

@@ -20,6 +20,52 @@ except ImportError:
     FragmentProcessor = None  # type: ignore
 
 
+def _is_arrow_string_array(vals: Any) -> bool:
+    """Return True if values are ArrowStringArray or pandas string dtype."""
+    if vals is None:
+        return False
+    if "ArrowStringArray" in type(vals).__name__:
+        return True
+    dtype = getattr(vals, "dtype", None)
+    if dtype is not None and str(dtype) == "string":
+        return True
+    return False
+
+
+def ensure_h5ad_writable(adata: Any) -> None:
+    """
+    Convert ArrowStringArray/string in obs/var (index and columns) to object dtype
+    so anndata can write to HDF5. Modifies adata in place; only touches string-like
+    index/columns to avoid extra memory use.
+
+    Call this before adata.write_h5ad() or adata.write() when obs/var use pandas
+    string or ArrowStringArray dtypes (e.g. from polars .to_pandas() or pandas 2.x).
+    """
+    for attr in ("obs", "var"):
+        df = getattr(adata, attr, None)
+        if df is None:
+            continue
+        try:
+            vals = df.index.values
+            if _is_arrow_string_array(vals):
+                df.index = df.index.astype(object)
+        except Exception:
+            pass
+        for col in list(df.columns):
+            try:
+                ser = df[col]
+                vals = ser.values
+                if _is_arrow_string_array(vals):
+                    df[col] = ser.astype(object)
+                elif hasattr(ser, "cat") and ser.dtype.name == "category":
+                    # Categorical: ensure categories are HDF5-writable
+                    cats = ser.cat.categories
+                    if _is_arrow_string_array(cats.values):
+                        df[col] = ser.astype(object)
+            except Exception:
+                pass
+
+
 class LazyExpressionMatrix(LazySparseMixin):
     """
     Lazy expression matrix backed by SLAF with scipy.sparse interface.

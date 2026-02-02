@@ -13,6 +13,7 @@ from scipy import sparse
 
 from slaf.data.converter import SLAFConverter
 from slaf.data.utils import discover_input_files, validate_input_files
+from slaf.integrations import ensure_h5ad_writable
 
 
 class TestMultiFileConversion:
@@ -60,6 +61,7 @@ class TestMultiFileConversion:
 
             # Create AnnData object
             adata = sc.AnnData(X=X_sparse, obs=obs_df, var=var_df)
+            ensure_h5ad_writable(adata)
 
             # Save as h5ad
             output_file = compatible_dir / f"synthetic_data_{i:02d}.h5ad"
@@ -100,6 +102,7 @@ class TestMultiFileConversion:
         adata_incompatible = sc.AnnData(
             X=X_incompatible_sparse, obs=obs_incompatible, var=var_incompatible
         )
+        ensure_h5ad_writable(adata_incompatible)
         incompatible_file = incompatible_dir / "incompatible_genes.h5ad"
         adata_incompatible.write_h5ad(incompatible_file)
 

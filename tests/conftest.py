@@ -11,6 +11,7 @@ from scipy.sparse import csr_matrix
 
 from slaf.core.slaf import SLAFArray
 from slaf.data import SLAFConverter
+from slaf.integrations import ensure_h5ad_writable
 
 
 def _wait_for_all_slaf_threads(timeout=0.3):
@@ -208,7 +209,9 @@ def small_sample_adata():
     obs_pd = obs.to_pandas().set_index("cell_id")
     var_pd = var.to_pandas().set_index("gene_id")
 
-    return sc.AnnData(X=X, obs=obs_pd, var=var_pd)
+    adata = sc.AnnData(X=X, obs=obs_pd, var=var_pd)
+    ensure_h5ad_writable(adata)
+    return adata
 
 
 @pytest.fixture
@@ -266,7 +269,9 @@ def large_sample_adata():
     obs_pd = obs.to_pandas().set_index("cell_id")
     var_pd = var.to_pandas().set_index("gene_id")
 
-    return sc.AnnData(X=X, obs=obs_pd, var=var_pd)
+    adata = sc.AnnData(X=X, obs=obs_pd, var=var_pd)
+    ensure_h5ad_writable(adata)
+    return adata
 
 
 @pytest.fixture
@@ -330,7 +335,8 @@ def tiny_adata():
     obs_pd = obs.to_pandas().set_index("cell_id")
     var_pd = var.to_pandas().set_index("gene_id")
 
-    return sc.AnnData(X=X, obs=obs_pd, var=var_pd)
+    adata = sc.AnnData(X=X, obs=obs_pd, var=var_pd)
+    return adata
 
 
 @pytest.fixture
@@ -394,7 +400,8 @@ def small_adata():
     obs_pd = obs.to_pandas().set_index("cell_id")
     var_pd = var.to_pandas().set_index("gene_id")
 
-    return sc.AnnData(X=X, obs=obs_pd, var=var_pd)
+    adata = sc.AnnData(X=X, obs=obs_pd, var=var_pd)
+    return adata
 
 
 @pytest.fixture
@@ -754,6 +761,7 @@ def anndata_with_layers():
         np.random.rand(n_cells, n_genes), dtype=np.float32
     )
 
+    ensure_h5ad_writable(adata)
     return adata
 
 
@@ -771,6 +779,7 @@ def anndata_without_layers():
     adata.obs_names = [f"cell_{i}" for i in range(n_cells)]
     adata.var_names = [f"gene_{i}" for i in range(n_genes)]
 
+    ensure_h5ad_writable(adata)
     return adata
 
 

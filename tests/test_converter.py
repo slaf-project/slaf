@@ -10,6 +10,7 @@ import pytest
 
 from slaf.data.chunked_reader import ChunkedH5ADReader
 from slaf.data.converter import SLAFConverter
+from slaf.integrations import ensure_h5ad_writable
 
 
 class TestSLAFConverter:
@@ -411,6 +412,7 @@ class TestSLAFConverter:
         )
 
         adata = sc.AnnData(X=X_sparse, obs=obs, var=var)
+        ensure_h5ad_writable(adata)
 
         # Save as H5 file (simulating 10x H5 format)
         h5_file = Path(tmp_path) / "data.h5"
@@ -457,6 +459,7 @@ class TestSLAFConverter:
         )
 
         adata = sc.AnnData(X=X_sparse, obs=obs, var=var)
+        ensure_h5ad_writable(adata)
 
         # Save as h5ad
         h5ad_file = Path(tmp_path) / "data.h5ad"
@@ -562,6 +565,7 @@ class TestSLAFConverter:
         )
 
         adata = sc.AnnData(X=X_sparse, obs=obs, var=var)
+        ensure_h5ad_writable(adata)
 
         # Save as H5 file
         h5_file = Path(tmp_path) / "data.h5"
@@ -662,6 +666,7 @@ class TestSLAFConverter:
         )
 
         adata = sc.AnnData(X=X_sparse, obs=obs, var=var)
+        ensure_h5ad_writable(adata)
 
         # Save as H5 file (simulating 10x H5 format)
         h5_file = Path(tmp_path) / "data.h5"
@@ -779,6 +784,7 @@ class TestSLAFConverter:
         )
 
         adata = sc.AnnData(X=X_sparse, obs=obs, var=var)
+        ensure_h5ad_writable(adata)
 
         # Save as h5ad
         h5ad_file = Path(tmp_path) / "data.h5ad"
@@ -1439,6 +1445,7 @@ class TestSLAFConverter:
         adata = small_sample_adata
         adata.obs["cell_type"] = ["type_A"] * 3 + ["type_B"] * 2
         adata.obs["batch"] = ["batch_1"] * 5
+        ensure_h5ad_writable(adata)
         h5ad_path = tmp_path / "test.h5ad"
         adata.write(h5ad_path)
 
@@ -2053,6 +2060,7 @@ class TestSLAFConverter:
         )
 
         adata = sc.AnnData(X=X_sparse, obs=obs, var=var)
+        ensure_h5ad_writable(adata)
 
         # Save as H5 file (simulating 10x H5 format)
         h5_file = Path(tmp_path) / "data.h5"
@@ -2178,6 +2186,7 @@ class TestSLAFConverter:
             adata = anndata_with_layers.copy()
             adata.obs_names = [f"cell_{i}_{j}" for j in range(n_cells_per_file)]
             # Keep same gene names across files (as expected for multi-file conversion)
+            ensure_h5ad_writable(adata)
 
             h5ad_path = tmp_path / f"file_{i}.h5ad"
             adata.write(h5ad_path)
@@ -2242,6 +2251,7 @@ class TestSLAFConverter:
                 # File 2: no layers (use fixture without layers)
                 adata = anndata_without_layers.copy()
                 adata.obs_names = [f"cell_{i}_{j}" for j in range(n_cells_per_file)]
+            ensure_h5ad_writable(adata)
 
             h5ad_path = tmp_path / f"file_{i}.h5ad"
             adata.write(h5ad_path)
@@ -2284,6 +2294,7 @@ class TestSLAFConverter:
             adata = anndata_without_layers.copy()
             adata.obs_names = [f"cell_{i}_{j}" for j in range(n_cells_per_file)]
             # Keep same gene names across files (as expected for multi-file conversion)
+            ensure_h5ad_writable(adata)
 
             h5ad_path = tmp_path / f"file_{i}.h5ad"
             adata.write(h5ad_path)

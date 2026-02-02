@@ -17,6 +17,7 @@ from scipy.sparse import csr_matrix
 
 from slaf.core.slaf import SLAFArray
 from slaf.data.converter import SLAFConverter
+from slaf.integrations import ensure_h5ad_writable
 from slaf.integrations.anndata import LazyAnnData
 
 # Fixtures (anndata_with_layers, anndata_without_layers) are imported from conftest.py
@@ -341,6 +342,7 @@ def test_convert_multiple_files_consistent_layers():
                 }
             )
 
+            ensure_h5ad_writable(adata)
             h5ad_path = f"{tmpdir}/file_{i}.h5ad"
             adata.write(h5ad_path)
             files.append(h5ad_path)
@@ -417,6 +419,7 @@ def test_convert_multiple_files_inconsistent_layers():
                     np.random.rand(n_cells_per_file, n_genes), dtype=np.float32
                 )
 
+            ensure_h5ad_writable(adata)
             h5ad_path = f"{tmpdir}/file_{i}.h5ad"
             adata.write(h5ad_path)
             files.append(h5ad_path)

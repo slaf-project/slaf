@@ -9,13 +9,13 @@ requires-python = ">=3.10,<3.14"
 
 dependencies = [
     # Core dependencies - essential for basic SLAF functionality
-    "pylance>=1.0.4",  # Lance format storage in core/slaf.py
-    "polars>=1.36.0",  # DataFrame operations and SQL queries across all modules
-    "numpy>=2.2.0",    # Numerical operations across all modules
-    "pandas>=2.3.0",   # DataFrame operations in data, integrations, ml
-    "pyarrow>=20.0.0", # Data conversion in data/converter.py
-    "scipy>=1.15.0",   # Sparse operations in core and data
-    "loguru>=0.7.0",   # Logging functionality across all modules
+    "pylance>=1.0.4",        # Lance format storage in core/slaf.py
+    "polars>=1.36.0",        # DataFrame operations and SQL queries across all modules
+    "numpy>=2.2.0",          # Numerical operations across all modules
+    "pandas>=2.3.0",         # DataFrame operations in data, integrations, ml
+    "pyarrow>=20.0.0",       # Data conversion in data/converter.py
+    "scipy>=1.15.0,<1.17",  # Sparse operations; <1.17 until anndata handles _validate_indices (scipy 1.17)
+    "loguru>=0.7.0",         # Logging functionality across all modules
     # Data conversion - essential for CLI functionality
     "scanpy>=1.11.2",   # For h5ad file conversion
     "h5py>=3.10.0",     # For chunked H5AD reading

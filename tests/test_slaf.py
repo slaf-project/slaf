@@ -709,6 +709,9 @@ class TestSLAFArray:
         adata = sc.AnnData(X=X, obs=obs_pd, var=var_pd)
 
         # Test new format (0.2) - should use pre-computed metadata
+        from slaf.integrations import ensure_h5ad_writable
+
+        ensure_h5ad_writable(adata)
         h5ad_path = tmp_path / "test.h5ad"
         adata.write(h5ad_path)
 
