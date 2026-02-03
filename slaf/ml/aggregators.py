@@ -108,7 +108,7 @@ class ScGPTWindow(Window):
                     .otherwise(0)
                     .alias("expr_bin")
                 )
-                .group_by("cell_integer_id")
+                .group_by("cell_integer_id", maintain_order=True)
                 .agg(
                     [
                         pl.col("gene_integer_id").alias("gene_sequence"),
@@ -127,8 +127,8 @@ class ScGPTWindow(Window):
                 ]
             ).filter(pl.col("gene_rank") <= max_genes)
 
-            # Group by cell and create separate columns
-            grouped = result.group_by("cell_integer_id").agg(
+            # Group by cell and create separate columns (maintain_order so cell order matches shuffled input)
+            grouped = result.group_by("cell_integer_id", maintain_order=True).agg(
                 [
                     pl.col("gene_integer_id").alias("gene_sequence"),
                     pl.col("value").alias("expr_sequence"),
@@ -190,7 +190,7 @@ class GeneformerWindow(Window):
                         / 100
                     )
                 )
-                .group_by("cell_integer_id")
+                .group_by("cell_integer_id", maintain_order=True)
                 .agg(
                     [
                         pl.col("gene_integer_id").alias("gene_sequence"),
@@ -209,7 +209,7 @@ class GeneformerWindow(Window):
                     ]
                 )
                 .filter(pl.col("gene_rank") <= max_genes)
-                .group_by("cell_integer_id")
+                .group_by("cell_integer_id", maintain_order=True)
                 .agg(
                     [
                         pl.col("gene_integer_id").alias("gene_sequence"),
@@ -251,8 +251,8 @@ class SimpleWindow(Window):
             ]
         ).filter(pl.col("gene_rank") <= max_genes)
 
-        # Group by cell and create gene sequences (exactly same as test file)
-        grouped = result.group_by("cell_integer_id").agg(
+        # Group by cell and create gene sequences (maintain_order so cell order matches shuffled input)
+        grouped = result.group_by("cell_integer_id", maintain_order=True).agg(
             [
                 pl.col("gene_integer_id").alias("gene_sequence"),
                 pl.col("value").alias("expr_sequence"),

@@ -105,8 +105,8 @@ class EntropyCalculator:
         # Sample pairs and compute L1 distances using simple list comprehension
         pairs = random.sample(list(combinations(batch_ids, 2)), n_pairs)
         if pairs:
-            # Simple L1 distance calculation
-            distances = [abs(ai - aj) for ai, aj in pairs]
+            # Simple L1 distance (coerce to int for numpy/polars scalars)
+            distances = [abs(int(ai) - int(aj)) for ai, aj in pairs]
             return float(np.mean(distances))
         return 0.0
 
@@ -142,8 +142,11 @@ class EntropyCalculator:
                     len(batch2), size=n_cell_pairs, replace=False
                 )
 
-                # Compute L1 distances between sampled cells
-                batch_distances = np.abs(batch1[indices1] - batch2[indices2])
+                # Compute L1 distances between sampled cells (coerce to int)
+                batch_distances = np.abs(
+                    np.asarray(batch1, dtype=np.int64)[indices1]
+                    - np.asarray(batch2, dtype=np.int64)[indices2]
+                )
                 distances.extend(batch_distances.tolist())
 
             except (ValueError, IndexError):
@@ -323,7 +326,12 @@ class EntropyBenchmark:
             if i >= entropy_batches:
                 break
 
-            cell_ids = batch["cell_ids"]
+            # Defensive copy: ensure we snapshot cell_ids so we are not affected by
+            # dataloader/prefetcher reusing the same list (would make all_batch_ids
+            # point to the last batch and inflate L1 to near-random).
+            cell_ids = list(batch["cell_ids"])
+            # Normalize to Python ints for consistent L1 (Polars/numpy may yield int64)
+            cell_ids = [int(x) for x in cell_ids]
             all_batch_ids.append(cell_ids)
 
         entropy_measurement_time = time.time() - start_time
@@ -527,7 +535,8 @@ class EntropyBenchmark:
             if i >= n_batches:
                 break
 
-            cell_ids = batch["cell_ids"]
+            # Defensive copy + normalize to int (see run_entropy_only_measurement)
+            cell_ids = [int(x) for x in list(batch["cell_ids"])]
             all_batch_ids.append(cell_ids)
             total_cells += len(cell_ids)
 

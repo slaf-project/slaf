@@ -1041,13 +1041,14 @@ class PrefetchBatchProcessor:
                         print_prefetch(prefetch_report, self.verbose)
 
                     self.batch_id += 1
+                    # Use grouped row order so cell_integer_ids match tokenized data exactly
+                    # (grouped has one row per cell; window uses maintain_order=True so order = shuffled)
+                    cell_ids_ordered = grouped["cell_integer_id"].to_list()  # type: ignore[index]
                     return TokenizedPrefetchBatch(
                         batch_id=self.batch_id - 1,
                         input_ids=input_ids,
                         attention_mask=attention_mask,
-                        cell_integer_ids=complete_df["cell_integer_id"]  # type: ignore[index]
-                        .unique()
-                        .to_list(),
+                        cell_integer_ids=cell_ids_ordered,
                         partial_cell_data=self.partial_cell_data.copy(),
                         tokenize_time=tokenize_time,
                     )
