@@ -1,6 +1,8 @@
+import json
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+import lance
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -2769,6 +2771,482 @@ class LazyVarmView(LazyMetadataViewMixin):
         return self._shape
 
 
+def _coo_sql_condition_to_polars(sql_condition: str, id_column: str) -> pl.Expr:
+    """Convert SQL WHERE condition to Polars expression (for COO view selector)."""
+    if sql_condition == "TRUE":
+        return pl.lit(True)
+    if sql_condition == "FALSE":
+        return pl.lit(False)
+    if ">=" in sql_condition and "<" in sql_condition:
+        parts = sql_condition.split(" AND ")
+        ge_part = [p for p in parts if ">=" in p][0]
+        lt_part = [p for p in parts if "<" in p][0]
+        try:
+            ge_value = int(ge_part.split(">=")[1].strip())
+            lt_value = int(lt_part.split("<")[1].strip())
+            return (pl.col(id_column) >= ge_value) & (pl.col(id_column) < lt_value)
+        except ValueError:
+            return pl.lit(False)
+    if " IN " in sql_condition:
+        values_str = sql_condition.split(" IN ")[1].strip("()")
+        values = []
+        for v in values_str.split(","):
+            v = v.strip()
+            try:
+                values.append(int(v))
+            except ValueError:
+                continue
+        if values:
+            return pl.col(id_column).is_in(values)
+        return pl.lit(False)
+    if " = " in sql_condition:
+        try:
+            value = int(sql_condition.split(" = ")[1].strip())
+            return pl.col(id_column) == value
+        except ValueError:
+            return pl.lit(True)
+    return pl.lit(True)
+
+
+class LazyObspView(LazyDictionaryViewMixin):
+    """
+    Dictionary-like view of obsp (pairwise obs matrices) in COO storage.
+
+    Each key maps to a square (n_cells, n_cells) dense matrix. Data is stored
+    as COO in cellsxcells.lance. Selector support: returns (len(selector), len(selector)).
+    """
+
+    def __init__(self, lazy_adata: "LazyAnnData"):
+        self.lazy_adata = lazy_adata
+        self._slaf_array = lazy_adata.slaf
+        self._shape = lazy_adata.shape
+        self._id_col_i = "cell_integer_id_i"
+        self._id_col_j = "cell_integer_id_j"
+        self._entity_table = "cells"
+        self._entity_id_col = "cell_integer_id"
+        self._config_key = "obsp"
+        self._n_entities = self._shape[0]
+
+    def keys(self) -> list[str]:
+        table = getattr(self._slaf_array, "cellsxcells", None)
+        if table is None:
+            return []
+        config = self._slaf_array.config
+        if self._config_key in config and "available" in config[self._config_key]:
+            return list(config[self._config_key]["available"])
+        schema = table.schema
+        return [
+            f.name
+            for f in schema
+            if f.name not in (self._id_col_i, self._id_col_j)
+            and pa.types.is_floating(f.type)
+        ]
+
+    def _get_selected_ids(self) -> np.ndarray | None:
+        """Return selected entity integer IDs or None for all."""
+        selector = getattr(self.lazy_adata, "_cell_selector", None)
+        if selector is None:
+            return None
+        sql = self.lazy_adata._selector_to_sql_condition(
+            selector, axis=0, entity_type="cell"
+        )
+        if sql == "TRUE":
+            return None
+        entity_table = getattr(self._slaf_array, self._entity_table)
+        df = (
+            pl.scan_pyarrow_dataset(entity_table)
+            .filter(_coo_sql_condition_to_polars(sql, self._entity_id_col))
+            .select(self._entity_id_col)
+            .collect()
+        )
+        return df[self._entity_id_col].to_numpy()
+
+    def __getitem__(self, key: str) -> np.ndarray:
+        if key not in self.keys():
+            raise KeyError(f"obsp key '{key}' not found")
+        table = getattr(self._slaf_array, "cellsxcells", None)
+        if table is None:
+            raise KeyError(f"obsp key '{key}' not found")
+        df = pl.from_arrow(
+            table.to_table(columns=[self._id_col_i, self._id_col_j, key])
+        )
+        selected = self._get_selected_ids()
+        if selected is not None:
+            sel_set = set(selected)
+            df = df.filter(
+                pl.col(self._id_col_i).is_in(selected)
+                & pl.col(self._id_col_j).is_in(selected)
+            )
+            id_to_idx = {int(x): i for i, x in enumerate(sorted(sel_set))}
+            n = len(id_to_idx)
+        else:
+            n = self._n_entities
+            id_to_idx = {i: i for i in range(n)}
+        mat = np.zeros((n, n), dtype=np.float32)
+        for row in df.iter_rows(named=True):
+            i = id_to_idx[int(row[self._id_col_i])]
+            j = id_to_idx[int(row[self._id_col_j])]
+            mat[i, j] = float(row[key])
+        return mat
+
+    def __setitem__(self, key: str, value: np.ndarray):
+        value = np.asarray(value, dtype=np.float32)
+        if value.ndim != 2 or value.shape[0] != value.shape[1]:
+            raise ValueError("obsp values must be square 2D arrays")
+        if value.shape[0] != self._n_entities:
+            raise ValueError(
+                f"obsp matrix shape {value.shape} does not match n_cells {self._n_entities}"
+            )
+        self._validate_name(key)
+        config = self._slaf_array.config
+        if self._config_key in config and key in config[self._config_key].get(
+            "immutable", []
+        ):
+            raise ValueError(f"obsp key '{key}' is immutable and cannot be overwritten")
+        # COO from non-zeros
+        rows, cols = np.where(value != 0)
+        if len(rows) == 0:
+            rows, cols = np.array([0], dtype=np.intp), np.array([0], dtype=np.intp)
+            values = np.array([0.0], dtype=np.float32)
+        else:
+            values = value[rows, cols].astype(np.float32)
+        self._write_coo_key(
+            key,
+            rows.astype(np.uint32),
+            cols.astype(np.uint32),
+            values,
+            pa.uint32(),
+        )
+
+    def _write_coo_key(
+        self,
+        key: str,
+        ids_i: np.ndarray,
+        ids_j: np.ndarray,
+        values: np.ndarray,
+        id_pa_type: pa.DataType,
+    ) -> None:
+        table = getattr(self._slaf_array, "cellsxcells", None)
+        table_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path,
+            self._slaf_array.config.get("tables", {}).get(
+                "cellsxcells", "cellsxcells.lance"
+            ),
+        )
+        if table is None:
+            coo_table = pa.table(
+                {
+                    self._id_col_i: pa.array(ids_i, type=id_pa_type),
+                    self._id_col_j: pa.array(ids_j, type=id_pa_type),
+                    key: pa.array(values, type=pa.float32()),
+                }
+            )
+            lance.write_dataset(
+                coo_table,
+                table_path,
+                data_storage_version="2.1",
+            )
+        else:
+            existing = pl.from_arrow(table.to_table())
+            if key in existing.columns:
+                existing = existing.drop(key)
+            new_df = pl.DataFrame(
+                {
+                    self._id_col_i: ids_i,
+                    self._id_col_j: ids_j,
+                    key: values,
+                }
+            )
+            merged = existing.join(
+                new_df, on=[self._id_col_i, self._id_col_j], how="left"
+            ).with_columns(pl.col(key).fill_null(0.0))
+            lance.write_dataset(
+                merged.to_arrow(),
+                table_path,
+                data_storage_version="2.1",
+            )
+        self._slaf_array.cellsxcells = lance.dataset(table_path)
+        cfg_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path, "config.json"
+        )
+        with self._slaf_array._open_file(cfg_path) as f:
+            config = json.load(f)
+        if self._config_key not in config:
+            config[self._config_key] = {
+                "available": [],
+                "immutable": [],
+                "mutable": [],
+                "dimensions": {},
+            }
+        if key not in config[self._config_key]["available"]:
+            config[self._config_key]["available"] = sorted(
+                config[self._config_key]["available"] + [key]
+            )
+            config[self._config_key]["mutable"] = sorted(
+                config[self._config_key]["mutable"] + [key]
+            )
+        config[self._config_key]["dimensions"][key] = self._n_entities
+        with self._slaf_array._open_file(cfg_path, "w") as f:
+            json.dump(config, f, indent=2)
+        self._slaf_array.config = config
+
+    def __delitem__(self, key: str) -> None:
+        if key not in self.keys():
+            raise KeyError(f"obsp key '{key}' not found")
+        config = self._slaf_array.config
+        if self._config_key in config and key in config[self._config_key].get(
+            "immutable", []
+        ):
+            raise ValueError(f"obsp key '{key}' is immutable and cannot be deleted")
+        table = getattr(self._slaf_array, "cellsxcells", None)
+        if table is None:
+            raise KeyError(f"obsp key '{key}' not found")
+        tbl = table.to_table()
+        cols = [c for c in tbl.column_names if c != key]
+        if not cols:
+            raise ValueError("Cannot delete the only obsp key")
+        new_table = pa.table({c: tbl.column(c) for c in cols})
+        table_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path,
+            self._slaf_array.config.get("tables", {}).get(
+                "cellsxcells", "cellsxcells.lance"
+            ),
+        )
+        lance.write_dataset(new_table, table_path, data_storage_version="2.1")
+        self._slaf_array.cellsxcells = lance.dataset(table_path)
+        cfg_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path, "config.json"
+        )
+        with self._slaf_array._open_file(cfg_path) as f:
+            config = json.load(f)
+        for k in ("available", "mutable", "dimensions"):
+            if k in config[self._config_key] and key in config[self._config_key][k]:
+                config[self._config_key][k] = [
+                    x for x in config[self._config_key][k] if x != key
+                ]
+        with self._slaf_array._open_file(cfg_path, "w") as f:
+            json.dump(config, f, indent=2)
+        self._slaf_array.config = config
+
+
+class LazyVarpView(LazyDictionaryViewMixin):
+    """
+    Dictionary-like view of varp (pairwise var matrices) in COO storage.
+
+    Each key maps to a square (n_genes, n_genes) dense matrix in genesxgenes.lance.
+    """
+
+    def __init__(self, lazy_adata: "LazyAnnData"):
+        self.lazy_adata = lazy_adata
+        self._slaf_array = lazy_adata.slaf
+        self._shape = lazy_adata.shape
+        self._id_col_i = "gene_integer_id_i"
+        self._id_col_j = "gene_integer_id_j"
+        self._entity_table = "genes"
+        self._entity_id_col = "gene_integer_id"
+        self._config_key = "varp"
+        self._n_entities = self._shape[1]
+
+    def keys(self) -> list[str]:
+        table = getattr(self._slaf_array, "genesxgenes", None)
+        if table is None:
+            return []
+        config = self._slaf_array.config
+        if self._config_key in config and "available" in config[self._config_key]:
+            return list(config[self._config_key]["available"])
+        schema = table.schema
+        return [
+            f.name
+            for f in schema
+            if f.name not in (self._id_col_i, self._id_col_j)
+            and pa.types.is_floating(f.type)
+        ]
+
+    def _get_selected_ids(self) -> np.ndarray | None:
+        selector = getattr(self.lazy_adata, "_gene_selector", None)
+        if selector is None:
+            return None
+        sql = self.lazy_adata._selector_to_sql_condition(
+            selector, axis=1, entity_type="gene"
+        )
+        if sql == "TRUE":
+            return None
+        entity_table = getattr(self._slaf_array, self._entity_table)
+        df = (
+            pl.scan_pyarrow_dataset(entity_table)
+            .filter(_coo_sql_condition_to_polars(sql, self._entity_id_col))
+            .select(self._entity_id_col)
+            .collect()
+        )
+        return df[self._entity_id_col].to_numpy()
+
+    def __getitem__(self, key: str) -> np.ndarray:
+        if key not in self.keys():
+            raise KeyError(f"varp key '{key}' not found")
+        table = getattr(self._slaf_array, "genesxgenes", None)
+        if table is None:
+            raise KeyError(f"varp key '{key}' not found")
+        df = pl.from_arrow(
+            table.to_table(columns=[self._id_col_i, self._id_col_j, key])
+        )
+        selected = self._get_selected_ids()
+        if selected is not None:
+            sel_set = set(selected)
+            df = df.filter(
+                pl.col(self._id_col_i).is_in(selected)
+                & pl.col(self._id_col_j).is_in(selected)
+            )
+            id_to_idx = {int(x): i for i, x in enumerate(sorted(sel_set))}
+            n = len(id_to_idx)
+        else:
+            n = self._n_entities
+            id_to_idx = {i: i for i in range(n)}
+        mat = np.zeros((n, n), dtype=np.float32)
+        for row in df.iter_rows(named=True):
+            i = id_to_idx[int(row[self._id_col_i])]
+            j = id_to_idx[int(row[self._id_col_j])]
+            mat[i, j] = float(row[key])
+        return mat
+
+    def __setitem__(self, key: str, value: np.ndarray) -> None:
+        value = np.asarray(value, dtype=np.float32)
+        if value.ndim != 2 or value.shape[0] != value.shape[1]:
+            raise ValueError("varp values must be square 2D arrays")
+        if value.shape[0] != self._n_entities:
+            raise ValueError(
+                f"varp matrix shape {value.shape} does not match n_genes {self._n_entities}"
+            )
+        self._validate_name(key)
+        config = self._slaf_array.config
+        if self._config_key in config and key in config[self._config_key].get(
+            "immutable", []
+        ):
+            raise ValueError(f"varp key '{key}' is immutable and cannot be overwritten")
+        rows, cols = np.where(value != 0)
+        if len(rows) == 0:
+            rows, cols = np.array([0], dtype=np.intp), np.array([0], dtype=np.intp)
+            values = np.array([0.0], dtype=np.float32)
+        else:
+            values = value[rows, cols].astype(np.float32)
+        self._write_coo_key(
+            key,
+            rows.astype(np.uint16),
+            cols.astype(np.uint16),
+            values,
+            pa.uint16(),
+        )
+
+    def _write_coo_key(
+        self,
+        key: str,
+        ids_i: np.ndarray,
+        ids_j: np.ndarray,
+        values: np.ndarray,
+        id_pa_type: pa.DataType,
+    ) -> None:
+        table = getattr(self._slaf_array, "genesxgenes", None)
+        table_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path,
+            self._slaf_array.config.get("tables", {}).get(
+                "genesxgenes", "genesxgenes.lance"
+            ),
+        )
+        if table is None:
+            coo_table = pa.table(
+                {
+                    self._id_col_i: pa.array(ids_i, type=id_pa_type),
+                    self._id_col_j: pa.array(ids_j, type=id_pa_type),
+                    key: pa.array(values, type=pa.float32()),
+                }
+            )
+            lance.write_dataset(
+                coo_table,
+                table_path,
+                data_storage_version="2.1",
+            )
+        else:
+            existing = pl.from_arrow(table.to_table())
+            if key in existing.columns:
+                existing = existing.drop(key)
+            new_df = pl.DataFrame(
+                {
+                    self._id_col_i: ids_i,
+                    self._id_col_j: ids_j,
+                    key: values,
+                }
+            )
+            merged = existing.join(
+                new_df, on=[self._id_col_i, self._id_col_j], how="left"
+            ).with_columns(pl.col(key).fill_null(0.0))
+            lance.write_dataset(
+                merged.to_arrow(),
+                table_path,
+                data_storage_version="2.1",
+            )
+        self._slaf_array.genesxgenes = lance.dataset(table_path)
+        cfg_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path, "config.json"
+        )
+        with self._slaf_array._open_file(cfg_path) as f:
+            config = json.load(f)
+        if self._config_key not in config:
+            config[self._config_key] = {
+                "available": [],
+                "immutable": [],
+                "mutable": [],
+                "dimensions": {},
+            }
+        if key not in config[self._config_key]["available"]:
+            config[self._config_key]["available"] = sorted(
+                config[self._config_key]["available"] + [key]
+            )
+            config[self._config_key]["mutable"] = sorted(
+                config[self._config_key]["mutable"] + [key]
+            )
+        config[self._config_key]["dimensions"][key] = self._n_entities
+        with self._slaf_array._open_file(cfg_path, "w") as f:
+            json.dump(config, f, indent=2)
+        self._slaf_array.config = config
+
+    def __delitem__(self, key: str) -> None:
+        if key not in self.keys():
+            raise KeyError(f"varp key '{key}' not found")
+        config = self._slaf_array.config
+        if self._config_key in config and key in config[self._config_key].get(
+            "immutable", []
+        ):
+            raise ValueError(f"varp key '{key}' is immutable and cannot be deleted")
+        table = getattr(self._slaf_array, "genesxgenes", None)
+        if table is None:
+            raise KeyError(f"varp key '{key}' not found")
+        tbl = table.to_table()
+        cols = [c for c in tbl.column_names if c != key]
+        if not cols:
+            raise ValueError("Cannot delete the only varp key")
+        new_table = pa.table({c: tbl.column(c) for c in cols})
+        table_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path,
+            self._slaf_array.config.get("tables", {}).get(
+                "genesxgenes", "genesxgenes.lance"
+            ),
+        )
+        lance.write_dataset(new_table, table_path, data_storage_version="2.1")
+        self._slaf_array.genesxgenes = lance.dataset(table_path)
+        cfg_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path, "config.json"
+        )
+        with self._slaf_array._open_file(cfg_path) as f:
+            config = json.load(f)
+        for k in ("available", "mutable", "dimensions"):
+            if k in config[self._config_key] and key in config[self._config_key][k]:
+                config[self._config_key][k] = [
+                    x for x in config[self._config_key][k] if x != key
+                ]
+        with self._slaf_array._open_file(cfg_path, "w") as f:
+            json.dump(config, f, indent=2)
+        self._slaf_array.config = config
+
+
 class LazyUnsView(LazyDictionaryViewMixin):
     """
     Dictionary-like view of uns (unstructured metadata).
@@ -3151,6 +3629,30 @@ class LazyAnnData(LazySparseMixin):
         if not hasattr(self, "_varm"):
             self._varm = LazyVarmView(self)
         return self._varm
+
+    @property
+    def obsp(self) -> LazyObspView:
+        """
+        Pairwise obs annotations (e.g. connectivities, distances).
+
+        Dictionary-like view over obsp matrices stored as COO in cellsxcells.lance.
+        Each key returns a square (n_cells, n_cells) numpy array.
+        """
+        if not hasattr(self, "_obsp"):
+            self._obsp = LazyObspView(self)
+        return self._obsp
+
+    @property
+    def varp(self) -> LazyVarpView:
+        """
+        Pairwise var annotations.
+
+        Dictionary-like view over varp matrices stored as COO in genesxgenes.lance.
+        Each key returns a square (n_genes, n_genes) numpy array.
+        """
+        if not hasattr(self, "_varp"):
+            self._varp = LazyVarpView(self)
+        return self._varp
 
     @property
     def uns(self) -> LazyUnsView:
