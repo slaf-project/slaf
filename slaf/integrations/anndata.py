@@ -2884,9 +2884,12 @@ class LazyObspView(LazyDictionaryViewMixin):
             id_to_idx = {i: i for i in range(n)}
         mat = np.zeros((n, n), dtype=np.float32)
         for row in df.iter_rows(named=True):
-            i = id_to_idx[int(row[self._id_col_i])]
-            j = id_to_idx[int(row[self._id_col_j])]
-            mat[i, j] = float(row[key])
+            ri, rj = row[self._id_col_i], row[self._id_col_j]
+            if ri is None or rj is None:
+                continue
+            i = id_to_idx[int(ri)]
+            j = id_to_idx[int(rj)]
+            mat[i, j] = float(row[key] if row[key] is not None else 0.0)
         return mat
 
     def __setitem__(self, key: str, value: np.ndarray):
@@ -2944,6 +2947,7 @@ class LazyObspView(LazyDictionaryViewMixin):
             lance.write_dataset(
                 coo_table,
                 table_path,
+                mode="overwrite",
                 data_storage_version="2.1",
             )
         else:
@@ -2958,11 +2962,18 @@ class LazyObspView(LazyDictionaryViewMixin):
                 }
             )
             merged = existing.join(
-                new_df, on=[self._id_col_i, self._id_col_j], how="left"
-            ).with_columns(pl.col(key).fill_null(0.0))
+                new_df,
+                on=[self._id_col_i, self._id_col_j],
+                how="full",
+                coalesce=True,
+            )
+            for c in merged.columns:
+                if c not in (self._id_col_i, self._id_col_j):
+                    merged = merged.with_columns(pl.col(c).fill_null(0.0))
             lance.write_dataset(
                 merged.to_arrow(),
                 table_path,
+                mode="overwrite",
                 data_storage_version="2.1",
             )
         self._slaf_array.cellsxcells = lance.dataset(table_path)
@@ -3012,7 +3023,9 @@ class LazyObspView(LazyDictionaryViewMixin):
                 "cellsxcells", "cellsxcells.lance"
             ),
         )
-        lance.write_dataset(new_table, table_path, data_storage_version="2.1")
+        lance.write_dataset(
+            new_table, table_path, mode="overwrite", data_storage_version="2.1"
+        )
         self._slaf_array.cellsxcells = lance.dataset(table_path)
         cfg_path = self._slaf_array._join_path(
             self._slaf_array.slaf_path, "config.json"
@@ -3103,9 +3116,12 @@ class LazyVarpView(LazyDictionaryViewMixin):
             id_to_idx = {i: i for i in range(n)}
         mat = np.zeros((n, n), dtype=np.float32)
         for row in df.iter_rows(named=True):
-            i = id_to_idx[int(row[self._id_col_i])]
-            j = id_to_idx[int(row[self._id_col_j])]
-            mat[i, j] = float(row[key])
+            ri, rj = row[self._id_col_i], row[self._id_col_j]
+            if ri is None or rj is None:
+                continue
+            i = id_to_idx[int(ri)]
+            j = id_to_idx[int(rj)]
+            mat[i, j] = float(row[key] if row[key] is not None else 0.0)
         return mat
 
     def __setitem__(self, key: str, value: np.ndarray) -> None:
@@ -3162,6 +3178,7 @@ class LazyVarpView(LazyDictionaryViewMixin):
             lance.write_dataset(
                 coo_table,
                 table_path,
+                mode="overwrite",
                 data_storage_version="2.1",
             )
         else:
@@ -3176,11 +3193,18 @@ class LazyVarpView(LazyDictionaryViewMixin):
                 }
             )
             merged = existing.join(
-                new_df, on=[self._id_col_i, self._id_col_j], how="left"
-            ).with_columns(pl.col(key).fill_null(0.0))
+                new_df,
+                on=[self._id_col_i, self._id_col_j],
+                how="full",
+                coalesce=True,
+            )
+            for c in merged.columns:
+                if c not in (self._id_col_i, self._id_col_j):
+                    merged = merged.with_columns(pl.col(c).fill_null(0.0))
             lance.write_dataset(
                 merged.to_arrow(),
                 table_path,
+                mode="overwrite",
                 data_storage_version="2.1",
             )
         self._slaf_array.genesxgenes = lance.dataset(table_path)
@@ -3230,7 +3254,9 @@ class LazyVarpView(LazyDictionaryViewMixin):
                 "genesxgenes", "genesxgenes.lance"
             ),
         )
-        lance.write_dataset(new_table, table_path, data_storage_version="2.1")
+        lance.write_dataset(
+            new_table, table_path, mode="overwrite", data_storage_version="2.1"
+        )
         self._slaf_array.genesxgenes = lance.dataset(table_path)
         cfg_path = self._slaf_array._join_path(
             self._slaf_array.slaf_path, "config.json"
