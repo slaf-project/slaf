@@ -2285,6 +2285,14 @@ class SLAFConverter:
                     self._save_checkpoint(output_path, checkpoint_data)
                 raise
 
+    @staticmethod
+    def _to_scalar(val):
+        """Convert a numpy scalar or 0-d array to a Python scalar for safe use in boolean conditions."""
+        arr = np.asarray(val)
+        if arr.ndim == 0:
+            return arr.item()
+        return float(arr.flat[0])
+
     def _validate_optimized_dtypes(self, reader):
         """Validate that data fits in optimized data types and determine appropriate value type"""
         if not self.use_optimized_dtypes:
@@ -2322,8 +2330,8 @@ class SLAFConverter:
 
                 # Check if original data is integer or float
                 is_integer = np.issubdtype(sample_values.dtype, np.integer)
-                max_value = np.max(sample_values)
-                min_value = np.min(sample_values)
+                max_value = self._to_scalar(np.max(sample_values))
+                min_value = self._to_scalar(np.min(sample_values))
 
                 if is_integer and max_value <= 65535 and min_value >= 0:
                     logger.info(
@@ -2367,12 +2375,22 @@ class SLAFConverter:
                 data = X_group["data"]
                 sample_size = min(10000, len(data))
                 # Use sequential sampling instead of random to avoid indexing issues
-                sample_data = data[:sample_size]
+                sample_data = np.asarray(data[:sample_size])
+
+                # Object dtype (e.g. from R→anndata) causes ambiguous truth value in comparisons
+                if sample_data.dtype == np.dtype("O"):
+                    try:
+                        sample_data = np.asarray(sample_data, dtype=np.float64)
+                    except (ValueError, TypeError):
+                        logger.warning(
+                            "X 'data' has object dtype and could not coerce to float; using float32"
+                        )
+                        return False, "float32"
 
                 # Check if original data is integer or float
                 is_integer = np.issubdtype(sample_data.dtype, np.integer)
-                max_value = np.max(sample_data)
-                min_value = np.min(sample_data)
+                max_value = self._to_scalar(np.max(sample_data))
+                min_value = self._to_scalar(np.min(sample_data))
 
                 if is_integer and max_value <= 65535 and min_value >= 0:
                     logger.info(
@@ -2426,8 +2444,8 @@ class SLAFConverter:
 
                     # Check if data is integer or float
                     is_integer = np.issubdtype(sample_data.dtype, np.integer)
-                    max_value = np.max(sample_data)
-                    min_value = np.min(sample_data)
+                    max_value = self._to_scalar(np.max(sample_data))
+                    min_value = self._to_scalar(np.min(sample_data))
 
                     if is_integer and max_value <= 65535 and min_value >= 0:
                         logger.info(
@@ -2520,10 +2538,21 @@ class SLAFConverter:
                             coo = sparse.coo_matrix(sample_adata.X)
             sample_data = coo.data[:100000]
 
+        # Object dtype causes ambiguous truth value in comparisons; coerce or fallback
+        sample_data = np.asarray(sample_data)
+        if sample_data.dtype == np.dtype("O"):
+            try:
+                sample_data = np.asarray(sample_data, dtype=np.float64)
+            except (ValueError, TypeError):
+                logger.warning(
+                    "AnnData X has object dtype and could not coerce to float; using float32"
+                )
+                return False, "float32"
+
         # Check if data is integer or float
         is_integer = np.issubdtype(sample_data.dtype, np.integer)
-        max_value = np.max(sample_data)
-        min_value = np.min(sample_data)
+        max_value = self._to_scalar(np.max(sample_data))
+        min_value = self._to_scalar(np.min(sample_data))
 
         if is_integer and max_value <= 65535 and min_value >= 0:
             logger.info(
