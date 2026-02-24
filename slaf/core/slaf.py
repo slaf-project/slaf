@@ -499,6 +499,33 @@ class SLAFArray:
         else:
             self.layers = None
 
+        # Optional: obsp (cellsxcells) and varp (genesxgenes) COO tables
+        if "cellsxcells" in self.config.get("tables", {}):
+            try:
+                self.cellsxcells = lance.dataset(
+                    self._join_path(
+                        self.slaf_path, self.config["tables"]["cellsxcells"]
+                    )
+                )
+            except Exception as e:
+                logger.warning(f"Could not load cellsxcells dataset: {e}")
+                self.cellsxcells = None
+        else:
+            self.cellsxcells = None
+
+        if "genesxgenes" in self.config.get("tables", {}):
+            try:
+                self.genesxgenes = lance.dataset(
+                    self._join_path(
+                        self.slaf_path, self.config["tables"]["genesxgenes"]
+                    )
+                )
+            except Exception as e:
+                logger.warning(f"Could not load genesxgenes dataset: {e}")
+                self.genesxgenes = None
+        else:
+            self.genesxgenes = None
+
     def _ensure_metadata_loaded(self):
         """Ensure metadata is loaded (lazy loading with async support)"""
         if self._metadata_loaded:
