@@ -36,6 +36,23 @@ SLAF automatically:
 - ✅ Tracks which file each cell came from
 - ✅ Combines metadata intelligently
 
+### Harmonized vs. non-harmonized .h5ad files
+
+When converting **multiple** .h5ad files, SLAF expects **harmonized** data: all files should share the same schema (same `.obs`, `.obsm`, and `.var` columns). If your files are harmonized, you can use `slaf convert` directly on a directory or list of files.
+
+If your files have **different schemas** (e.g. some have extra or missing `.obs`/`.obsm`/`.var` columns), conversion may fail or behave unexpectedly. In that case, **merge your files into a single .h5ad first** using AnnData’s concatenation, then convert the result with SLAF:
+
+- **In memory**: use [anndata.concat](https://anndata.readthedocs.io/en/stable/generated/anndata.concat.html) to merge AnnData objects. You can control how missing columns are handled (e.g. `join="outer"` to fill with missing values).
+- **On disk (recommended for large data)**: use [anndata.concat_on_disk](https://anndata.readthedocs.io/en/stable/generated/anndata.concat_on_disk.html) to merge .h5ad files without loading everything into memory.
+
+After you have a single merged .h5ad, run:
+
+```bash
+slaf convert merged.h5ad output.slaf
+```
+
+**Summary**: Harmonized files (exact same schema) → use `slaf convert` on multiple files. Non-harmonized files → merge with `anndata.concat` or `anndata.concat_on_disk`, then `slaf convert` the merged file.
+
 ## Appending to Existing Datasets
 
 Add new data to an existing SLAF dataset:
@@ -169,7 +186,7 @@ The validation command performs comprehensive compatibility checks:
 - ✅ **File Integrity**: Files exist, are readable, and not empty
 - ✅ **Format Consistency**: All files use the same format (h5ad, 10x_mtx, etc.)
 - ✅ **Gene Compatibility**: All files have identical gene sets
-- ✅ **Metadata Schema**: Cell metadata columns are compatible across files
+- ✅ **Metadata Schema**: Cell metadata columns are compatible across files (same .obs/.obsm/.var schema). If your files have different schemas, merge them first with `anndata.concat_on_disk()` or `anndata.concat()`, then convert the single .h5ad—see [Harmonized vs. non-harmonized .h5ad files](#harmonized-vs-non-harmonized-h5ad-files).
 - ✅ **Value Types**: Expression data types are consistent (uint16, float32, etc.)
 - ✅ **File Sizes**: Ensures files contain actual data (not empty)
 
@@ -202,6 +219,7 @@ When validation fails, you get clear error messages:
 ❌ Validation failed: File batch_003.h5ad has incompatible cell metadata schema:
   Missing columns: ['cell_type', 'batch']
   Extra columns: ['cluster_id']
+# Tip: Merge non-harmonized files first with anndata.concat_on_disk() or anndata.concat(), then convert the single .h5ad.
 
 # Format mismatch error
 ❌ Validation failed: Multiple formats detected in directory
