@@ -1,9 +1,9 @@
+from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Any
 
 import numpy as np
 import torch
-from abc import ABC, abstractmethod
 
 from slaf.core.slaf import SLAFArray
 
@@ -224,7 +224,6 @@ class SLAFTokenizer(ABC):
             # Fallback for testing - direct mapping with offset
             return gene_ids_array + 4  # Simple offset like original test
 
-
     def get_vocab_info(self) -> dict[str, Any]:
         """
         Get vocabulary information for debugging and analysis.
@@ -250,7 +249,7 @@ class SLAFTokenizer(ABC):
         self,
         gene_sequences: list[list[int] | list[tuple[int, float]]],
         expr_sequences: list[list[float]] | None = None,
-        max_genes: int | None = None,
+        max_genes: int = 0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         pass
 
@@ -276,6 +275,7 @@ class SLAFTokenizer(ABC):
         """
         pass
 
+
 class ScGPTTokenizer(SLAFTokenizer):
     """
     scGPT tokenizer.
@@ -296,6 +296,7 @@ class ScGPTTokenizer(SLAFTokenizer):
         >>> print(f"Vocabulary size: {vocab_info['vocab_size']}")
         Vocabulary size: 50000
     """
+
     def __init__(
         self,
         slaf_array: SLAFArray,
@@ -416,9 +417,7 @@ class ScGPTTokenizer(SLAFTokenizer):
                 # Handle expression tokens - don't bin if already binned by window function
                 if len(exprs) > 0 and isinstance(exprs[0], int | np.integer):
                     # Already binned by window function - just convert to tokens
-                    expr_tokens = (
-                        np.array(exprs, dtype=np.int64) + self.expr_bin_start
-                    )
+                    expr_tokens = np.array(exprs, dtype=np.int64) + self.expr_bin_start
                 else:
                     # Raw values - need to bin them
                     expr_tokens = self._expression_to_bin_vectorized(
@@ -576,7 +575,7 @@ class ScGPTTokenizer(SLAFTokenizer):
                 special_tokens.append("PAD")
             elif token == self.special_tokens["MASK"]:
                 special_tokens.append("MASK")
-            elif token >= self.expr_bin_start: # Expression token
+            elif token >= self.expr_bin_start:  # Expression token
                 bin_id = token - self.expr_bin_start
                 expr_value = bin_id * self.expr_bin_size
                 expressions.append(expr_value)
@@ -615,12 +614,11 @@ class GeneformerTokenizer(SLAFTokenizer):
         Vocabulary size: 50000
     """
 
-    @abstractmethod
     def tokenize(
         self,
         gene_sequences: list[list[int] | list[tuple[int, float]]],
         expr_sequences: list[list[float]] | None = None,
-        max_genes: int | None = 2048,
+        max_genes: int = 2048,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         pass
         """
@@ -661,7 +659,7 @@ class GeneformerTokenizer(SLAFTokenizer):
         # Use fast numpy-based approach (same as original test)
         import numpy as np
 
-        array_width = max_genes
+        array_width = max_sequence_length
 
         token_array = np.full(
             (batch_size, array_width), self.special_tokens["PAD"], dtype=np.int64
@@ -759,4 +757,3 @@ class GeneformerTokenizer(SLAFTokenizer):
             "expressions": [],
             "special_tokens": special_tokens,
         }
-
