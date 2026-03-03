@@ -94,6 +94,7 @@ class LanceDataSource(DataSource):
         self.lance_path = lance_path
         self._dataset: lance.Dataset | None = None
         self._fragment_count: int | None = None
+        self._fragments: list | None = None
 
     @property
     def dataset(self):
@@ -102,11 +103,17 @@ class LanceDataSource(DataSource):
             self._dataset = lance.dataset(self.lance_path)
         return self._dataset
 
+    def _get_fragments(self) -> list:
+        """Return cached list of fragments; only lists once (avoids slow repeated S3/metadata calls)."""
+        if self._fragments is None:
+            self._fragments = list(self.dataset.get_fragments())
+            self._fragment_count = len(self._fragments)
+        return self._fragments
+
     def get_partition_count(self) -> int:
         """Return number of fragments in the Lance dataset."""
         if self._fragment_count is None:
-            self._fragment_count = len(list(self.dataset.get_fragments()))
-        # After the check above, _fragment_count is guaranteed to be int
+            self._get_fragments()
         assert self._fragment_count is not None
         return self._fragment_count
 
@@ -123,7 +130,7 @@ class LanceDataSource(DataSource):
         Returns:
             Iterator of Polars DataFrames from the fragment
         """
-        fragments = list(self.dataset.get_fragments())
+        fragments = self._get_fragments()
         if partition_index >= len(fragments):
             raise IndexError(
                 f"Partition index {partition_index} out of range "
