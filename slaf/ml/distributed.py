@@ -110,6 +110,11 @@ class DistributedSLAFDataLoader:
     SLAF-specific distributed dataloader.
 
     Composes generic distributed components with SLAF-specific configuration.
+
+    Queue warmup: Workers start asynchronously. Before iterating, wait for the
+    queue to fill (e.g. call wait_for_queue()) or you may see timeouts.
+    See benchmarks/benchmark_cloud_dataloaders_modal.py for a full pattern
+    (raw_mode=True, wait for queue size >= 50, then iterate).
     """
 
     def __init__(
@@ -334,3 +339,33 @@ class DistributedSLAFDataLoader:
     def __iter__(self):
         """Iterate over batches."""
         return iter(self.dataloader)
+
+    def wait_for_queue(
+        self,
+        min_batches: int = 50,
+        timeout_seconds: float = 300,
+        poll_interval: float = 1.0,
+    ) -> int:
+        """Wait for workers to fill the queue before starting consumption.
+
+        Call this after creating the dataloader and before iterating, so the
+        queue has enough batches to avoid consumer timeouts.
+
+        Returns:
+            Queue size when target was reached (or final size if timeout).
+        """
+        import time
+
+        queue = modal.Queue.from_name(self.queue_name, create_if_missing=True)
+        for _ in range(int(timeout_seconds)):
+            try:
+                size = queue.len()
+                if size >= min_batches:
+                    return size
+            except Exception:
+                pass
+            time.sleep(poll_interval)
+        try:
+            return queue.len()
+        except Exception:
+            return 0
