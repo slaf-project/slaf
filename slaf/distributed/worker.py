@@ -300,8 +300,14 @@ def prefetch_worker(
                         all_futures_complete and len(all_samples_batch) > 0
                     ):
                         try:
+                            first_put = total_batches == 0
                             queue.put_many(all_samples_batch)
                             total_batches += len(all_samples_batch)
+                            if first_put:
+                                print(
+                                    f"[{worker_id}] First batches put to queue "
+                                    f"(count={len(all_samples_batch)}, rows_so_far={total_rows})"
+                                )
                         except Exception as e:
                             print(f"[{worker_id}] Error putting samples to queue: {e}")
                             # Fallback: try individual puts if batch fails
