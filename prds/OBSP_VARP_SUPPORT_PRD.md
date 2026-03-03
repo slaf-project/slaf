@@ -190,25 +190,29 @@ Mirror obsm/varm:
 
 ## 7. Implementation Order (checklist)
 
-- [ ] **Step 1: Schema and config (PRD only)**
+- [x] **Step 1: Schema and config (PRD only)**
   - Define COO table schemas and config layout (this PRD).
   - **Commit:** `docs(prd): add obsp/varp implementation checklist and commit messages`
 
-- [ ] **Step 2: Converter**
+- [x] **Step 2: Converter**
   - Implement `_convert_obsp` and `_convert_varp` (dense/sparse → COO); create `cellsxcells.lance` / `genesxgenes.lance` when present; extend `_save_config` for obsp_keys/varp_keys.
   - **Commit:** `feat(converter): add obsp and varp COO conversion from h5ad`
 
-- [ ] **Step 3: SLAFArray**
+- [x] **Step 3: SLAFArray**
   - In `_setup_datasets()`, optionally load `cellsxcells` and `genesxgenes` from config.
   - **Commit:** `feat(slaf): load cellsxcells and genesxgenes tables when present`
 
-- [ ] **Step 4: COO views**
+- [x] **Step 4: COO views**
   - Implement `LazyObspView` and `LazyVarpView` (COO get/set/del, keys, selectors); add `obsp` and `varp` on `LazyAnnData`.
   - **Commit:** `feat(anndata): add LazyObspView and LazyVarpView with COO backend`
 
-- [ ] **Step 5: Tests**
+- [x] **Step 5: Tests**
   - Conversion e2e, mutations, selectors, immutability, empty/absent obsp/varp.
   - **Commit:** `test(obsp,varp): add conversion, mutations, and selector tests`
+
+- [x] **Step 6: Consolidation (refactor)**
+  - Single module-level `_sql_condition_to_polars()` used by metadata views and COO views; `LazyCooViewBase` for shared obsp/varp logic; fix overwrite and full-join coalesce for writes.
+  - **Commits:** `fix(anndata): obsp/varp write overwrite and full-join coalesce`, `refactor(anndata): consolidate SQL→Polars and COO view base`
 
 ---
 
