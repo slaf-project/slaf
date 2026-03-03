@@ -94,7 +94,7 @@ class LanceDataSource(DataSource):
             lance_path: Path to Lance dataset
         """
         self.lance_path = lance_path
-        self._dataset: lance.Dataset | None = None
+        self._dataset: lance.Dataset | None = None  # type: ignore[assignment]
         self._fragment_count: int | None = None
         self._fragments: list | None = None
 
