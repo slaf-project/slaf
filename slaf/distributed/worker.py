@@ -351,26 +351,36 @@ def prefetch_worker(
                         all_futures_complete and len(all_samples_batch) > 0
                     ):
                         n_put = len(all_samples_batch)
+                        print(
+                            f"[{worker_id}] About to put_many(count={n_put}) to queue"
+                        )
+                        # Put in chunks to avoid blocking on one large put_many (Modal heartbeat timeout)
+                        put_chunk_size = 50
+                        total_put = 0
                         try:
                             first_put = total_batches == 0
-                            queue.put_many(all_samples_batch)
-                            total_batches += n_put
-                            if first_put:
+                            for i in range(0, n_put, put_chunk_size):
+                                chunk = all_samples_batch[i : i + put_chunk_size]
+                                queue.put_many(chunk)
+                                total_put += len(chunk)
+                                if first_put and total_put == len(chunk):
+                                    print(
+                                        f"[{worker_id}] First batches put to queue "
+                                        f"(chunk={len(chunk)}, rows_so_far={total_rows})"
+                                    )
+                            total_batches += total_put
+                            if total_put >= 50 and not first_put:
                                 print(
-                                    f"[{worker_id}] First batches put to queue "
-                                    f"(count={n_put}, rows_so_far={total_rows})"
-                                )
-                            elif n_put >= 50:
-                                print(
-                                    f"[{worker_id}] put_many(count={n_put}), total_batches={total_batches}"
+                                    f"[{worker_id}] put_many(total={total_put}), total_batches={total_batches}"
                                 )
                         except Exception as e:
                             print(f"[{worker_id}] Error putting samples to queue: {e}")
                             # Fallback: try individual puts if batch fails
-                            for sample in all_samples_batch:
+                            for sample in all_samples_batch[total_put:]:
                                 try:
                                     queue.put(sample)
                                     total_batches += 1
+                                    total_put += 1
                                 except Exception as e2:
                                     print(
                                         f"[{worker_id}] Error putting individual sample: {e2}"
