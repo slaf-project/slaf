@@ -3,16 +3,22 @@ Generic worker implementation for distributed dataloading.
 
 """
 
+import asyncio
 import importlib
 import pickle
 import queue as queue_module
 import random
 import threading
 import time
+import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import polars as pl
+
+# Modal queue item size limit (1 MiB); we compress samples to stay under this
+# See https://modal.com/docs/guide/queues and https://modal.com/docs/reference/modal.Queue
+MODAL_QUEUE_ITEM_SIZE_LIMIT_BYTES = 1024 * 1024
 
 
 def prefetch_worker(
@@ -264,43 +270,64 @@ def prefetch_worker(
     total_rows = 0
     epochs = processor_config.get("n_epochs", 1)
 
-    # Dedicated writer thread so main loop doesn't block on slow Modal queue.put_many
+    # Async writer: use Modal's .aio so we don't block on network I/O (see modal.com/docs/guide/queues)
     writer_queue: queue_module.Queue[list[dict[str, Any]] | None] = queue_module.Queue(
         maxsize=64
     )
-    writer_total_put = {"n": 0}  # mutable so thread can update
+    writer_total_put = {"n": 0}
 
-    def _writer_thread_fn() -> None:
+    async def _writer_async() -> None:
         put_count = 0
+        loop = asyncio.get_event_loop()
         while True:
-            batch = writer_queue.get()
+            batch = await loop.run_in_executor(None, writer_queue.get)
             if batch is None:
                 writer_queue.task_done()
                 break
             try:
-                # Log serialized size (Modal has size limits per message/batch)
-                try:
-                    serialized_bytes = len(pickle.dumps(batch))
-                except Exception:
-                    serialized_bytes = -1
-                print(
-                    f"[{worker_id}] put_many chunk: {len(batch)} items, "
-                    f"serialized_size={serialized_bytes:,} bytes"
+                # Compress each sample so each queue item stays under Modal's 1 MiB limit
+                items_to_put: list[bytes | dict[str, Any]] = []
+                for sample in batch:
+                    if isinstance(sample, dict) and "end_of_epoch" in sample:
+                        items_to_put.append(sample)
+                    else:
+                        items_to_put.append(
+                            zlib.compress(pickle.dumps(sample), level=6)
+                        )
+                max_compressed = max(
+                    (len(x) for x in items_to_put if isinstance(x, bytes)),
+                    default=0,
                 )
-                queue.put_many(batch)
+                total_compressed = sum(
+                    len(x) for x in items_to_put if isinstance(x, bytes)
+                )
+                print(
+                    f"[{worker_id}] put.aio chunk: {len(items_to_put)} items, "
+                    f"compressed max_per_item={max_compressed:,} bytes, total={total_compressed:,}"
+                )
+                if max_compressed > MODAL_QUEUE_ITEM_SIZE_LIMIT_BYTES:
+                    print(
+                        f"[{worker_id}] WARNING: max item {max_compressed:,} > "
+                        f"Modal limit {MODAL_QUEUE_ITEM_SIZE_LIMIT_BYTES:,}"
+                    )
+                for item in items_to_put:
+                    await queue.put.aio(item)
                 put_count += len(batch)
                 writer_total_put["n"] = put_count
                 if put_count == len(batch):
                     print(
                         f"[{worker_id}] First batches put to queue "
-                        f"(chunk={len(batch)}, writer thread)"
+                        f"(chunk={len(batch)}, async writer)"
                     )
             except Exception as e:
-                print(f"[{worker_id}] Writer thread Error putting to queue: {e}")
+                print(f"[{worker_id}] Async writer Error putting to queue: {e}")
             finally:
                 writer_queue.task_done()
 
-    writer_thread = threading.Thread(target=_writer_thread_fn, daemon=False)
+    def _run_async_writer() -> None:
+        asyncio.run(_writer_async())
+
+    writer_thread = threading.Thread(target=_run_async_writer, daemon=False)
     writer_thread.start()
 
     if queue_name:

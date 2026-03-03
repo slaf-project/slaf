@@ -14,7 +14,7 @@ from slaf.distributed.coordinator import Coordinator
 
 # Import generic distributed components
 from slaf.distributed.data_source import LanceDataSource
-from slaf.distributed.dataloader import DistributedDataLoader
+from slaf.distributed.dataloader import DecompressingQueueWrapper, DistributedDataLoader
 from slaf.distributed.processor import DataSchema
 
 # Import SLAF-specific components (for type hints and adapters)
@@ -320,6 +320,8 @@ class DistributedSLAFDataLoader:
         # - We get the same queue by name here; DistributedDataLoader iterates via queue.get_many().
         # So the queue we pass into DistributedDataLoader is the same one workers write to.
         queue = modal.Queue.from_name(queue_name, create_if_missing=True)
+        # Workers compress items (zlib) to stay under Modal's 1 MiB/item limit; decompress on read
+        queue = DecompressingQueueWrapper(queue)
 
         # Create dataloader with queue object and batch_size (framework-agnostic)
         # Enable concurrent prefetching with multiple threads making concurrent get_many() calls
