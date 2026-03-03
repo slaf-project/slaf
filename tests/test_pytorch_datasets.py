@@ -320,7 +320,7 @@ class TestSLAFIterableDataset:
 
         # Test initial state
         assert prefetcher.has_batch() is False
-        assert prefetcher.get_batch() is None
+        assert prefetcher.get_batch(timeout=0.1) is None
 
         # Test stats
         stats = prefetcher.get_stats()
