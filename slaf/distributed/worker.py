@@ -5,6 +5,7 @@ Generic worker implementation for distributed dataloading.
 
 import importlib
 import random
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -323,31 +324,30 @@ def prefetch_worker(
                                 f"[{worker_id}] First process_batch: partition={partition_idx}, "
                                 f"rows={rows}, dfs={len(batch_dfs)}"
                             )
+                        t0 = time.perf_counter()
                         samples = processor.process_batch(
                             batch_dfs,
                             epoch=epoch,
                             partition_id=partition_idx,
                             is_partition_exhausted=is_exhausted,
                         )
+                        elapsed = time.perf_counter() - t0
                         n_samples = len(samples)
                         all_samples_batch.extend(samples)
                         total_rows += rows
-                        # Log when process_batch returns 0 (boundary handler holding partial groups)
-                        if (
-                            n_samples == 0
-                            and total_batches == 0
-                            and completed_futures <= 3
+                        # Log process_batch timing and sample count (first 4 per worker, or if 0/slow)
+                        if total_batches == 0 and (
+                            completed_futures <= 4 or n_samples == 0 or elapsed > 5.0
                         ):
                             print(
-                                f"[{worker_id}] process_batch returned 0 samples "
-                                f"(partition={partition_idx}, boundary may be holding partial groups)"
+                                f"[{worker_id}] process_batch done: partition={partition_idx}, "
+                                f"samples={n_samples}, elapsed={elapsed:.2f}s"
                             )
 
                     # Batch put_many when we have enough samples or all futures complete
-                    # This maintains queue efficiency while preserving partition processing order
-                    # Use 100 for batching; flush any remainder when round completes so queue populates sooner
+                    # Use low threshold (10) so queue populates quickly; flush remainder when round completes
                     all_futures_complete = completed_futures >= len(sampled_partitions)
-                    if len(all_samples_batch) >= 100 or (
+                    if len(all_samples_batch) >= 10 or (
                         all_futures_complete and len(all_samples_batch) > 0
                     ):
                         n_put = len(all_samples_batch)

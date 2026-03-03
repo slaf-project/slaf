@@ -30,8 +30,11 @@ image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("build-essential", "python3-dev", "git")
     .pip_install("uv")
+    .uv_pip_install(
+        "git+https://github.com/slaf-project/slaf.git@distributed_dataloader#egg=slafdb[ml]",
+        force_build=True,
+    )
     .run_commands(
-        'uv pip install "git+https://github.com/slaf-project/slaf.git@distributed_dataloader#egg=slafdb[ml]"',
         f"echo 'Image built at {_BUILD_TS}'",
     )
 )
