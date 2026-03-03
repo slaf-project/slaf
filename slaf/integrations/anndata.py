@@ -1,6 +1,6 @@
 import json
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import lance
 import numpy as np
@@ -2837,8 +2837,11 @@ class LazyCooViewBase(LazyDictionaryViewMixin):
         table = getattr(self._slaf_array, self._table_attr, None)
         if table is None:
             raise KeyError(f"{self._view_name} key '{key}' not found")
-        df = pl.from_arrow(
-            table.to_table(columns=[self._id_col_i, self._id_col_j, key])
+        df = cast(
+            pl.DataFrame,
+            pl.from_arrow(
+                table.to_table(columns=[self._id_col_i, self._id_col_j, key])
+            ),
         )
         selected = self._get_selected_ids()
         if selected is not None:
@@ -2923,7 +2926,7 @@ class LazyCooViewBase(LazyDictionaryViewMixin):
                 data_storage_version="2.1",
             )
         else:
-            existing = pl.from_arrow(table.to_table())
+            existing = cast(pl.DataFrame, pl.from_arrow(table.to_table()))
             if key in existing.columns:
                 existing = existing.drop(key)
             new_df = pl.DataFrame(
