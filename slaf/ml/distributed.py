@@ -126,7 +126,7 @@ class DistributedSLAFDataLoader:
         tokenizer: SLAFTokenizer | None = None,
         n_workers: int = 64,
         n_scanners: int = 16,
-        prefetch_batch_size: int = 262144,  # 256K rows per Lance batch; lower = less worker memory (default was 4M → OOM on 32GB)
+        prefetch_batch_size: int = 16384,  # 16K rows per Lance batch (small default for testing; raise e.g. 262144 for prod)
         prefetch_batch_count: int = 32,
         batch_size: int = 32,
         max_genes: int = 1024,
@@ -202,7 +202,7 @@ class DistributedSLAFDataLoader:
         coordinator = Coordinator(data_source, n_workers)
         assignments = coordinator.assign_partitions(seed=seed)
 
-        # Create queue and KV store
+        # Create queue and KV store (same name used for consumer and workers — see queue flow below)
         if queue_name is None:
             queue_name = f"slaf-dataloader-{id(slaf_array)}"
         modal.Queue.from_name(queue_name, create_if_missing=True)
@@ -315,7 +315,11 @@ class DistributedSLAFDataLoader:
                 traceback.print_exc()
                 raise
 
-        # Create queue object for the dataloader
+        # Queue flow (consumer and workers use the SAME queue):
+        # - queue_name is set above (or passed in); workers are spawned with queue_name=queue_name.
+        # - Each worker does modal.Queue.from_name(queue_name, ...) and calls queue.put_many(...).
+        # - We get the same queue by name here; DistributedDataLoader iterates via queue.get_many().
+        # So the queue we pass into DistributedDataLoader is the same one workers write to.
         queue = modal.Queue.from_name(queue_name, create_if_missing=True)
 
         # Create dataloader with queue object and batch_size (framework-agnostic)

@@ -329,23 +329,40 @@ def prefetch_worker(
                             partition_id=partition_idx,
                             is_partition_exhausted=is_exhausted,
                         )
+                        n_samples = len(samples)
                         all_samples_batch.extend(samples)
                         total_rows += rows
+                        # Log when process_batch returns 0 (boundary handler holding partial groups)
+                        if (
+                            n_samples == 0
+                            and total_batches == 0
+                            and completed_futures <= 3
+                        ):
+                            print(
+                                f"[{worker_id}] process_batch returned 0 samples "
+                                f"(partition={partition_idx}, boundary may be holding partial groups)"
+                            )
 
                     # Batch put_many when we have enough samples or all futures complete
                     # This maintains queue efficiency while preserving partition processing order
+                    # Use 100 for batching; flush any remainder when round completes so queue populates sooner
                     all_futures_complete = completed_futures >= len(sampled_partitions)
                     if len(all_samples_batch) >= 100 or (
                         all_futures_complete and len(all_samples_batch) > 0
                     ):
+                        n_put = len(all_samples_batch)
                         try:
                             first_put = total_batches == 0
                             queue.put_many(all_samples_batch)
-                            total_batches += len(all_samples_batch)
+                            total_batches += n_put
                             if first_put:
                                 print(
                                     f"[{worker_id}] First batches put to queue "
-                                    f"(count={len(all_samples_batch)}, rows_so_far={total_rows})"
+                                    f"(count={n_put}, rows_so_far={total_rows})"
+                                )
+                            elif n_put >= 50:
+                                print(
+                                    f"[{worker_id}] put_many(count={n_put}), total_batches={total_batches}"
                                 )
                         except Exception as e:
                             print(f"[{worker_id}] Error putting samples to queue: {e}")
@@ -369,6 +386,13 @@ def prefetch_worker(
                                 "rows_processed": total_rows,
                                 "status": "completed",
                             }
+
+                    # If round finished with no samples put, log once (helps debug queue size 0)
+                    elif all_futures_complete and total_batches == 0:
+                        print(
+                            f"[{worker_id}] Round complete but 0 samples put so far "
+                            f"(boundary may be holding partial groups; next round may flush)"
+                        )
 
                 # Put any remaining samples
                 if all_samples_batch:
