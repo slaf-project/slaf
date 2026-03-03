@@ -209,7 +209,19 @@ def prefetch_worker(
     _first_read_done: dict[str, bool] = {}  # worker_id -> whether we logged first read
 
     def read_from_partition(partition_idx: int, batches_to_read: int):
-        """Read multiple batches from a partition."""
+        """Read multiple batches from a partition.
+
+        Batch size flow (for memory tuning):
+        - batches_to_read = prefetch_batch_count (e.g. 32)
+        - reader yields DataFrames of up to prefetch_batch_size rows each
+          (LanceDataSource.create_reader(partition_idx, prefetch_batch_size)
+           → fragment.to_batches(batch_size=prefetch_batch_size))
+        - So we accumulate up to prefetch_batch_count DataFrames, total rows
+          ≤ prefetch_batch_count * prefetch_batch_size per partition.
+        - With n_scanners partitions in parallel, peak raw rows in memory
+          ≈ n_scanners * prefetch_batch_count * prefetch_batch_size (then
+          process_batch runs and we release batch_dfs after processing).
+        """
         try:
             reader = get_or_create_reader(partition_idx)
             if reader is None:
@@ -221,7 +233,7 @@ def prefetch_worker(
 
             for _ in range(batches_to_read):
                 try:
-                    batch_df = next(reader)
+                    batch_df = next(reader)  # size ≤ prefetch_batch_size rows
                     batch_dfs.append(batch_df)
                     total_rows += len(batch_df)
                     # Log once per worker when first read from any partition completes (diagnostics)
@@ -249,6 +261,10 @@ def prefetch_worker(
 
     print(
         f"[{worker_id}] Starting processing: {epochs} epochs, {len(partition_indices)} partitions"
+    )
+    print(
+        f"[{worker_id}] Prefetch: batch_size={prefetch_batch_size}, batch_count={prefetch_batch_count}, "
+        f"n_scanners={n_scanners} → peak raw rows/round ≤ {n_scanners * prefetch_batch_count * prefetch_batch_size:,}"
     )
 
     _epoch_first_round: dict[int, bool] = {}  # epoch -> have we logged first round
@@ -301,6 +317,7 @@ def prefetch_worker(
                         # Process batch through pipeline immediately (maintains partition state)
                         # Returns list of samples (one per group)
                         # Pass is_exhausted so boundary handler knows if partition is done
+                        # rows here = total rows in this chunk (sum of all batch_dfs); "First read completed" logged only the first batch
                         if total_batches == 0:
                             print(
                                 f"[{worker_id}] First process_batch: partition={partition_idx}, "
