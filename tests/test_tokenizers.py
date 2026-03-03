@@ -11,7 +11,7 @@ import pytest
 import torch
 
 from slaf.core.slaf import SLAFArray
-from slaf.ml.tokenizers import SLAFTokenizer, TokenizerType
+from slaf.ml.tokenizers import GeneformerTokenizer, ScGPTTokenizer
 
 
 class TestSLAFTokenizer:
@@ -26,16 +26,12 @@ class TestSLAFTokenizer:
         mock_slaf_array.var = mock_var
 
         # Test Geneformer initialization
-        tokenizer = SLAFTokenizer(
+        tokenizer = GeneformerTokenizer(
             slaf_array=mock_slaf_array,
-            tokenizer_type="geneformer",
             vocab_size=1000,
-            n_expression_bins=10,
         )
 
-        assert tokenizer.tokenizer_type == TokenizerType.GENEFORMER
         assert tokenizer.vocab_size == 1000
-        assert tokenizer.n_expression_bins == 10
         # The tokenizer creates a fallback vocabulary when mock data doesn't work
         assert len(tokenizer.gene_vocab) > 0
         assert tokenizer.special_tokens["CLS"] == 1
@@ -43,48 +39,15 @@ class TestSLAFTokenizer:
         assert tokenizer.special_tokens["PAD"] == 0
 
         # Test scGPT initialization
-        tokenizer = SLAFTokenizer(
+        tokenizer = ScGPTTokenizer(
             slaf_array=mock_slaf_array,
-            tokenizer_type="scgpt",
             vocab_size=1000,
             n_expression_bins=5,
         )
 
-        assert tokenizer.tokenizer_type == TokenizerType.SCPGPT
         assert tokenizer.n_expression_bins == 5
         assert tokenizer.expr_bin_start == 1000
         assert tokenizer.expr_bin_size == 0.2
-
-    def test_tokenizer_initialization_with_enum(self):
-        """Test SLAFTokenizer initialization with TokenizerType enum."""
-        # Mock SLAFArray
-        mock_slaf_array = Mock(spec=SLAFArray)
-        mock_var = Mock()
-        mock_var.index = pd.Index(["gene_0", "gene_1", "gene_2"])
-        mock_slaf_array.var = mock_var
-
-        # Test with enum
-        tokenizer = SLAFTokenizer(
-            slaf_array=mock_slaf_array,
-            tokenizer_type=TokenizerType.SCPGPT,
-            vocab_size=1000,
-        )
-
-        assert tokenizer.tokenizer_type == TokenizerType.SCPGPT
-
-    def test_invalid_tokenizer_type(self):
-        """Test that invalid tokenizer type raises ValueError."""
-        # Mock SLAFArray
-        mock_slaf_array = Mock(spec=SLAFArray)
-        mock_var = Mock()
-        mock_var.index = pd.Index(["gene_0", "gene_1", "gene_2"])
-        mock_slaf_array.var = mock_var
-
-        with pytest.raises(ValueError, match="Unsupported tokenizer type"):
-            SLAFTokenizer(
-                slaf_array=mock_slaf_array,
-                tokenizer_type="invalid",
-            )
 
     def test_geneformer_tokenization(self):
         """Test Geneformer tokenization."""
@@ -94,9 +57,8 @@ class TestSLAFTokenizer:
         mock_var.index = pd.Index(["gene_0", "gene_1", "gene_2"])
         mock_slaf_array.var = mock_var
 
-        tokenizer = SLAFTokenizer(
+        tokenizer = GeneformerTokenizer(
             slaf_array=mock_slaf_array,
-            tokenizer_type="geneformer",
             vocab_size=1000,
         )
 
@@ -126,9 +88,8 @@ class TestSLAFTokenizer:
         mock_var.index = pd.Index(["gene_0", "gene_1", "gene_2"])
         mock_slaf_array.var = mock_var
 
-        tokenizer = SLAFTokenizer(
+        tokenizer = ScGPTTokenizer(
             slaf_array=mock_slaf_array,
-            tokenizer_type="scgpt",
             vocab_size=1000,
             n_expression_bins=10,
         )
@@ -163,9 +124,8 @@ class TestSLAFTokenizer:
         mock_var.index = pd.Index(["gene_0", "gene_1", "gene_2"])
         mock_slaf_array.var = mock_var
 
-        tokenizer = SLAFTokenizer(
+        tokenizer = ScGPTTokenizer(
             slaf_array=mock_slaf_array,
-            tokenizer_type="scgpt",
             vocab_size=1000,
         )
 
@@ -188,9 +148,8 @@ class TestSLAFTokenizer:
         mock_var.index = pd.Index(["gene_0", "gene_1", "gene_2"])
         mock_slaf_array.var = mock_var
 
-        tokenizer = SLAFTokenizer(
+        tokenizer = GeneformerTokenizer(
             slaf_array=mock_slaf_array,
-            tokenizer_type="geneformer",
             vocab_size=1000,
         )
 
@@ -216,9 +175,8 @@ class TestSLAFTokenizer:
         mock_var.index = pd.Index(["gene_0", "gene_1", "gene_2"])
         mock_slaf_array.var = mock_var
 
-        tokenizer = SLAFTokenizer(
+        tokenizer = ScGPTTokenizer(
             slaf_array=mock_slaf_array,
-            tokenizer_type="scgpt",
             vocab_size=1000,
             n_expression_bins=10,
         )
@@ -248,9 +206,8 @@ class TestSLAFTokenizer:
         mock_var.index = pd.Index(["gene_0", "gene_1", "gene_2"])
         mock_slaf_array.var = mock_var
 
-        tokenizer = SLAFTokenizer(
+        tokenizer = GeneformerTokenizer(
             slaf_array=mock_slaf_array,
-            tokenizer_type="geneformer",
             vocab_size=1000,
         )
 
@@ -281,16 +238,14 @@ class TestSLAFTokenizer:
         mock_var.index = pd.Index(["gene_0", "gene_1", "gene_2"])
         mock_slaf_array.var = mock_var
 
-        tokenizer = SLAFTokenizer(
+        tokenizer = GeneformerTokenizer(
             slaf_array=mock_slaf_array,
-            tokenizer_type="geneformer",
             vocab_size=1000,
         )
 
         vocab_info = tokenizer.get_vocab_info()
 
         assert vocab_info["vocab_size"] == 1000
-        assert vocab_info["tokenizer_type"] == "geneformer"
         assert "special_tokens" in vocab_info
         # The tokenizer creates a fallback vocabulary
         assert vocab_info["gene_vocab_size"] > 0
@@ -303,9 +258,8 @@ class TestSLAFTokenizer:
         mock_var.index = pd.Index(["gene_0", "gene_1", "gene_2"])
         mock_slaf_array.var = mock_var
 
-        tokenizer = SLAFTokenizer(
+        tokenizer = ScGPTTokenizer(
             slaf_array=mock_slaf_array,
-            tokenizer_type="scgpt",
             vocab_size=1000,
             n_expression_bins=10,
         )
@@ -347,15 +301,13 @@ class TestSLAFTokenizerWithRealData:
 
     def test_tokenizer_with_real_data(self, tiny_slaf):
         """Test tokenizer with real SLAF data."""
-        tokenizer = SLAFTokenizer(
+        tokenizer = GeneformerTokenizer(
             slaf_array=tiny_slaf,
-            tokenizer_type="geneformer",
             vocab_size=1000,
         )
 
         # Test that vocabulary is built correctly
         assert len(tokenizer.gene_vocab) > 0
-        assert tokenizer.tokenizer_type == TokenizerType.GENEFORMER
 
         # Test tokenization with real gene sequences
         gene_sequences = [[0, 1, 2], [1, 2, 3]]
@@ -368,9 +320,8 @@ class TestSLAFTokenizerWithRealData:
 
     def test_scgpt_with_real_data(self, tiny_slaf):
         """Test scGPT tokenizer with real SLAF data."""
-        tokenizer = SLAFTokenizer(
+        tokenizer = ScGPTTokenizer(
             slaf_array=tiny_slaf,
-            tokenizer_type="scgpt",
             vocab_size=1000,
             n_expression_bins=10,
         )
@@ -388,9 +339,8 @@ class TestSLAFTokenizerWithRealData:
 
     def test_gene_mapping_with_real_data(self, tiny_slaf):
         """Test gene ID mapping with real SLAF data."""
-        tokenizer = SLAFTokenizer(
+        tokenizer = GeneformerTokenizer(
             slaf_array=tiny_slaf,
-            tokenizer_type="geneformer",
             vocab_size=1000,
         )
 

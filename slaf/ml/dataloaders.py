@@ -4,7 +4,7 @@ from loguru import logger
 
 from slaf.core.slaf import SLAFArray
 
-from .tokenizers import SLAFTokenizer
+from .tokenizers import GeneformerTokenizer, ScGPTTokenizer, SLAFTokenizer
 
 # Try to import torch, but make it optional
 try:
@@ -454,12 +454,17 @@ class SLAFDataLoader:
 
         # Initialize tokenizer (only needed for non-raw mode)
         if not self.raw_mode:
-            self.tokenizer = SLAFTokenizer(
-                slaf_array=slaf_array,
-                tokenizer_type=tokenizer_type,
-                vocab_size=vocab_size,
-                n_expression_bins=n_expression_bins,
-            )
+            if tokenizer_type == "geneformer":
+                self.tokenizer = GeneformerTokenizer(
+                    slaf_array=slaf_array,
+                    vocab_size=vocab_size,
+                )
+            elif tokenizer_type == "scgpt":
+                self.tokenizer = ScGPTTokenizer(
+                    slaf_array=slaf_array,
+                    vocab_size=vocab_size,
+                    n_expression_bins=n_expression_bins,
+                )
 
             # Get special tokens from tokenizer
             self.special_tokens = self.tokenizer.special_tokens
