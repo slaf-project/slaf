@@ -215,6 +215,9 @@ class DistributedDataLoader:
                     stop_iteration = True
                     break
 
+                # Decompress if workers sent zlib-compressed bytes (Modal 1 MiB limit)
+                samples = [_decompress_queue_item(s) for s in samples]
+
                 # Check for end-of-epoch marker and filter efficiently
                 filter_start = time.time() if self.enable_diagnostics else None
                 # Use any() with generator for early exit, then filter
@@ -281,6 +284,9 @@ class DistributedDataLoader:
                 # Queue is empty - signal end of iteration
                 self._prefetch_queue.put(None)
                 break
+
+            # Decompress if workers sent zlib-compressed bytes (Modal 1 MiB limit)
+            samples = [_decompress_queue_item(s) for s in samples]
 
             # Check for end-of-epoch marker and filter efficiently
             filter_start = time.time() if self.enable_diagnostics else None
