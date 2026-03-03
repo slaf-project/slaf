@@ -23,21 +23,16 @@ from slaf.ml.samplers import Shuffle
 from slaf.ml.tokenizers import SLAFTokenizer
 
 # Configure Modal image for SLAF workers
-# Structure image to maximize layer caching:
-# 1. Base layers (apt, pip installs) are cached
-# 2. Only git install layer rebuilds when code changes
-# Use commit hash from branch to only rebuild when code actually changes
-# Single install: slafdb[ml] from branch.
+# Cache bust: the git install runs inside run_commands with a client-side timestamp
+# so this layer rebuilds every deploy and picks up the latest branch commit.
+_BUILD_TS = datetime.now().strftime("%Y%m%d-%H%M%S")
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("build-essential", "python3-dev", "git")
     .pip_install("uv")
-    .uv_pip_install(
-        "git+https://github.com/slaf-project/slaf.git@distributed_dataloader#egg=slafdb[ml]",
-        force_build=True,
-    )
     .run_commands(
-        f"echo 'Image built at {datetime.now().strftime('%Y%m%d-%H%M%S')}'",  # Force rebuild - timestamp changes
+        'uv pip install "git+https://github.com/slaf-project/slaf.git@distributed_dataloader#egg=slafdb[ml]"',
+        f"echo 'Image built at {_BUILD_TS}'",
     )
 )
 
@@ -64,7 +59,7 @@ def distributed_prefetch_worker(
     queue_name: str,
     n_scanners: int = 8,
     prefetch_batch_count: int = 32,
-    prefetch_batch_size: int = 262144,
+    prefetch_batch_size: int = 16384,
     max_batches: int | None = None,
     partial_groups_kv_name: str | None = None,
 ) -> dict[str, Any]:
