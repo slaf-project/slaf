@@ -12,6 +12,21 @@ if TYPE_CHECKING:
     from slaf.distributed.boundary import GroupBoundaryHandler
 
 
+def _copy_for_serialization(x: Any) -> Any:
+    """Return a copy of x so pickle serializes only this slice, not shared storage.
+
+    Tensor/list views reference the full batch; pickle then serializes the whole
+    buffer, blowing up queue item size. Copy so each sample is self-contained.
+    """
+    if hasattr(x, "clone"):
+        return x.clone()
+    if hasattr(x, "copy"):
+        return x.copy()
+    if isinstance(x, list):
+        return list(x)
+    return x
+
+
 class DataSchema:
     """
     Generic schema configuration for tabular data processing.
@@ -284,12 +299,12 @@ class BatchProcessor:
 
                 samples = [
                     {
-                        "input_ids": input_ids[idx],
-                        "attention_mask": attention_mask[idx],
+                        "input_ids": _copy_for_serialization(input_ids[idx]),
+                        "attention_mask": _copy_for_serialization(attention_mask[idx]),
                         "group_key": group_key,
                         **{
                             key: (
-                                value[idx]
+                                _copy_for_serialization(value[idx])
                                 if hasattr(value, "__getitem__") and len(value) > idx
                                 else value
                             )
