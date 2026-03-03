@@ -523,6 +523,7 @@ class TestSLAFDataLoader:
             verbose=True,
             batches_per_chunk=25,
             by_fragment=True,
+            prefetcher_ready_timeout=0.5,
         )
 
         assert dataloader.batch_size == 64

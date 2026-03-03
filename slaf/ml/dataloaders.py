@@ -283,6 +283,7 @@ class SLAFDataLoader:
         prefetch_batch_size: int = 4194304,  # Add prefetch_batch_size parameter for MoS
         max_queue_size: int = 5000,  # Add max_queue_size parameter
         parallelize_fragment_reads: bool = False,  # Parallelize fragment reads in MoS (cloud optimization)
+        prefetcher_ready_timeout: float = 10.0,  # Timeout for waiting for prefetcher to be ready
     ):
         """
         Initialize the SLAF DataLoader with training configuration.
@@ -494,6 +495,7 @@ class SLAFDataLoader:
             n_scanners=n_scanners,  # Pass n_scanners to dataset
             prefetch_batch_size=prefetch_batch_size,  # Pass prefetch_batch_size to dataset
             parallelize_fragment_reads=parallelize_fragment_reads,  # Pass parallelize_fragment_reads
+            prefetcher_ready_timeout=prefetcher_ready_timeout,  # Pass prefetcher_ready_timeout
         )
 
     def __iter__(self):

@@ -1248,13 +1248,16 @@ class AsyncPrefetcher:
                 logger.info(f"Error loading batch: {e}")
                 break
 
-    def get_batch(self) -> PrefetchBatch | None:
+    def get_batch(self, timeout: float = 10.0) -> PrefetchBatch | None:
         """
         Get the next pre-processed batch from the queue.
 
         This method retrieves a batch that has been pre-processed by the background
-        worker thread. If no batch is available, it waits up to 1 second before
-        returning None.
+        worker thread. If no batch is available, it waits up to `timeout` seconds
+        before returning None.
+
+        Args:
+            timeout: Maximum time to wait for a batch, in seconds. Default: 10.0.
 
         Returns:
             PrefetchBatch | None: The next pre-processed batch, or None if no batch
@@ -1290,7 +1293,7 @@ class AsyncPrefetcher:
             Batch available: False
         """
         try:
-            return self.queue.get(timeout=10.0)  # Increased from 1.0 to 10.0 seconds
+            return self.queue.get(timeout=timeout)
         except queue.Empty:
             return None
 
@@ -1490,6 +1493,7 @@ class SLAFIterableDataset(IterableDataset):
         n_scanners: int = 16,  # Add n_scanners parameter for MoS
         prefetch_batch_size: int = 4194304,  # Add prefetch_batch_size parameter for MoS
         parallelize_fragment_reads: bool = False,  # Parallelize fragment reads in MoS (cloud optimization)
+        prefetcher_ready_timeout: float = 10.0,  # Timeout for waiting for prefetcher to be ready
     ):
         super().__init__()
         self.slaf_array = slaf_array
@@ -1556,7 +1560,7 @@ class SLAFIterableDataset(IterableDataset):
         self.prefetcher.start()
 
         # Wait for prefetcher to initialize
-        self._wait_for_prefetcher_ready()
+        self._wait_for_prefetcher_ready(timeout=prefetcher_ready_timeout)
 
     def _wait_for_prefetcher_ready(self, timeout: float = 10.0):
         """
