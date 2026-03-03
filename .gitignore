@@ -16,3 +16,6 @@ benchmarks/benchmark_summary.json
 benchmarks/benchmark_output.txt
 benchmarks/benchmark_results.json
 node_modules
+
+# Internal PRDs and design docs (not for public commit)
+prds/

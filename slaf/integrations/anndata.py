@@ -1,6 +1,8 @@
+import json
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
+import lance
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -30,6 +32,48 @@ def _is_arrow_string_array(vals: Any) -> bool:
     if dtype is not None and str(dtype) == "string":
         return True
     return False
+
+
+def _sql_condition_to_polars(sql_condition: str, id_column: str) -> pl.Expr:
+    """
+    Convert SQL WHERE condition (from selector) to a Polars expression.
+
+    Used by LazyMetadataViewMixin (obs/var/obsm/varm) and by COO views (obsp/varp)
+    for entity-table filtering. Handles TRUE, FALSE, range (>= AND <), IN, and =.
+    """
+    if sql_condition == "TRUE":
+        return pl.lit(True)
+    if sql_condition == "FALSE":
+        return pl.lit(False)
+    if ">=" in sql_condition and "<" in sql_condition:
+        parts = sql_condition.split(" AND ")
+        ge_part = [p for p in parts if ">=" in p][0]
+        lt_part = [p for p in parts if "<" in p][0]
+        try:
+            ge_value = int(ge_part.split(">=")[1].strip())
+            lt_value = int(lt_part.split("<")[1].strip())
+            return (pl.col(id_column) >= ge_value) & (pl.col(id_column) < lt_value)
+        except ValueError:
+            return pl.lit(False)
+    if " IN " in sql_condition:
+        values_str = sql_condition.split(" IN ")[1].strip("()")
+        values = []
+        for v in values_str.split(","):
+            v = v.strip()
+            try:
+                values.append(int(v))
+            except ValueError:
+                continue
+        if values:
+            return pl.col(id_column).is_in(values)
+        return pl.lit(False)
+    if " = " in sql_condition:
+        try:
+            value = int(sql_condition.split(" = ")[1].strip())
+            return pl.col(id_column) == value
+        except ValueError:
+            return pl.lit(True)
+    return pl.lit(True)
 
 
 def ensure_h5ad_writable(adata: Any) -> None:
@@ -1532,49 +1576,8 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
             self._dataframe = None
 
     def _sql_condition_to_polars(self, sql_condition: str, id_column: str) -> pl.Expr:
-        """Convert SQL WHERE condition to Polars expression"""
-        if sql_condition == "TRUE":
-            return pl.lit(True)
-        if sql_condition == "FALSE":
-            return pl.lit(False)
-
-        # Handle range: "cell_integer_id >= 0 AND cell_integer_id < 100"
-        if ">=" in sql_condition and "<" in sql_condition:
-            parts = sql_condition.split(" AND ")
-            ge_part = [p for p in parts if ">=" in p][0]
-            lt_part = [p for p in parts if "<" in p][0]
-            try:
-                ge_value = int(ge_part.split(">=")[1].strip())
-                lt_value = int(lt_part.split("<")[1].strip())
-                return (pl.col(id_column) >= ge_value) & (pl.col(id_column) < lt_value)
-            except ValueError:
-                # If values are not integers, return False condition
-                return pl.lit(False)
-
-        # Handle IN clause: "cell_integer_id IN (0,1,2,3)"
-        if " IN " in sql_condition:
-            values_str = sql_condition.split(" IN ")[1].strip("()")
-            # Filter out non-numeric values (like "False", "True", etc.)
-            values = []
-            for v in values_str.split(","):
-                v = v.strip()
-                try:
-                    values.append(int(v))
-                except ValueError:
-                    # Skip non-integer values
-                    continue
-            if values:
-                return pl.col(id_column).is_in(values)
-            else:
-                # If no valid values, return False condition
-                return pl.lit(False)
-
-        # Handle equality: "cell_integer_id = 5"
-        if " = " in sql_condition:
-            value = int(sql_condition.split(" = ")[1].strip())
-            return pl.col(id_column) == value
-
-        return pl.lit(True)  # Fallback: no filtering
+        """Convert SQL WHERE condition to Polars expression (delegates to module-level)."""
+        return _sql_condition_to_polars(sql_condition, id_column)
 
     def _build_filtered_query(self, columns: list[str]) -> pl.LazyFrame:
         """Build filtered query for table with selectors"""
@@ -2769,6 +2772,308 @@ class LazyVarmView(LazyMetadataViewMixin):
         return self._shape
 
 
+class LazyCooViewBase(LazyDictionaryViewMixin):
+    """
+    Base for dictionary-like COO views (obsp/varp): shared keys, __getitem__, __setitem__,
+    _write_coo_key, __delitem__. Subclasses set table/entity/config and id types in __init__.
+    """
+
+    # Declared here for mypy; subclasses set in __init__
+    lazy_adata: "LazyAnnData"
+    _slaf_array: Any
+    _shape: tuple[int, int]
+    _table_attr: str
+    _default_table_filename: str
+    _view_name: str
+    _id_col_i: str
+    _id_col_j: str
+    _entity_table: str
+    _entity_id_col: str
+    _config_key: str
+    _n_entities: int
+    _selector_attr: str
+    _axis: int
+    _entity_type: str
+    _id_pa_type: pa.DataType
+    _id_np_dtype: Any  # np.uint32 or np.uint16 for astype()
+
+    def keys(self) -> list[str]:
+        table = getattr(self._slaf_array, self._table_attr, None)
+        if table is None:
+            return []
+        config = self._slaf_array.config
+        if self._config_key in config and "available" in config[self._config_key]:
+            return list(config[self._config_key]["available"])
+        schema = table.schema
+        return [
+            f.name
+            for f in schema
+            if f.name not in (self._id_col_i, self._id_col_j)
+            and pa.types.is_floating(f.type)
+        ]
+
+    def _get_selected_ids(self) -> np.ndarray | None:
+        """Return selected entity integer IDs or None for all."""
+        selector = getattr(self.lazy_adata, self._selector_attr, None)
+        if selector is None:
+            return None
+        sql = self.lazy_adata._selector_to_sql_condition(
+            selector, axis=self._axis, entity_type=self._entity_type
+        )
+        if sql == "TRUE":
+            return None
+        entity_table = getattr(self._slaf_array, self._entity_table)
+        df = (
+            pl.scan_pyarrow_dataset(entity_table)
+            .filter(_sql_condition_to_polars(sql, self._entity_id_col))
+            .select(self._entity_id_col)
+            .collect()
+        )
+        return df[self._entity_id_col].to_numpy()
+
+    def __getitem__(self, key: str) -> np.ndarray:
+        if key not in self.keys():
+            raise KeyError(f"{self._view_name} key '{key}' not found")
+        table = getattr(self._slaf_array, self._table_attr, None)
+        if table is None:
+            raise KeyError(f"{self._view_name} key '{key}' not found")
+        df = cast(
+            pl.DataFrame,
+            pl.from_arrow(
+                table.to_table(columns=[self._id_col_i, self._id_col_j, key])
+            ),
+        )
+        selected = self._get_selected_ids()
+        if selected is not None:
+            sel_set = set(selected)
+            df = df.filter(
+                pl.col(self._id_col_i).is_in(selected)
+                & pl.col(self._id_col_j).is_in(selected)
+            )
+            id_to_idx = {int(x): i for i, x in enumerate(sorted(sel_set))}
+            n = len(id_to_idx)
+        else:
+            n = self._n_entities
+            id_to_idx = {i: i for i in range(n)}
+        mat = np.zeros((n, n), dtype=np.float32)
+        for row in df.iter_rows(named=True):
+            ri, rj = row[self._id_col_i], row[self._id_col_j]
+            if ri is None or rj is None:
+                continue
+            i = id_to_idx[int(ri)]
+            j = id_to_idx[int(rj)]
+            mat[i, j] = float(row[key] if row[key] is not None else 0.0)
+        return mat
+
+    def __setitem__(self, key: str, value: np.ndarray) -> None:
+        value = np.asarray(value, dtype=np.float32)
+        if value.ndim != 2 or value.shape[0] != value.shape[1]:
+            raise ValueError(f"{self._view_name} values must be square 2D arrays")
+        if value.shape[0] != self._n_entities:
+            raise ValueError(
+                f"{self._view_name} matrix shape {value.shape} does not match "
+                f"n_entities {self._n_entities}"
+            )
+        self._validate_name(key)
+        config = self._slaf_array.config
+        if self._config_key in config and key in config[self._config_key].get(
+            "immutable", []
+        ):
+            raise ValueError(
+                f"{self._view_name} key '{key}' is immutable and cannot be overwritten"
+            )
+        rows, cols = np.where(value != 0)
+        if len(rows) == 0:
+            rows, cols = np.array([0], dtype=np.intp), np.array([0], dtype=np.intp)
+            values = np.array([0.0], dtype=np.float32)
+        else:
+            values = value[rows, cols].astype(np.float32)
+        self._write_coo_key(
+            key,
+            rows.astype(self._id_np_dtype),
+            cols.astype(self._id_np_dtype),
+            values,
+            self._id_pa_type,
+        )
+
+    def _write_coo_key(
+        self,
+        key: str,
+        ids_i: np.ndarray,
+        ids_j: np.ndarray,
+        values: np.ndarray,
+        id_pa_type: pa.DataType,
+    ) -> None:
+        table = getattr(self._slaf_array, self._table_attr, None)
+        table_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path,
+            self._slaf_array.config.get("tables", {}).get(
+                self._table_attr, self._default_table_filename
+            ),
+        )
+        if table is None:
+            coo_table = pa.table(
+                {
+                    self._id_col_i: pa.array(ids_i, type=id_pa_type),
+                    self._id_col_j: pa.array(ids_j, type=id_pa_type),
+                    key: pa.array(values, type=pa.float32()),
+                }
+            )
+            lance.write_dataset(
+                coo_table,
+                table_path,
+                mode="overwrite",
+                data_storage_version="2.1",
+            )
+        else:
+            existing = cast(pl.DataFrame, pl.from_arrow(table.to_table()))
+            if key in existing.columns:
+                existing = existing.drop(key)
+            new_df = pl.DataFrame(
+                {
+                    self._id_col_i: ids_i,
+                    self._id_col_j: ids_j,
+                    key: values,
+                }
+            )
+            merged = existing.join(
+                new_df,
+                on=[self._id_col_i, self._id_col_j],
+                how="full",
+                coalesce=True,
+            )
+            for c in merged.columns:
+                if c not in (self._id_col_i, self._id_col_j):
+                    merged = merged.with_columns(pl.col(c).fill_null(0.0))
+            lance.write_dataset(
+                merged.to_arrow(),
+                table_path,
+                mode="overwrite",
+                data_storage_version="2.1",
+            )
+        setattr(self._slaf_array, self._table_attr, lance.dataset(table_path))
+        cfg_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path, "config.json"
+        )
+        with self._slaf_array._open_file(cfg_path) as f:
+            config = json.load(f)
+        if self._config_key not in config:
+            config[self._config_key] = {
+                "available": [],
+                "immutable": [],
+                "mutable": [],
+                "dimensions": {},
+            }
+        if key not in config[self._config_key]["available"]:
+            config[self._config_key]["available"] = sorted(
+                config[self._config_key]["available"] + [key]
+            )
+            config[self._config_key]["mutable"] = sorted(
+                config[self._config_key]["mutable"] + [key]
+            )
+        config[self._config_key]["dimensions"][key] = self._n_entities
+        with self._slaf_array._open_file(cfg_path, "w") as f:
+            json.dump(config, f, indent=2)
+        self._slaf_array.config = config
+
+    def __delitem__(self, key: str) -> None:
+        if key not in self.keys():
+            raise KeyError(f"{self._view_name} key '{key}' not found")
+        config = self._slaf_array.config
+        if self._config_key in config and key in config[self._config_key].get(
+            "immutable", []
+        ):
+            raise ValueError(
+                f"{self._view_name} key '{key}' is immutable and cannot be deleted"
+            )
+        table = getattr(self._slaf_array, self._table_attr, None)
+        if table is None:
+            raise KeyError(f"{self._view_name} key '{key}' not found")
+        tbl = table.to_table()
+        cols = [c for c in tbl.column_names if c != key]
+        if not cols:
+            raise ValueError(f"Cannot delete the only {self._view_name} key")
+        new_table = pa.table({c: tbl.column(c) for c in cols})
+        table_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path,
+            self._slaf_array.config.get("tables", {}).get(
+                self._table_attr, self._default_table_filename
+            ),
+        )
+        lance.write_dataset(
+            new_table, table_path, mode="overwrite", data_storage_version="2.1"
+        )
+        setattr(self._slaf_array, self._table_attr, lance.dataset(table_path))
+        cfg_path = self._slaf_array._join_path(
+            self._slaf_array.slaf_path, "config.json"
+        )
+        with self._slaf_array._open_file(cfg_path) as f:
+            config = json.load(f)
+        for k in ("available", "mutable", "dimensions"):
+            if k in config[self._config_key] and key in config[self._config_key][k]:
+                config[self._config_key][k] = [
+                    x for x in config[self._config_key][k] if x != key
+                ]
+        with self._slaf_array._open_file(cfg_path, "w") as f:
+            json.dump(config, f, indent=2)
+        self._slaf_array.config = config
+
+
+class LazyObspView(LazyCooViewBase):
+    """
+    Dictionary-like view of obsp (pairwise obs matrices) in COO storage.
+
+    Each key maps to a square (n_cells, n_cells) dense matrix. Data is stored
+    as COO in cellsxcells.lance. Selector support: returns (len(selector), len(selector)).
+    """
+
+    def __init__(self, lazy_adata: "LazyAnnData"):
+        self.lazy_adata = lazy_adata
+        self._slaf_array = lazy_adata.slaf
+        self._shape = lazy_adata.shape
+        self._table_attr = "cellsxcells"
+        self._default_table_filename = "cellsxcells.lance"
+        self._view_name = "obsp"
+        self._id_col_i = "cell_integer_id_i"
+        self._id_col_j = "cell_integer_id_j"
+        self._entity_table = "cells"
+        self._entity_id_col = "cell_integer_id"
+        self._config_key = "obsp"
+        self._n_entities = self._shape[0]
+        self._selector_attr = "_cell_selector"
+        self._axis = 0
+        self._entity_type = "cell"
+        self._id_pa_type = pa.uint32()
+        self._id_np_dtype = np.uint32
+
+
+class LazyVarpView(LazyCooViewBase):
+    """
+    Dictionary-like view of varp (pairwise var matrices) in COO storage.
+
+    Each key maps to a square (n_genes, n_genes) dense matrix in genesxgenes.lance.
+    """
+
+    def __init__(self, lazy_adata: "LazyAnnData"):
+        self.lazy_adata = lazy_adata
+        self._slaf_array = lazy_adata.slaf
+        self._shape = lazy_adata.shape
+        self._table_attr = "genesxgenes"
+        self._default_table_filename = "genesxgenes.lance"
+        self._view_name = "varp"
+        self._id_col_i = "gene_integer_id_i"
+        self._id_col_j = "gene_integer_id_j"
+        self._entity_table = "genes"
+        self._entity_id_col = "gene_integer_id"
+        self._config_key = "varp"
+        self._n_entities = self._shape[1]
+        self._selector_attr = "_gene_selector"
+        self._axis = 1
+        self._entity_type = "gene"
+        self._id_pa_type = pa.uint16()
+        self._id_np_dtype = np.uint16
+
+
 class LazyUnsView(LazyDictionaryViewMixin):
     """
     Dictionary-like view of uns (unstructured metadata).
@@ -3151,6 +3456,30 @@ class LazyAnnData(LazySparseMixin):
         if not hasattr(self, "_varm"):
             self._varm = LazyVarmView(self)
         return self._varm
+
+    @property
+    def obsp(self) -> LazyObspView:
+        """
+        Pairwise obs annotations (e.g. connectivities, distances).
+
+        Dictionary-like view over obsp matrices stored as COO in cellsxcells.lance.
+        Each key returns a square (n_cells, n_cells) numpy array.
+        """
+        if not hasattr(self, "_obsp"):
+            self._obsp = LazyObspView(self)
+        return self._obsp
+
+    @property
+    def varp(self) -> LazyVarpView:
+        """
+        Pairwise var annotations.
+
+        Dictionary-like view over varp matrices stored as COO in genesxgenes.lance.
+        Each key returns a square (n_genes, n_genes) numpy array.
+        """
+        if not hasattr(self, "_varp"):
+            self._varp = LazyVarpView(self)
+        return self._varp
 
     @property
     def uns(self) -> LazyUnsView:

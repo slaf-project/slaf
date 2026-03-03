@@ -1445,6 +1445,28 @@ class SLAFConverter:
                 gene_id_mapping,
             )
 
+        # Convert obsp if it exists
+        obsp_keys: list[str] = []
+        if hasattr(adata, "obsp") and adata.obsp and len(adata.obsp) > 0:
+            logger.info(f"Converting {len(adata.obsp)} obsp matrices...")
+            obsp_keys = self._convert_obsp(
+                adata.obsp,
+                output_path,
+                adata.obs.index,
+                cell_id_mapping,
+            )
+
+        # Convert varp if it exists
+        varp_keys: list[str] = []
+        if hasattr(adata, "varp") and adata.varp and len(adata.varp) > 0:
+            logger.info(f"Converting {len(adata.varp)} varp matrices...")
+            varp_keys = self._convert_varp(
+                adata.varp,
+                output_path,
+                adata.var.index,
+                gene_id_mapping,
+            )
+
         # Convert uns if it exists
         if hasattr(adata, "uns") and adata.uns and len(adata.uns) > 0:
             logger.info("Converting uns metadata...")
@@ -1454,13 +1476,15 @@ class SLAFConverter:
         if self.compact_after_write:
             self._compact_dataset(output_path)
 
-        # Save config (with layers, obsm, varm metadata if they were converted)
+        # Save config (with layers, obsm, varm, obsp, varp metadata if converted)
         self._save_config(
             output_path,
             adata.shape,
             layer_names=layer_names,
             obsm_keys=obsm_keys,
             varm_keys=varm_keys,
+            obsp_keys=obsp_keys,
+            varp_keys=varp_keys,
         )
         logger.info(f"Conversion complete! Saved to {output_path}")
 
@@ -3236,6 +3260,196 @@ class SLAFConverter:
         )
         return varm_keys
 
+    def _matrix_to_coo_triples(self, matrix, index_to_int_id: np.ndarray):
+        """
+        Convert a 2D matrix (dense or sparse) to (i_id, j_id, value) triples.
+
+        Uses index_to_int_id so that matrix row/col index k maps to integer id index_to_int_id[k].
+        Only non-zero entries are emitted (sparse COO).
+        """
+        if sparse.issparse(matrix):
+            coo = matrix.tocoo()
+            rows, cols = coo.row.astype(np.intp), coo.col.astype(np.intp)
+            values = np.asarray(coo.data).astype(np.float32)
+        else:
+            matrix = np.asarray(matrix)
+            rows, cols = np.where(matrix != 0)
+            values = matrix[rows, cols].astype(np.float32)
+        i_ids = index_to_int_id[rows]
+        j_ids = index_to_int_id[cols]
+        return i_ids, j_ids, values
+
+    def _convert_obsp(
+        self,
+        obsp: dict[str, Any],
+        output_path: str,
+        cell_ids: Any,
+        cell_id_mapping: list[dict[str, Any]] | None = None,
+    ) -> list[str]:
+        """
+        Convert AnnData obsp to COO table in cellsxcells.lance.
+
+        Each key is a square matrix (n_cells, n_cells). Stored as COO:
+        cell_integer_id_i, cell_integer_id_j, and one float32 column per key.
+        Only non-zero entries are stored (sparse COO).
+        """
+        n_cells = len(cell_ids)
+        if cell_id_mapping and self.use_integer_keys:
+            id_map = {item["cell_id"]: item["integer_id"] for item in cell_id_mapping}
+            index_to_int_id = np.array(
+                [id_map.get(str(cid), i) for i, cid in enumerate(cell_ids)],
+                dtype=np.uint32,
+            )
+        else:
+            index_to_int_id = np.arange(n_cells, dtype=np.uint32)
+
+        # Build union of (i, j) and per-key values
+        coo_rows: dict[tuple[int, int], dict[str, float]] = {}
+        obsp_keys: list[str] = []
+
+        for key, mat in obsp.items():
+            if not hasattr(mat, "shape") or len(mat.shape) != 2:
+                logger.warning(f"obsp '{key}' is not 2D. Skipping.")
+                continue
+            if mat.shape[0] != n_cells or mat.shape[1] != n_cells:
+                logger.warning(
+                    f"obsp '{key}' shape {mat.shape} != ({n_cells}, {n_cells}). Skipping."
+                )
+                continue
+            obsp_keys.append(key)
+            i_ids, j_ids, values = self._matrix_to_coo_triples(mat, index_to_int_id)
+            for idx in range(len(i_ids)):
+                ij = (int(i_ids[idx]), int(j_ids[idx]))
+                if ij not in coo_rows:
+                    coo_rows[ij] = dict.fromkeys(obsp_keys, 0.0)
+                coo_rows[ij][key] = float(values[idx])
+
+        if not obsp_keys:
+            return []
+
+        # Build PyArrow table
+        i_list = []
+        j_list = []
+        key_columns: dict[str, list[float]] = {key_name: [] for key_name in obsp_keys}
+        for i, j in sorted(coo_rows):
+            vals = coo_rows[(i, j)]
+            i_list.append(i)
+            j_list.append(j)
+            for key_name in obsp_keys:
+                key_columns[key_name].append(vals.get(key_name, 0.0))
+
+        # Handle empty coo (e.g. all zeros) - still need to write table with correct schema
+        if not i_list:
+            # One row of zeros so schema is established
+            i_list, j_list = [0], [0]
+            for key_name in obsp_keys:
+                key_columns[key_name] = [0.0]
+
+        table = pa.table(
+            {
+                "cell_integer_id_i": pa.array(i_list, type=pa.uint32()),
+                "cell_integer_id_j": pa.array(j_list, type=pa.uint32()),
+                **{
+                    key_name: pa.array(key_columns[key_name], type=pa.float32())
+                    for key_name in obsp_keys
+                },
+            }
+        )
+        cellsxcells_path = f"{output_path}/cellsxcells.lance"
+        lance.write_dataset(
+            table,
+            cellsxcells_path,
+            enable_v2_manifest_paths=self.enable_v2_manifest,
+            data_storage_version="2.1",
+        )
+        logger.info(
+            f"Successfully converted {len(obsp_keys)} obsp keys to COO: {obsp_keys}"
+        )
+        return obsp_keys
+
+    def _convert_varp(
+        self,
+        varp: dict[str, Any],
+        output_path: str,
+        gene_ids: Any,
+        gene_id_mapping: list[dict[str, Any]] | None = None,
+    ) -> list[str]:
+        """
+        Convert AnnData varp to COO table in genesxgenes.lance.
+
+        Each key is a square matrix (n_genes, n_genes). Stored as COO with
+        gene_integer_id_i, gene_integer_id_j, and one float32 column per key.
+        """
+        n_genes = len(gene_ids)
+        if gene_id_mapping and self.use_integer_keys:
+            id_map = {item["gene_id"]: item["integer_id"] for item in gene_id_mapping}
+            index_to_int_id = np.array(
+                [id_map.get(str(gid), i) for i, gid in enumerate(gene_ids)],
+                dtype=np.uint16,
+            )
+        else:
+            index_to_int_id = np.arange(n_genes, dtype=np.uint16)
+
+        coo_rows: dict[tuple[int, int], dict[str, float]] = {}
+        varp_keys: list[str] = []
+
+        for key, mat in varp.items():
+            if not hasattr(mat, "shape") or len(mat.shape) != 2:
+                logger.warning(f"varp '{key}' is not 2D. Skipping.")
+                continue
+            if mat.shape[0] != n_genes or mat.shape[1] != n_genes:
+                logger.warning(
+                    f"varp '{key}' shape {mat.shape} != ({n_genes}, {n_genes}). Skipping."
+                )
+                continue
+            varp_keys.append(key)
+            i_ids, j_ids, values = self._matrix_to_coo_triples(mat, index_to_int_id)
+            for idx in range(len(i_ids)):
+                ij = (int(i_ids[idx]), int(j_ids[idx]))
+                if ij not in coo_rows:
+                    coo_rows[ij] = dict.fromkeys(varp_keys, 0.0)
+                coo_rows[ij][key] = float(values[idx])
+
+        if not varp_keys:
+            return []
+
+        i_list = []
+        j_list = []
+        key_columns: dict[str, list[float]] = {key_name: [] for key_name in varp_keys}
+        for i, j in sorted(coo_rows):
+            vals = coo_rows[(i, j)]
+            i_list.append(i)
+            j_list.append(j)
+            for key_name in varp_keys:
+                key_columns[key_name].append(vals.get(key_name, 0.0))
+
+        if not i_list:
+            i_list, j_list = [0], [0]
+            for key_name in varp_keys:
+                key_columns[key_name] = [0.0]
+
+        table = pa.table(
+            {
+                "gene_integer_id_i": pa.array(i_list, type=pa.uint16()),
+                "gene_integer_id_j": pa.array(j_list, type=pa.uint16()),
+                **{
+                    key_name: pa.array(key_columns[key_name], type=pa.float32())
+                    for key_name in varp_keys
+                },
+            }
+        )
+        genesxgenes_path = f"{output_path}/genesxgenes.lance"
+        lance.write_dataset(
+            table,
+            genesxgenes_path,
+            enable_v2_manifest_paths=self.enable_v2_manifest,
+            data_storage_version="2.1",
+        )
+        logger.info(
+            f"Successfully converted {len(varp_keys)} varp keys to COO: {varp_keys}"
+        )
+        return varp_keys
+
     def _convert_uns(self, uns: dict, output_path: str):
         """
         Convert AnnData uns to uns.json file.
@@ -3684,6 +3898,8 @@ class SLAFConverter:
         layer_names: list[str] | None = None,
         obsm_keys: list[str] | None = None,
         varm_keys: list[str] | None = None,
+        obsp_keys: list[str] | None = None,
+        varp_keys: list[str] | None = None,
     ):
         """Save SLAF configuration with computed metadata"""
         n_cells = int(shape[0])
@@ -3723,6 +3939,10 @@ class SLAFConverter:
         # Add layers table if layers were converted
         if layer_names and len(layer_names) > 0:
             tables["layers"] = "layers.lance"
+        if obsp_keys and len(obsp_keys) > 0:
+            tables["cellsxcells"] = "cellsxcells.lance"
+        if varp_keys and len(varp_keys) > 0:
+            tables["genesxgenes"] = "genesxgenes.lance"
 
         config = {
             "format_version": "0.4",  # Bumped to 0.4 for layers support
@@ -3791,6 +4011,24 @@ class SLAFConverter:
                 "immutable": varm_keys,  # Converted varm cannot be deleted
                 "mutable": [],  # No mutable varm yet
                 "dimensions": varm_dimensions,
+            }
+
+        # Add obsp metadata if obsp was converted (COO; dimensions = side length)
+        if obsp_keys and len(obsp_keys) > 0:
+            config["obsp"] = {
+                "available": obsp_keys,
+                "immutable": obsp_keys,
+                "mutable": [],
+                "dimensions": dict.fromkeys(obsp_keys, n_cells),
+            }
+
+        # Add varp metadata if varp was converted
+        if varp_keys and len(varp_keys) > 0:
+            config["varp"] = {
+                "available": varp_keys,
+                "immutable": varp_keys,
+                "mutable": [],
+                "dimensions": dict.fromkeys(varp_keys, n_genes),
             }
 
         # Preserve checkpoint data if it exists
