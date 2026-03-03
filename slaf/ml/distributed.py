@@ -126,7 +126,7 @@ class DistributedSLAFDataLoader:
         tokenizer: SLAFTokenizer | None = None,
         n_workers: int = 64,
         n_scanners: int = 16,
-        prefetch_batch_size: int = 4_194_304,
+        prefetch_batch_size: int = 262144,  # 256K rows per Lance batch; lower = less worker memory (default was 4M → OOM on 32GB)
         prefetch_batch_count: int = 32,
         batch_size: int = 32,
         max_genes: int = 1024,
@@ -153,15 +153,16 @@ class DistributedSLAFDataLoader:
             tokenizer [PRODUCER]: SLAFTokenizer instance (optional, created automatically from tokenizer_type if None)
             n_workers: [PRODUCER] Number of Modal workers (producer-side parallelism)
             n_scanners: [PRODUCER] Number of scanners per worker (for Mixture of Scanners)
-            prefetch_batch_size: [PRODUCER] Number of rows per generator read (batch size for reading from partitions)
-            prefetch_batch_count: [PRODUCER] Number of generator reads per partition before processing.
-                                 Controls chunk size: each chunk contains prefetch_batch_size * prefetch_batch_count rows.
-                                 Higher values reduce processing overhead but increase memory per chunk.
+            prefetch_batch_size: [PRODUCER] Max rows per Lance batch (passed to fragment.to_batches).
+                                 Lower = less worker memory; peak ≈ n_scanners * prefetch_batch_count * this.
+            prefetch_batch_count: [PRODUCER] Number of Lance batches read per partition before processing.
+                                 Chunk size ≤ prefetch_batch_size * prefetch_batch_count rows per partition.
+                                 Lower = less memory; higher = fewer process_batch calls.
             batch_size: [CONSUMER] Training batch size (number of samples per batch)
             max_genes [PRODUCER]: Maximum genes per cell after window function
             vocab_size [PRODUCER]: Vocabulary size for tokenizer
             n_expression_bins: Number of expression bins for scGPT
-            n_epochs [PRODUCER]: Number of e   pochs to process
+            n_epochs [PRODUCER]: Number of epochs to process
             raw_mode [PRODUCER]: If True, return raw data without tokenization
             return_tensors: [CONSUMER] If True, return torch.Tensor objects (matches SLAFDataLoader).
                           If False, return Python lists/objects (matches Hugging Face).
