@@ -32,7 +32,6 @@ image = (
     .pip_install("uv")
     .uv_pip_install(
         "git+https://github.com/slaf-project/slaf.git@distributed_dataloader#egg=slafdb[ml]",
-        force_build=True,
     )
     .run_commands(
         f"echo 'Image built at {_BUILD_TS}'",
