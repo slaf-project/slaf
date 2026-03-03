@@ -13,13 +13,47 @@ Uses background prefetching to overlap queue I/O and tensor formatting.
 Framework-agnostic - accepts any queue-like object with get_many() method.
 """
 
+import pickle
 import threading
 import time
+import zlib
 from collections.abc import Iterator
 from queue import Empty, Queue
 from typing import Any
 
 import polars as pl
+
+
+def _decompress_queue_item(item: Any) -> Any:
+    """Decompress a queue item if it is zlib-compressed bytes; otherwise return as-is."""
+    if isinstance(item, bytes):
+        return pickle.loads(zlib.decompress(item))
+    return item
+
+
+class DecompressingQueueWrapper:
+    """
+    Wraps a queue and decompresses items on get/get_many.
+
+    Workers compress samples with zlib+pickle to stay under Modal's 1 MiB
+    per-item limit; this wrapper decompresses so the dataloader sees normal samples.
+    """
+
+    def __init__(self, queue: Any):
+        self._queue = queue
+
+    def get_many(
+        self, n_values: int, block: bool = True, timeout: float = 30.0
+    ) -> list[Any]:
+        raw = self._queue.get_many(n_values=n_values, block=block, timeout=timeout)
+        return [_decompress_queue_item(x) for x in raw]
+
+    def get(self, timeout: float = 30.0) -> Any:
+        raw = self._queue.get(timeout=timeout)
+        return _decompress_queue_item(raw)
+
+    def len(self) -> int:
+        return self._queue.len()
 
 
 class DistributedDataLoader:
