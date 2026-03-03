@@ -27,16 +27,12 @@ from slaf.ml.tokenizers import SLAFTokenizer
 # 1. Base layers (apt, pip installs) are cached
 # 2. Only git install layer rebuilds when code changes
 # Use commit hash from branch to only rebuild when code actually changes
+# Single install: slafdb[ml] from branch.
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("build-essential", "python3-dev", "git")
-    .pip_install(["polars", "pyarrow", "numpy", "psutil"])
     .run_commands(
-        "python -m pip install torch --extra-index-url https://download.pytorch.org/whl/cpu",
-    )
-    # Separate layer for git install - only this rebuilds when branch updates
-    .run_commands(
-        "pip install git+https://github.com/slaf-project/slaf.git@distributed_dataloader#egg=slafdb",
+        "pip install git+https://github.com/slaf-project/slaf.git@distributed_dataloader#egg=slafdb[ml]",
         f"echo 'Image built at {datetime.now().strftime('%Y%m%d-%H%M%S')}'",  # Force rebuild - timestamp changes
     )
 )
