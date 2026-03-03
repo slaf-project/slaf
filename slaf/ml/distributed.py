@@ -100,6 +100,7 @@ def distributed_prefetch_worker(
         prefetch_batch_size=prefetch_batch_size,
         max_batches=max_batches,
         partial_groups_kv=partial_groups_kv,
+        queue_name=queue_name,
     )
 
 

@@ -4,7 +4,10 @@ Generic worker implementation for distributed dataloading.
 """
 
 import importlib
+import pickle
+import queue as queue_module
 import random
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -23,6 +26,7 @@ def prefetch_worker(
     prefetch_batch_size: int = 262144,
     max_batches: int | None = None,
     partial_groups_kv: Any | None = None,  # Modal Dict or any KV store-like object
+    queue_name: str | None = None,  # Optional: for logging (e.g. Modal queue name)
 ) -> dict[str, Any]:
     """
     Worker function - imports processors dynamically to avoid circular deps.
@@ -260,6 +264,47 @@ def prefetch_worker(
     total_rows = 0
     epochs = processor_config.get("n_epochs", 1)
 
+    # Dedicated writer thread so main loop doesn't block on slow Modal queue.put_many
+    writer_queue: queue_module.Queue[list[dict[str, Any]] | None] = queue_module.Queue(
+        maxsize=64
+    )
+    writer_total_put = {"n": 0}  # mutable so thread can update
+
+    def _writer_thread_fn() -> None:
+        put_count = 0
+        while True:
+            batch = writer_queue.get()
+            if batch is None:
+                writer_queue.task_done()
+                break
+            try:
+                # Log serialized size (Modal has size limits per message/batch)
+                try:
+                    serialized_bytes = len(pickle.dumps(batch))
+                except Exception:
+                    serialized_bytes = -1
+                print(
+                    f"[{worker_id}] put_many chunk: {len(batch)} items, "
+                    f"serialized_size={serialized_bytes:,} bytes"
+                )
+                queue.put_many(batch)
+                put_count += len(batch)
+                writer_total_put["n"] = put_count
+                if put_count == len(batch):
+                    print(
+                        f"[{worker_id}] First batches put to queue "
+                        f"(chunk={len(batch)}, writer thread)"
+                    )
+            except Exception as e:
+                print(f"[{worker_id}] Writer thread Error putting to queue: {e}")
+            finally:
+                writer_queue.task_done()
+
+    writer_thread = threading.Thread(target=_writer_thread_fn, daemon=False)
+    writer_thread.start()
+
+    if queue_name:
+        print(f"[{worker_id}] Queue name: {queue_name}")
     print(
         f"[{worker_id}] Starting processing: {epochs} epochs, {len(partition_indices)} partitions"
     )
@@ -351,45 +396,22 @@ def prefetch_worker(
                         all_futures_complete and len(all_samples_batch) > 0
                     ):
                         n_put = len(all_samples_batch)
-                        print(
-                            f"[{worker_id}] About to put_many(count={n_put}) to queue"
-                        )
-                        # Put in chunks to avoid blocking on one large put_many (Modal heartbeat timeout)
+                        # Hand off to writer thread in chunks (main loop doesn't block on Modal queue)
                         put_chunk_size = 50
                         total_put = 0
-                        try:
-                            first_put = total_batches == 0
-                            for i in range(0, n_put, put_chunk_size):
-                                chunk = all_samples_batch[i : i + put_chunk_size]
-                                queue.put_many(chunk)
-                                total_put += len(chunk)
-                                if first_put and total_put == len(chunk):
-                                    print(
-                                        f"[{worker_id}] First batches put to queue "
-                                        f"(chunk={len(chunk)}, rows_so_far={total_rows})"
-                                    )
-                            total_batches += total_put
-                            if total_put >= 50 and not first_put:
-                                print(
-                                    f"[{worker_id}] put_many(total={total_put}), total_batches={total_batches}"
-                                )
-                        except Exception as e:
-                            print(f"[{worker_id}] Error putting samples to queue: {e}")
-                            # Fallback: try individual puts if batch fails
-                            for sample in all_samples_batch[total_put:]:
-                                try:
-                                    queue.put(sample)
-                                    total_batches += 1
-                                    total_put += 1
-                                except Exception as e2:
-                                    print(
-                                        f"[{worker_id}] Error putting individual sample: {e2}"
-                                    )
-
-                        all_samples_batch.clear()  # Clear after putting
+                        for i in range(0, n_put, put_chunk_size):
+                            chunk = all_samples_batch[i : i + put_chunk_size]
+                            writer_queue.put(
+                                chunk
+                            )  # may block if writer is slow (backpressure)
+                            total_put += len(chunk)
+                        total_batches += total_put
+                        all_samples_batch.clear()
 
                         # Check max_batches limit
                         if max_batches is not None and total_batches >= max_batches:
+                            writer_queue.put(None)
+                            writer_thread.join()
                             return {
                                 "worker_id": worker_id,
                                 "batches_produced": total_batches,
@@ -404,22 +426,15 @@ def prefetch_worker(
                             f"(boundary may be holding partial groups; next round may flush)"
                         )
 
-                # Put any remaining samples
+                # Put any remaining samples to writer queue
                 if all_samples_batch:
-                    try:
-                        queue.put_many(all_samples_batch)
-                        total_batches += len(all_samples_batch)
-                    except Exception as e:
-                        print(f"[{worker_id}] Error putting samples to queue: {e}")
-                        # Fallback: try individual puts if batch fails
-                        for sample in all_samples_batch:
-                            try:
-                                queue.put(sample)
-                                total_batches += 1
-                            except Exception as e2:
-                                print(
-                                    f"[{worker_id}] Error putting individual sample: {e2}"
-                                )
+                    writer_queue.put(list(all_samples_batch))
+                    total_batches += len(all_samples_batch)
+                    all_samples_batch.clear()
+
+    # After all epochs: flush writer thread and wait for it to finish
+    writer_queue.put(None)
+    writer_thread.join()
 
     # Send end-of-epoch marker
     queue.put({"end_of_epoch": True})
