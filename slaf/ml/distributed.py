@@ -32,6 +32,7 @@ image = (
     .pip_install("uv")
     .uv_pip_install(
         "git+https://github.com/slaf-project/slaf.git@distributed_dataloader#egg=slafdb[ml]",
+        force_build=True,
     )
     .run_commands(
         f"echo 'Image built at {_BUILD_TS}'",
@@ -318,9 +319,9 @@ class DistributedSLAFDataLoader:
         # - Each worker does modal.Queue.from_name(queue_name, ...) and calls queue.put_many(...).
         # - We get the same queue by name here; DistributedDataLoader iterates via queue.get_many().
         # So the queue we pass into DistributedDataLoader is the same one workers write to.
-        queue = modal.Queue.from_name(queue_name, create_if_missing=True)
+        modal_queue = modal.Queue.from_name(queue_name, create_if_missing=True)
         # Workers compress items (zlib) to stay under Modal's 1 MiB/item limit; decompress on read
-        queue = DecompressingQueueWrapper(queue)
+        consumer_queue = DecompressingQueueWrapper(modal_queue)
 
         # Create dataloader with queue object and batch_size (framework-agnostic)
         # Enable concurrent prefetching with multiple threads making concurrent get_many() calls
@@ -328,7 +329,7 @@ class DistributedSLAFDataLoader:
         # prefetch_factor controls number of threads, each making concurrent queue.get_many() calls
         # Enable diagnostics for bottleneck analysis
         self.dataloader = DistributedDataLoader(
-            queue,
+            consumer_queue,
             batch_size=batch_size,
             return_tensors=return_tensors,
             prefetch_factor=prefetch_factor,  # Number of concurrent threads for queue.get_many() calls

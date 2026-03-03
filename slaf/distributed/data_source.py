@@ -7,6 +7,8 @@ files/row groups, MosaicML Streaming shards, Zarr arrays, Vortex datasets,
 and many other formats.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 
