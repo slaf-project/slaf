@@ -106,6 +106,7 @@ class LanceDataSource(DataSource):
     def _get_fragments(self) -> list:
         """Return cached list of fragments; only lists once (avoids slow repeated S3/metadata calls)."""
         if self._fragments is None:
+            # One-time cost: can be slow on S3 (listing manifest)
             self._fragments = list(self.dataset.get_fragments())
             self._fragment_count = len(self._fragments)
         return self._fragments

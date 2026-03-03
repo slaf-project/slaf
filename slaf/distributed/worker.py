@@ -206,6 +206,8 @@ def prefetch_worker(
                 return None
         return partition_readers[partition_idx]
 
+    _first_read_done: dict[str, bool] = {}  # worker_id -> whether we logged first read
+
     def read_from_partition(partition_idx: int, batches_to_read: int):
         """Read multiple batches from a partition."""
         try:
@@ -222,6 +224,13 @@ def prefetch_worker(
                     batch_df = next(reader)
                     batch_dfs.append(batch_df)
                     total_rows += len(batch_df)
+                    # Log once per worker when first read from any partition completes (diagnostics)
+                    if worker_id not in _first_read_done:
+                        _first_read_done[worker_id] = True
+                        print(
+                            f"[{worker_id}] First read completed: partition={partition_idx}, "
+                            f"batch_rows={len(batch_df)}, total_chunk_rows={total_rows}"
+                        )
                 except StopIteration:
                     is_exhausted = True
                     reader_active[partition_idx] = False
@@ -242,6 +251,8 @@ def prefetch_worker(
         f"[{worker_id}] Starting processing: {epochs} epochs, {len(partition_indices)} partitions"
     )
 
+    _epoch_first_round: dict[int, bool] = {}  # epoch -> have we logged first round
+
     for epoch in range(epochs):
         print(f"[{worker_id}] Starting epoch {epoch + 1}/{epochs}")
         # Reset reader active status for new epoch
@@ -257,6 +268,12 @@ def prefetch_worker(
             # Sample up to n_scanners partitions
             n_to_sample = min(n_scanners, len(active_partitions))
             sampled_partitions = random.sample(active_partitions, n_to_sample)
+            if epoch not in _epoch_first_round:
+                _epoch_first_round[epoch] = True
+                print(
+                    f"[{worker_id}] First read round: sampling {len(sampled_partitions)} "
+                    f"partitions (of {len(active_partitions)} active)"
+                )
 
             # Read from sampled partitions in parallel
             with ThreadPoolExecutor(max_workers=n_scanners) as executor:
@@ -284,6 +301,11 @@ def prefetch_worker(
                         # Process batch through pipeline immediately (maintains partition state)
                         # Returns list of samples (one per group)
                         # Pass is_exhausted so boundary handler knows if partition is done
+                        if total_batches == 0:
+                            print(
+                                f"[{worker_id}] First process_batch: partition={partition_idx}, "
+                                f"rows={rows}, dfs={len(batch_dfs)}"
+                            )
                         samples = processor.process_batch(
                             batch_dfs,
                             epoch=epoch,
