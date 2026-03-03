@@ -3,6 +3,7 @@ Generic worker implementation for distributed dataloading.
 
 """
 
+import importlib
 import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -108,7 +109,7 @@ def prefetch_worker(
     if processor_config.get("tokenizer_factory"):
         # Dynamic import and factory call
         tokenizer_config = processor_config["tokenizer_factory"]
-        tokenizer_module = __import__(tokenizer_config["module"])
+        tokenizer_module = importlib.import_module(tokenizer_config["module"])
         tokenizer_class = getattr(tokenizer_module, tokenizer_config["class"])
 
         # SLAFTokenizer needs a slaf_array, so we need to recreate it from the data source path
