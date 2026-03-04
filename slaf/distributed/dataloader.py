@@ -22,6 +22,7 @@ from queue import Empty, Queue
 from typing import Any
 
 import polars as pl
+from loguru import logger
 
 
 def _decompress_queue_item(item: Any) -> Any:
@@ -204,7 +205,7 @@ class DistributedDataLoader:
                     stop_iteration = True
                     break
                 except Exception as e:
-                    print(f"Error reading from queue: {e}")
+                    logger.warning("Error reading from queue: {e}", e=e)
                     continue
 
                 if self.enable_diagnostics and queue_start:
@@ -271,7 +272,7 @@ class DistributedDataLoader:
                     break
                 continue
             except Exception as e:
-                print(f"Error reading from queue: {e}")
+                logger.warning("Error reading from queue: {e}", e=e)
                 continue
 
             if self.enable_diagnostics and queue_start:
