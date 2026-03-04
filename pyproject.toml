@@ -22,8 +22,7 @@ dependencies = [
     "requests>=2.32.4", # For downloading datasets
     # CLI and utilities
     "typer>=0.9.0",                          # CLI framework
-    "rich==14.0.0",                          # Rich console output
-    "certifi<2025.6.15",
+    "rich>=14.0.0",                          # Rich console output
     "tqdm>=4.67.0",                          # Progress bars
     "build>=1.2.2.post1",
     "lancedb>=0.29.0",
