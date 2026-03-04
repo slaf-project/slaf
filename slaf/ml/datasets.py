@@ -662,8 +662,14 @@ class PrefetchBatchProcessor:
                 ]
 
                 if not active_indices:
+                    # Flush any remaining partial cells as the final batch
+                    if self.partial_cell_data:
+                        partial_dfs = list(self.partial_cell_data.values())
+                        self.partial_cell_data = {}
+                        combined_df = pl.concat(partial_dfs, how="vertical")  # type: ignore
+                        batch_count = 0
                     # Check if we should start a new epoch
-                    if self.current_epoch + 1 < self.n_epochs:
+                    elif self.current_epoch + 1 < self.n_epochs:
                         print_epoch_transition(
                             f"Epoch {self.current_epoch} complete, starting epoch {self.current_epoch + 1}",
                             self.verbose,
