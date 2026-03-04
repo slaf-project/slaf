@@ -883,6 +883,7 @@ class PrefetchBatchProcessor:
                 # MoS mode: add last cell from each batch to partial_cell_data
                 # Since fragments contain complete cells, we don't need complex boundary logic
                 # Just add the last cell from the combined data as potentially incomplete
+                self.partial_cell_data = {}
                 if len(combined_df) > 0:
                     last_cell_id = combined_df["cell_integer_id"].max()  # type: ignore
                     last_cell_data = combined_df.filter(
