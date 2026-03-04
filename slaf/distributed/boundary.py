@@ -15,6 +15,7 @@ Framework-agnostic - accepts any KV store-like object with get, put, and pop met
 from typing import TYPE_CHECKING, Any
 
 import polars as pl
+from loguru import logger
 
 if TYPE_CHECKING:
     from slaf.distributed.processor import DataSchema
@@ -224,7 +225,7 @@ class GroupBoundaryHandler:
 
         except Exception as e:
             # KV operations failed, log and fall back to local-only
-            print(f"Error checking KV store for partial groups: {e}")
+            logger.warning("Error checking KV store for partial groups: {e}", e=e)
 
         return None
 
@@ -258,7 +259,7 @@ class GroupBoundaryHandler:
                 self.partial_groups_kv.put(key, arrow_table)
             except Exception as e:
                 # Log error but continue (don't fail worker)
-                print(f"Error storing partial group in KV store: {e}")
+                logger.warning("Error storing partial group in KV store: {e}", e=e)
 
     def cleanup_partial_groups_from_kv(self, partition_id: int):
         """
@@ -279,7 +280,7 @@ class GroupBoundaryHandler:
             # But we can try to remove known keys if we track them
             pass  # Optional cleanup - TTL handles it
         except Exception as e:
-            print(f"Error cleaning up partial groups from KV store: {e}")
+            logger.warning("Error cleaning up partial groups from KV store: {e}", e=e)
 
     def merge_partial_data(
         self,

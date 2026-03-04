@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import polars as pl
+from loguru import logger
 
 # Modal queue item size limit (1 MiB); we compress samples to stay under this
 # See https://modal.com/docs/guide/queues and https://modal.com/docs/reference/modal.Queue
@@ -58,12 +59,16 @@ def prefetch_worker(
     from slaf.distributed.data_source import LanceDataSource
 
     if data_source_config["type"] == "lance":
-        print(
-            f"[{worker_id}] Creating LanceDataSource for: {data_source_config['path']}"
+        logger.info(
+            "[{worker_id}] Creating LanceDataSource for: {path}",
+            worker_id=worker_id,
+            path=data_source_config["path"],
         )
         data_source = LanceDataSource(data_source_config["path"])
-        print(
-            f"[{worker_id}] DataSource created, partition count: {data_source.get_partition_count()}"
+        logger.info(
+            "[{worker_id}] DataSource created, partition count: {count}",
+            worker_id=worker_id,
+            count=data_source.get_partition_count(),
         )
     else:
         raise ValueError(f"Unknown data source type: {data_source_config['type']}")
@@ -210,8 +215,11 @@ def prefetch_worker(
                 partition_readers[partition_idx] = reader
                 return reader
             except Exception as e:
-                print(
-                    f"[{worker_id}] Error creating reader for partition {partition_idx}: {e}"
+                logger.warning(
+                    "[{worker_id}] Error creating reader for partition {partition_idx}: {e}",
+                    worker_id=worker_id,
+                    partition_idx=partition_idx,
+                    e=e,
                 )
                 reader_active[partition_idx] = False
                 return None
@@ -250,9 +258,12 @@ def prefetch_worker(
                     # Log once per worker when first read from any partition completes (diagnostics)
                     if worker_id not in _first_read_done:
                         _first_read_done[worker_id] = True
-                        print(
-                            f"[{worker_id}] First read completed: partition={partition_idx}, "
-                            f"batch_rows={len(batch_df)}, total_chunk_rows={total_rows}"
+                        logger.info(
+                            "[{worker_id}] First read completed: partition={partition_idx}, batch_rows={batch_rows}, total_chunk_rows={total_rows}",
+                            worker_id=worker_id,
+                            partition_idx=partition_idx,
+                            batch_rows=len(batch_df),
+                            total_chunk_rows=total_rows,
                         )
                 except StopIteration:
                     is_exhausted = True
@@ -261,7 +272,12 @@ def prefetch_worker(
 
             return partition_idx, batch_dfs, is_exhausted, total_rows
         except Exception as e:
-            print(f"[{worker_id}] Error reading from partition {partition_idx}: {e}")
+            logger.warning(
+                "[{worker_id}] Error reading from partition {partition_idx}: {e}",
+                worker_id=worker_id,
+                partition_idx=partition_idx,
+                e=e,
+            )
             reader_active[partition_idx] = False
             return partition_idx, [], True, 0
 
@@ -301,26 +317,36 @@ def prefetch_worker(
                 total_compressed = sum(
                     len(x) for x in items_to_put if isinstance(x, bytes)
                 )
-                print(
-                    f"[{worker_id}] put.aio chunk: {len(items_to_put)} items, "
-                    f"compressed max_per_item={max_compressed:,} bytes, total={total_compressed:,}"
+                logger.debug(
+                    "[{worker_id}] put.aio chunk: {n} items, compressed max_per_item={max_compressed:,} bytes, total={total_compressed:,}",
+                    worker_id=worker_id,
+                    n=len(items_to_put),
+                    max_compressed=max_compressed,
+                    total_compressed=total_compressed,
                 )
                 if max_compressed > MODAL_QUEUE_ITEM_SIZE_LIMIT_BYTES:
-                    print(
-                        f"[{worker_id}] WARNING: max item {max_compressed:,} > "
-                        f"Modal limit {MODAL_QUEUE_ITEM_SIZE_LIMIT_BYTES:,}"
+                    logger.warning(
+                        "[{worker_id}] max item {max_compressed:,} > Modal limit {limit:,}",
+                        worker_id=worker_id,
+                        max_compressed=max_compressed,
+                        limit=MODAL_QUEUE_ITEM_SIZE_LIMIT_BYTES,
                     )
                 for item in items_to_put:
                     await queue.put.aio(item)
                 put_count += len(batch)
                 writer_total_put["n"] = put_count
                 if put_count == len(batch):
-                    print(
-                        f"[{worker_id}] First batches put to queue "
-                        f"(chunk={len(batch)}, async writer)"
+                    logger.info(
+                        "[{worker_id}] First batches put to queue (chunk={chunk}, async writer)",
+                        worker_id=worker_id,
+                        chunk=len(batch),
                     )
             except Exception as e:
-                print(f"[{worker_id}] Async writer Error putting to queue: {e}")
+                logger.error(
+                    "[{worker_id}] Async writer Error putting to queue: {e}",
+                    worker_id=worker_id,
+                    e=e,
+                )
             finally:
                 writer_queue.task_done()
 
@@ -331,19 +357,33 @@ def prefetch_worker(
     writer_thread.start()
 
     if queue_name:
-        print(f"[{worker_id}] Queue name: {queue_name}")
-    print(
-        f"[{worker_id}] Starting processing: {epochs} epochs, {len(partition_indices)} partitions"
+        logger.info(
+            "[{worker_id}] Queue name: {name}", worker_id=worker_id, name=queue_name
+        )
+    logger.info(
+        "[{worker_id}] Starting processing: {epochs} epochs, {n_partitions} partitions",
+        worker_id=worker_id,
+        epochs=epochs,
+        n_partitions=len(partition_indices),
     )
-    print(
-        f"[{worker_id}] Prefetch: batch_size={prefetch_batch_size}, batch_count={prefetch_batch_count}, "
-        f"n_scanners={n_scanners} → peak raw rows/round ≤ {n_scanners * prefetch_batch_count * prefetch_batch_size:,}"
+    logger.info(
+        "[{worker_id}] Prefetch: batch_size={prefetch_batch_size}, batch_count={prefetch_batch_count}, n_scanners={n_scanners} → peak raw rows/round ≤ {peak:,}",
+        worker_id=worker_id,
+        prefetch_batch_size=prefetch_batch_size,
+        prefetch_batch_count=prefetch_batch_count,
+        n_scanners=n_scanners,
+        peak=n_scanners * prefetch_batch_count * prefetch_batch_size,
     )
 
     _epoch_first_round: dict[int, bool] = {}  # epoch -> have we logged first round
 
     for epoch in range(epochs):
-        print(f"[{worker_id}] Starting epoch {epoch + 1}/{epochs}")
+        logger.info(
+            "[{worker_id}] Starting epoch {current}/{epochs}",
+            worker_id=worker_id,
+            current=epoch + 1,
+            epochs=epochs,
+        )
         # Reset reader active status for new epoch
         reader_active = dict.fromkeys(partition_indices, True)
         partition_readers = {}  # Reset readers for new epoch
@@ -359,9 +399,11 @@ def prefetch_worker(
             sampled_partitions = random.sample(active_partitions, n_to_sample)
             if epoch not in _epoch_first_round:
                 _epoch_first_round[epoch] = True
-                print(
-                    f"[{worker_id}] First read round: sampling {len(sampled_partitions)} "
-                    f"partitions (of {len(active_partitions)} active)"
+                logger.info(
+                    "[{worker_id}] First read round: sampling {n_sampled} partitions (of {n_active} active)",
+                    worker_id=worker_id,
+                    n_sampled=len(sampled_partitions),
+                    n_active=len(active_partitions),
                 )
 
             # Read from sampled partitions in parallel
@@ -392,9 +434,12 @@ def prefetch_worker(
                         # Pass is_exhausted so boundary handler knows if partition is done
                         # rows here = total rows in this chunk (sum of all batch_dfs); "First read completed" logged only the first batch
                         if total_batches == 0:
-                            print(
-                                f"[{worker_id}] First process_batch: partition={partition_idx}, "
-                                f"rows={rows}, dfs={len(batch_dfs)}"
+                            logger.info(
+                                "[{worker_id}] First process_batch: partition={partition_idx}, rows={rows}, dfs={n_dfs}",
+                                worker_id=worker_id,
+                                partition_idx=partition_idx,
+                                rows=rows,
+                                n_dfs=len(batch_dfs),
                             )
                         t0 = time.perf_counter()
                         samples = processor.process_batch(
@@ -411,9 +456,12 @@ def prefetch_worker(
                         if total_batches == 0 and (
                             completed_futures <= 4 or n_samples == 0 or elapsed > 5.0
                         ):
-                            print(
-                                f"[{worker_id}] process_batch done: partition={partition_idx}, "
-                                f"samples={n_samples}, elapsed={elapsed:.2f}s"
+                            logger.info(
+                                "[{worker_id}] process_batch done: partition={partition_idx}, samples={n_samples}, elapsed={elapsed:.2f}s",
+                                worker_id=worker_id,
+                                partition_idx=partition_idx,
+                                n_samples=n_samples,
+                                elapsed=elapsed,
                             )
 
                     # Batch put_many when we have enough samples or all futures complete
@@ -448,9 +496,9 @@ def prefetch_worker(
 
                     # If round finished with no samples put, log once (helps debug queue size 0)
                     elif all_futures_complete and total_batches == 0:
-                        print(
-                            f"[{worker_id}] Round complete but 0 samples put so far "
-                            f"(boundary may be holding partial groups; next round may flush)"
+                        logger.debug(
+                            "[{worker_id}] Round complete but 0 samples put so far (boundary may be holding partial groups; next round may flush)",
+                            worker_id=worker_id,
                         )
 
                 # Put any remaining samples to writer queue

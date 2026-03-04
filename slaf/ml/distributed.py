@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any
 
 import modal
+from loguru import logger
 
 from slaf.core.slaf import SLAFArray
 from slaf.distributed.coordinator import Coordinator
@@ -286,10 +287,12 @@ class DistributedSLAFDataLoader:
         worker_function.hydrate()
 
         worker_handles = []
-        print(f"Spawning {len(assignments)} workers...")
+        logger.info("Spawning {n} workers...", n=len(assignments))
         for worker_id, assignment in assignments.items():
-            print(
-                f"  Spawning worker {worker_id} with {len(assignment.partition_indices)} partitions"
+            logger.info(
+                "  Spawning worker {worker_id} with {n_partitions} partitions",
+                worker_id=worker_id,
+                n_partitions=len(assignment.partition_indices),
             )
             try:
                 handle = worker_function.spawn(
@@ -304,11 +307,17 @@ class DistributedSLAFDataLoader:
                     partial_groups_kv_name=partial_groups_kv_name,
                 )
                 worker_handles.append(handle)
-                print(
-                    f"  ✅ Worker {worker_id} spawned successfully (handle: {handle})"
+                logger.info(
+                    "  ✅ Worker {worker_id} spawned successfully (handle: {handle})",
+                    worker_id=worker_id,
+                    handle=handle,
                 )
             except Exception as e:
-                print(f"  ❌ Error spawning worker {worker_id}: {e}")
+                logger.error(
+                    "  ❌ Error spawning worker {worker_id}: {e}",
+                    worker_id=worker_id,
+                    e=e,
+                )
                 import traceback
 
                 traceback.print_exc()
