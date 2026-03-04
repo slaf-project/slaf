@@ -873,26 +873,25 @@ class PrefetchBatchProcessor:
                     cell_counts = combined_df.group_by("cell_integer_id").agg(
                         pl.len().alias("observed")
                     )
-                    cell_ids = cell_counts["cell_integer_id"].to_list()
-                    expected = pl.Series(
-                        "expected",
-                        [int(csi[cid + 1]) - int(csi[cid]) for cid in cell_ids],
-                    )
+                    cell_ids_series = cell_counts["cell_integer_id"]
+                    expected = (
+                        csi.gather(cell_ids_series + 1) - csi.gather(cell_ids_series)
+                    ).alias("expected")
                     cell_counts = cell_counts.with_columns(expected)
 
-                    incomplete_ids = (
-                        cell_counts.filter(pl.col("observed") < pl.col("expected"))[
+                    incomplete_mask = cell_counts["observed"] < cell_counts["expected"]
+                    if incomplete_mask.any():
+                        incomplete_ids = cell_counts.filter(incomplete_mask)[
                             "cell_integer_id"
-                        ]
-                        .to_list()
-                    )
+                        ].to_list()
 
-                    if incomplete_ids:
-                        for cell_id in incomplete_ids:
-                            cell_data = combined_df.filter(
-                                pl.col("cell_integer_id") == cell_id
-                            )
-                            self.partial_cell_data[cell_id] = cell_data  # type: ignore
+                        incomplete_df = combined_df.filter(
+                            pl.col("cell_integer_id").is_in(incomplete_ids)
+                        )
+                        for cell_id, group in incomplete_df.partition_by(
+                            "cell_integer_id", as_dict=True
+                        ).items():
+                            self.partial_cell_data[cell_id] = group  # type: ignore
 
                         complete_df = combined_df.filter(
                             ~pl.col("cell_integer_id").is_in(incomplete_ids)
