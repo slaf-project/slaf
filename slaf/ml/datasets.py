@@ -736,50 +736,27 @@ class PrefetchBatchProcessor:
                     last_cell_for_generator = self.generator_last_cells[generator_idx]
                     if last_cell_for_generator is not None:
                         first_cell = generator_combined["cell_integer_id"].item(0)  # type: ignore
-                        expected_cell = last_cell_for_generator + 1
 
-                        if first_cell == expected_cell:
-                            # Continuity detected - check if we can complete the last cell
-                            last_cell_id = last_cell_for_generator
-                            if last_cell_id in self.partial_cell_data:
-                                # STEP 1: Get the incomplete records for this cell
-                                incomplete_records = self.partial_cell_data[
-                                    last_cell_id
-                                ]
-
-                                # STEP 2: Prepend incomplete records to the current batch
+                        if (
+                            first_cell == last_cell_for_generator
+                            or first_cell == last_cell_for_generator + 1
+                        ):
+                            # Cell split across reads or confirmed complete —
+                            # prepend any held-back partial data for this cell
+                            if last_cell_for_generator in self.partial_cell_data:
+                                incomplete_records = self.partial_cell_data.pop(
+                                    last_cell_for_generator
+                                )
                                 generator_combined = pl.concat(
                                     [incomplete_records, generator_combined],
                                     how="vertical",
                                 )  # type: ignore
 
-                                # STEP 3: Pop the completed cell from incomplete_cells
-                                self.partial_cell_data.pop(last_cell_id)
-
                                 if self.verbose and self.batch_id % 100 == 0:
                                     print_prefetch(
-                                        f"Completed cell {last_cell_id} by prepending {len(incomplete_records)} records",
+                                        f"Completed cell {last_cell_for_generator} by prepending {len(incomplete_records)} records",
                                         self.verbose,
                                     )
-                        else:
-                            # Gap detected - check for zombie incomplete cells
-                            # Remove any incomplete cells for this generator that can't be completed
-                            keys_to_remove = []
-                            for cell_id in list(self.partial_cell_data.keys()):
-                                if cell_id <= last_cell_for_generator:
-                                    keys_to_remove.append(cell_id)
-                            for key in keys_to_remove:
-                                self.partial_cell_data.pop(key, None)
-
-                            if (
-                                keys_to_remove
-                                and self.verbose
-                                and self.batch_id % 100 == 0
-                            ):
-                                print_prefetch(
-                                    f"Cleaned up {len(keys_to_remove)} zombie incomplete cells due to gap",
-                                    self.verbose,
-                                )
 
                     # Update last cell for this generator
                     if isinstance(generator_combined, pl.DataFrame):
@@ -885,21 +862,44 @@ class PrefetchBatchProcessor:
 
             # Handle cell boundary crossing
             if self.use_mixture_of_scanners:
-                # MoS mode: add last cell from each batch to partial_cell_data
-                # Since fragments contain complete cells, we don't need complex boundary logic
-                # Just add the last cell from the combined data as potentially incomplete
+                # MoS mode: validate each cell's row count against ground
+                # truth (_cell_start_index) to handle both intra-fragment
+                # read splits and cross-fragment boundary splits.
+                csi = self.slaf_array._cell_start_index
+
                 self.partial_cell_data = {}
                 if len(combined_df) > 0:
-                    last_cell_id = combined_df["cell_integer_id"].max()  # type: ignore
-                    last_cell_data = combined_df.filter(
-                        pl.col("cell_integer_id") == last_cell_id  # type: ignore
+                    cell_counts = combined_df.group_by("cell_integer_id").agg(
+                        pl.len().alias("observed")
                     )
-                    self.partial_cell_data[last_cell_id] = last_cell_data  # type: ignore
+                    cell_ids = cell_counts["cell_integer_id"].to_list()
+                    expected = pl.Series(
+                        "expected",
+                        [int(csi[cid + 1]) - int(csi[cid]) for cid in cell_ids],
+                    )
+                    cell_counts = cell_counts.with_columns(expected)
 
-                # All cells except the last are complete
-                complete_df = combined_df.filter(
-                    pl.col("cell_integer_id") < last_cell_id  # type: ignore
-                )
+                    incomplete_ids = (
+                        cell_counts.filter(pl.col("observed") < pl.col("expected"))[
+                            "cell_integer_id"
+                        ]
+                        .to_list()
+                    )
+
+                    if incomplete_ids:
+                        for cell_id in incomplete_ids:
+                            cell_data = combined_df.filter(
+                                pl.col("cell_integer_id") == cell_id
+                            )
+                            self.partial_cell_data[cell_id] = cell_data  # type: ignore
+
+                        complete_df = combined_df.filter(
+                            ~pl.col("cell_integer_id").is_in(incomplete_ids)
+                        )
+                    else:
+                        complete_df = combined_df
+                else:
+                    complete_df = combined_df
 
             else:
                 # Non-MoS mode: use existing boundary logic
