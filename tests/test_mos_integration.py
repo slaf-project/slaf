@@ -16,7 +16,7 @@ from slaf.ml.datasets import PrefetchBatchProcessor, RawPrefetchBatch
 from slaf.ml.aggregators import ScGPTWindow
 from slaf.ml.samplers import RandomShuffle
 
-HEART_10K_PATH = "/Users/andrews/slaf-datasets/heart_10k.slaf"
+HEART_10K_PATH = os.environ.get("SLAF_HEART_10K_PATH", os.path.expanduser("~/slaf-datasets/heart_10k.slaf"))
 
 pytestmark = [
     pytest.mark.integration,
