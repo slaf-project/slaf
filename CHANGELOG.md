@@ -1,41 +1,77 @@
 # Changelog
 
-## [0.3.2] - 2026-01-26
+## [0.4.0] - 2026-03-05
 
 ### Added
-- f78b969 allow maximum rows per fragment to be controllable
-- f3f9d00 change coverage parsing to work with pytest.ini change
-- 8e18498 type and tests refactoring
-- 21c6557 mypy error on ci
-- 66e2482 unit tests for hf remote dataset
-- 36b9e0e add support for slaf on remote huggingface datasets via hf:// protocol
-- a1704cb mypy errors in ci fixed
-- e59bc65 bump polars version
-- 781dd5c adds pushdown filtering for layers
-- 812245c end to end tests for layers and metadata
-- 52c3d36 resolve mypy errors
-- 5a70606 docs and examples for layers and metadata
-- 92e3836 obs_view -> obs; var_view -> var; obs -> obs_deprecated; var -> var_deprecated
-- a79b705 return dataframe with obs_view or var_view are accessed
-- 229f769 remove spurious tests
-- b6c1380 conversion support for obsm, varm, uns
-- d511ab6 tests for cache invalidation lifecycle
-- 7df6792 cache invalidation on mutation + tests for uns
-- 0b80122 mixin refactor for DRY + obs, var, obsm, varm views with tests
-- 980c138 implement layer deletion and tests
-- cca2c91 unit tests for layer assignment
-- cb93491 implement layer assignment to lazy anndata
-- 09868c0 unit tests for conversion from h5ad with layers
-- 7605312 handle chunked writes and multi file conversion scenario for layers
-- 93cab14 adds basic layer conversion support for anndata
-- c672402 test: Phase 2 - Add unit tests for layers access
-- 6830c6b feat: Phase 2 - Add layers access support
-- 806eae2 feat: Add layers infrastructure (Phase 1, format v0.4)
-- 8ac5a9a CSC -> CSR typo fix
-- 00478a5 update ml benchmarks docs and add charts
-- d3492b6 update benchmarks with annbatch
-- 4a5a911 handle dot in fieldname responsibly: lance doesn't like this
-- 0e10d93 mypy errors
-- 4074a54 optionally don't load metadata in SLAFArray
-- b5b17cb parallelize fragment reads for cloud data loader
-- 098bef1 update badge
+- 35fd450 replace print with loguru
+- 2c589aa remove pins for rich and certifi
+- d38bcaf add type ignore to make mypy happy
+- 524615a fix: mypy issues on CI
+- 2d9552f copy each item before serialization so that the view is not serialized
+- 38b7a47 fix: decompress at distributed dataloader
+- b46af75 compression and async writes
+- 839c7df dedicated writer thread for queue writing + size logging
+- afc2c2a logging to check whether queue is being written to
+- d360d7b more aggressive writes to queue; more verbose logging
+- ca6a478 smaller prefetch batch size for testing
+- 1bf0cc4 smaller prefetch batch size for testing
+- 7529323 better prefetch batch size defaults for tokenization and 32G workers
+- b57892b additional logging and waiting helper
+- 203e0fa cache fragment listing
+- 445be25 fix: use importlib instead for  fresh module imports
+- 25d571f fix: module level imports in prefetch worker
+- 4f33ea4 downgrade rich and certifi
+- a779c1b upgrading versions to make build pass
+- 6591f33 mypy errors
+- 47fcd29 unit tests for distributed dataloader
+- 645064f handle empty df
+- 9db9aa3 cleaning up parameter names and API docstrings
+- b3828cd fix diagnostics collection + don't hard code prefetch_factor
+- 4f73387 multithreaded prefetching
+- ab7f5f4 use queue_prefetch_multiplier to reduce network roundtrips
+- 59a30be import bug fix #2
+- 9a00bfc import bug fix
+- 66a0c04 diagnostics for bottlenecks
+- b4bbeb5 polars ops in dataloader
+- 718792a optimize distributed dataloader batch construction
+- b8ffad6 pass through return_tensors
+- e957a44 bump prefetch factor
+- 16de07e remove debug logging overhead
+- 408dd61 background prefetching on consumption side
+- 08359e2 fixed boundary handling and processing bugs
+- 2cc224f Fix: pass is_partition_exhausted to mark all groups complete when partition exhausted
+- e84b4d4 Add timestamp echo to force Modal image rebuild
+- ab80bd1 Apply 4d53c36: use get_many for queue I/O and remove n_queue_readers
+- 3667cc6 Fix: replace batching logic with immediate partition processing
+- 865da90 Apply aad9bf7 optimizations with fix: process partitions immediately, batch queue puts
+- 0709b36 echo image build time
+- b61eca7 warning for size exceeding modal queue item size limit
+- 2e12ca8 refactor to allow each queue item to be one sample to accommodate 1 KB item limits
+- 0106eb9 pass secrets to workers
+- 35fe9c7 adds logs
+- 38c0fb1 remove modal specific dependency from boundar handler
+- 244e89e intialize queue and kv dict if it doesn't exist
+- d3e3724 worker function must be hydrated
+- e72fca3 distributed implementation is backend agnostic
+- cb65924 distributed dataloader with modal
+- c51c9f6 chore: ignore prds/ and stop tracking OBSP_VARP_SUPPORT_PRD.md
+- ca120ce fix mypy issues
+- d1a160f refactor(anndata): consolidate SQL→Polars and COO view base
+- 7eacf8a (docs) point to anndata tools to aggregate multiple schema-divergent h5ad files
+- 8b15330 fix(anndata): obsp/varp write overwrite and full-join coalesce
+- 55cba6c test(obsp,varp): add conversion, mutations, and selector tests
+- 4ae914a feat(anndata): add LazyObspView and LazyVarpView with COO backend
+- 78297c4 feat(slaf): load cellsxcells and genesxgenes tables when present
+- 0276378 feat(converter): add obsp and varp COO conversion from h5ad
+- d7cb1d0 docs(prd): add obsp/varp implementation checklist and commit messages
+- 46007db fix(converter): avoid ambiguous truth value in dtype validation (fixes #30)
+- 1c369aa bug fix: cell ids order maintenance in tokenization mode
+- ab59b31 figures for blog post
+- 63d6a51 mar exposition
+- a7413be update link to openvid
+- 2c0fb8b pin scipy to handle breaking change with anndata and fix types for tests that create h5ad files
+- 6d47129 huggingface blog post
+- 1fc9228 bump year to 2026
+- e0afbd8 bump pylance version
+- 9b7c458 migration guide
+- 9f27c23 update badge
