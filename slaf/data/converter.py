@@ -961,6 +961,15 @@ class SLAFConverter:
             input_files, input_format, existing_slaf_path
         )
 
+        # Read existing expression schema so we match value_type and column types on append
+        existing_value_type, existing_expr_schema = (
+            self._get_existing_expression_schema(existing_slaf_path)
+        )
+        logger.info(
+            f"Existing expression schema: value_type={existing_value_type}, "
+            "new chunks will be cast to match"
+        )
+
         # Read existing dataset metadata
         existing_cells_dataset = lance.dataset(
             os.path.join(existing_slaf_path, "cells.lance")
@@ -984,6 +993,7 @@ class SLAFConverter:
                 with create_chunked_reader(
                     file_path,
                     chunk_size=self.chunk_size,
+                    value_type=existing_value_type,
                     collection_name=self.tiledb_collection_name,
                 ) as reader:
                     logger.info(
@@ -1062,8 +1072,14 @@ class SLAFConverter:
 
                     # Process expression data in chunks with checkpointing support
                     # Use the same checkpointing infrastructure as convert method
+                    # Pass existing expression schema so chunks are cast before append
                     self._process_file_chunks_with_checkpoint(
-                        reader, existing_slaf_path, i, 0, global_cell_offset
+                        reader,
+                        existing_slaf_path,
+                        i,
+                        0,
+                        global_cell_offset,
+                        append_schema=existing_expr_schema,
                     )
 
                     # Track source file information
@@ -1189,6 +1205,26 @@ class SLAFConverter:
                 ) from e
 
         logger.info("✓ All files are compatible with existing dataset")
+
+    def _get_existing_expression_schema(
+        self, existing_slaf_path: str
+    ) -> tuple[str, pa.Schema]:
+        """Read the existing expression.lance schema and infer value_type for append.
+
+        Returns (value_type, schema) so append can create readers with matching
+        value_type and cast chunks to the exact schema before writing.
+        """
+        expression_path = os.path.join(existing_slaf_path, "expression.lance")
+        if not self._path_exists(expression_path):
+            raise FileNotFoundError(f"Expression dataset not found: {expression_path}")
+        existing_ds = lance.dataset(expression_path)
+        schema = existing_ds.schema
+        value_field = schema.field("value")
+        if pa.types.is_floating(value_field.type):
+            value_type = "float32"
+        else:
+            value_type = "uint16"
+        return value_type, schema
 
     def _load_existing_config(self, existing_slaf_path: str) -> dict:
         """Load existing SLAF configuration."""
@@ -2170,8 +2206,14 @@ class SLAFConverter:
         file_idx: int,
         start_chunk_idx: int,
         global_cell_offset: int,
+        append_schema: pa.Schema | None = None,
     ):
-        """Process chunks for a single file with checkpointing support"""
+        """Process chunks for a single file with checkpointing support.
+
+        When append_schema is provided and we are appending to an existing
+        expression dataset, each chunk is cast to append_schema before write
+        so Lance accepts the append (schema must match exactly).
+        """
         expression_path = f"{output_path}/expression.lance"
 
         # Calculate total chunks for this file
@@ -2280,6 +2322,9 @@ class SLAFConverter:
                     )
                 else:
                     # Append to existing dataset (either subsequent chunks or append operations)
+                    # Cast to existing schema when appending so Lance accepts the write
+                    if append_schema is not None:
+                        adjusted_chunk = adjusted_chunk.cast(append_schema)
                     lance.write_dataset(
                         adjusted_chunk,
                         expression_path,
