@@ -59,7 +59,7 @@ def slaf_dataset_without_layers(temp_slaf_dir):
 
     # Create config.json (format 0.4 but no layers)
     config = {
-        "format_version": "0.4",
+        "format_version": "0.5",
         "array_shape": [2, 2],
         "n_cells": 2,
         "n_genes": 2,
@@ -128,7 +128,7 @@ def slaf_dataset_with_layers(temp_slaf_dir):
 
     # Create config.json with layers
     config = {
-        "format_version": "0.4",
+        "format_version": "0.5",
         "array_shape": [2, 2],
         "n_cells": 2,
         "n_genes": 2,
