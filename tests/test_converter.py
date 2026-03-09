@@ -2104,6 +2104,54 @@ class TestSLAFConverter:
         # Compare the sets (order-independent)
         assert chunked_tuples == non_chunked_tuples
 
+    def test_append_float_expression_schema_match(self, tmp_path):
+        """Test that append() uses existing expression schema (float32) for fractional data.
+
+        Regression test for gh-37: convert() with float/normalized expression writes
+        expression.lance with value: float32 (and int32 ids when use_optimized_dtypes=False).
+        append() previously created a reader with default value_type=uint16 and wrote
+        uint16 value / uint32 cell / uint16 gene, causing Lance schema mismatch.
+        """
+        import scanpy as sc
+        import scipy.sparse as sp
+
+        def make_adata(n_cells=50, n_genes=100, seed=42):
+            rng = np.random.default_rng(seed)
+            X = sp.random(
+                n_cells,
+                n_genes,
+                density=0.02,
+                format="csr",
+                dtype=np.float32,
+                random_state=rng,
+            )
+            X.data = rng.uniform(0.1, 1.0, size=X.data.shape).astype(np.float32)
+            obs = pd.DataFrame({"cell_type": ["T cell"] * n_cells})
+            var = pd.DataFrame({"gene_name": [f"gene_{i}" for i in range(n_genes)]})
+            return sc.AnnData(X=X, obs=obs, var=var)
+
+        ensure_h5ad_writable(make_adata(seed=42))
+        ensure_h5ad_writable(make_adata(seed=99))
+
+        h5ad_1 = tmp_path / "chunk1.h5ad"
+        h5ad_2 = tmp_path / "chunk2.h5ad"
+        make_adata(seed=42).write_h5ad(h5ad_1)
+        make_adata(seed=99).write_h5ad(h5ad_2)
+
+        slaf_path = tmp_path / "test.slaf"
+        converter = SLAFConverter()
+        converter.convert(str(h5ad_1), str(slaf_path))
+        converter.append(str(h5ad_2), str(slaf_path))
+
+        expr = lance.dataset(slaf_path / "expression.lance")
+        schema = expr.schema
+        assert schema.field("value").type == pa.float32()
+        df = expr.to_table().to_pandas()
+        assert len(df) > 0
+        n_cells_expected = 50 + 50
+        assert df["cell_integer_id"].max() < n_cells_expected
+        assert df["cell_integer_id"].min() >= 0
+
     def test_convert_process_variable_fix(self, small_sample_adata, tmp_path):
         """Test that the process variable fix works correctly."""
         # Save sample data as h5ad
