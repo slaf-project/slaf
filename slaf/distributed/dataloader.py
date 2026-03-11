@@ -17,7 +17,7 @@ import pickle
 import threading
 import time
 import zlib
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from queue import Empty, Queue
 from typing import Any
 
@@ -85,6 +85,7 @@ class DistributedDataLoader:
         prefetch_factor: int = 8,
         enable_diagnostics: bool = False,
         queue_timeout: float = 1.0,
+        shutdown_workers: Callable[[], None] | None = None,
     ):
         """
         Initialize distributed dataloader (consumer-side).
@@ -104,6 +105,8 @@ class DistributedDataLoader:
                           Higher values allow longer waits when queue is empty (useful for slow producers).
                           Lower values fail faster (useful for detecting end-of-data quickly).
                           Default: 1.0 seconds.
+            shutdown_workers: Optional no-arg callable to stop producer workers (e.g. cancel remote
+                              workers). Called by stop_prefetch_workers(). Keeps this layer backend-agnostic.
         """
         self.queue = queue
         self.batch_size = batch_size
@@ -112,6 +115,7 @@ class DistributedDataLoader:
         self._use_prefetching = prefetch_factor > 0
         self.enable_diagnostics = enable_diagnostics
         self.queue_timeout = queue_timeout
+        self._shutdown_workers = shutdown_workers
 
         # Internal queue for prefetched formatted batches (only if prefetching enabled)
         if self._use_prefetching:
@@ -137,6 +141,15 @@ class DistributedDataLoader:
                 "start_time": time.time(),
             }
             self._diagnostics_lock = threading.Lock()  # Lock for thread-safe updates
+
+    def stop_prefetch_workers(self) -> None:
+        """Ask the producer side to stop (e.g. cancel remote workers).
+
+        Call this after training so producer workers can exit and release resources.
+        No-op if no shutdown_workers callback was provided at construction.
+        """
+        if self._shutdown_workers is not None:
+            self._shutdown_workers()
 
     def __iter__(self) -> Iterator[dict[str, Any]]:
         """

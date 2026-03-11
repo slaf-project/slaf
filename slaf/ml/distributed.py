@@ -35,9 +35,7 @@ image = (
         "git+https://github.com/slaf-project/slaf.git@distributed_dataloader#egg=slafdb[ml]",
         force_build=True,
     )
-    .run_commands(
-        f"echo 'Image built at {_BUILD_TS}'",
-    )
+    .run_commands(f"echo 'Image built at {_BUILD_TS}'")
 )
 
 # Create SLAF-specific Modal app
@@ -332,6 +330,18 @@ class DistributedSLAFDataLoader:
         # Workers compress items (zlib) to stay under Modal's 1 MiB/item limit; decompress on read
         consumer_queue = DecompressingQueueWrapper(modal_queue)
 
+        def _shutdown_modal_workers() -> None:
+            for handle in worker_handles:
+                try:
+                    handle.cancel()
+                except Exception as e:
+                    logger.warning(
+                        "Failed to cancel worker {handle}: {e}",
+                        handle=handle,
+                        e=e,
+                    )
+            logger.info("Stopped {n} prefetch workers", n=len(worker_handles))
+
         # Create dataloader with queue object and batch_size (framework-agnostic)
         # Enable concurrent prefetching with multiple threads making concurrent get_many() calls
         # This is like having multiple consumers in the same process, allowing true parallelism
@@ -344,6 +354,7 @@ class DistributedSLAFDataLoader:
             prefetch_factor=prefetch_factor,  # Number of concurrent threads for queue.get_many() calls
             enable_diagnostics=True,  # Enable diagnostics for bottleneck analysis
             queue_timeout=queue_timeout,  # Timeout for queue operations
+            shutdown_workers=_shutdown_modal_workers,
         )
         self.worker_handles = worker_handles
         self.queue_name = queue_name  # Store queue name for external access
@@ -384,3 +395,12 @@ class DistributedSLAFDataLoader:
             return queue.len()
         except Exception:
             return 0
+
+    def stop_prefetch_workers(self) -> None:
+        """Cancel all prefetch workers so they exit and release Modal resources.
+
+        Call this after training (e.g. when the dataloader is exhausted or you
+        break out of the training loop) so workers do not keep running on Modal.
+        Delegates to the generic dataloader's shutdown callback.
+        """
+        self.dataloader.stop_prefetch_workers()
