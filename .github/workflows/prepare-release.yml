@@ -121,6 +121,14 @@ jobs:
           uv lock --no-upgrade
           echo "Updated uv.lock"
 
+      - name: Update README badge
+        run: |
+          NEW_VERSION="${{ steps.version.outputs.new_version }}"
+          # Replace version in PyPI badge (handles x.y.z and x.y.z-prerelease)
+          sed -i 's|\(badge/PyPI-\).*\(-blue\.svg\)|\1'"$NEW_VERSION"'\2|' README.md
+          echo "Updated PyPI badge in README.md to $NEW_VERSION"
+          grep 'PyPI' README.md || true
+
       - name: Generate changelog
         run: |
           # Generate changelog from git commits
@@ -147,7 +155,7 @@ jobs:
           git diff --cached || true
 
           # Add and commit changes
-          git add pyproject.toml uv.lock CHANGELOG.md
+          git add pyproject.toml uv.lock CHANGELOG.md README.md
           git commit -m "Bump version to ${{ steps.version.outputs.new_version }}"
 
           # Show the commit
