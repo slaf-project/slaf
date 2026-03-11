@@ -1,77 +1,12 @@
 # Changelog
 
-## [0.4.0] - 2026-03-05
+## [0.4.1] - 2026-03-11
 
 ### Added
-- 35fd450 replace print with loguru
-- 2c589aa remove pins for rich and certifi
-- d38bcaf add type ignore to make mypy happy
-- 524615a fix: mypy issues on CI
-- 2d9552f copy each item before serialization so that the view is not serialized
-- 38b7a47 fix: decompress at distributed dataloader
-- b46af75 compression and async writes
-- 839c7df dedicated writer thread for queue writing + size logging
-- afc2c2a logging to check whether queue is being written to
-- d360d7b more aggressive writes to queue; more verbose logging
-- ca6a478 smaller prefetch batch size for testing
-- 1bf0cc4 smaller prefetch batch size for testing
-- 7529323 better prefetch batch size defaults for tokenization and 32G workers
-- b57892b additional logging and waiting helper
-- 203e0fa cache fragment listing
-- 445be25 fix: use importlib instead for  fresh module imports
-- 25d571f fix: module level imports in prefetch worker
-- 4f33ea4 downgrade rich and certifi
-- a779c1b upgrading versions to make build pass
-- 6591f33 mypy errors
-- 47fcd29 unit tests for distributed dataloader
-- 645064f handle empty df
-- 9db9aa3 cleaning up parameter names and API docstrings
-- b3828cd fix diagnostics collection + don't hard code prefetch_factor
-- 4f73387 multithreaded prefetching
-- ab7f5f4 use queue_prefetch_multiplier to reduce network roundtrips
-- 59a30be import bug fix #2
-- 9a00bfc import bug fix
-- 66a0c04 diagnostics for bottlenecks
-- b4bbeb5 polars ops in dataloader
-- 718792a optimize distributed dataloader batch construction
-- b8ffad6 pass through return_tensors
-- e957a44 bump prefetch factor
-- 16de07e remove debug logging overhead
-- 408dd61 background prefetching on consumption side
-- 08359e2 fixed boundary handling and processing bugs
-- 2cc224f Fix: pass is_partition_exhausted to mark all groups complete when partition exhausted
-- e84b4d4 Add timestamp echo to force Modal image rebuild
-- ab80bd1 Apply 4d53c36: use get_many for queue I/O and remove n_queue_readers
-- 3667cc6 Fix: replace batching logic with immediate partition processing
-- 865da90 Apply aad9bf7 optimizations with fix: process partitions immediately, batch queue puts
-- 0709b36 echo image build time
-- b61eca7 warning for size exceeding modal queue item size limit
-- 2e12ca8 refactor to allow each queue item to be one sample to accommodate 1 KB item limits
-- 0106eb9 pass secrets to workers
-- 35fe9c7 adds logs
-- 38c0fb1 remove modal specific dependency from boundar handler
-- 244e89e intialize queue and kv dict if it doesn't exist
-- d3e3724 worker function must be hydrated
-- e72fca3 distributed implementation is backend agnostic
-- cb65924 distributed dataloader with modal
-- c51c9f6 chore: ignore prds/ and stop tracking OBSP_VARP_SUPPORT_PRD.md
-- ca120ce fix mypy issues
-- d1a160f refactor(anndata): consolidate SQL→Polars and COO view base
-- 7eacf8a (docs) point to anndata tools to aggregate multiple schema-divergent h5ad files
-- 8b15330 fix(anndata): obsp/varp write overwrite and full-join coalesce
-- 55cba6c test(obsp,varp): add conversion, mutations, and selector tests
-- 4ae914a feat(anndata): add LazyObspView and LazyVarpView with COO backend
-- 78297c4 feat(slaf): load cellsxcells and genesxgenes tables when present
-- 0276378 feat(converter): add obsp and varp COO conversion from h5ad
-- d7cb1d0 docs(prd): add obsp/varp implementation checklist and commit messages
-- 46007db fix(converter): avoid ambiguous truth value in dtype validation (fixes #30)
-- 1c369aa bug fix: cell ids order maintenance in tokenization mode
-- ab59b31 figures for blog post
-- 63d6a51 mar exposition
-- a7413be update link to openvid
-- 2c0fb8b pin scipy to handle breaking change with anndata and fix types for tests that create h5ad files
-- 6d47129 huggingface blog post
-- 1fc9228 bump year to 2026
-- e0afbd8 bump pylance version
-- 9b7c458 migration guide
-- 9f27c23 update badge
+- 684a910 ci: update README PyPI badge in prepare-release workflow
+- 8b741d4 Add stop_prefetch_workers() to shut down Modal workers after training
+- 7408cb1 Fix #37: match existing expression schema on append (value_type + cast)
+- 2939b97 upperbound pandas to make sure write_h5ad works
+- 2927d26 Revert ruff version changes per reviewer feedback
+- 62b8ae4 Loosen lower-bound dependency constraints for cross-project compatibility
+- 6f8007e bump version number in README
