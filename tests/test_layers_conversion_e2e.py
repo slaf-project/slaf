@@ -40,7 +40,7 @@ def test_convert_anndata_with_layers(anndata_with_layers):
         # Load and verify
         slaf = SLAFArray(tmpdir, load_metadata=False)
         assert slaf.shape == anndata_with_layers.shape
-        assert slaf.config["format_version"] == "0.4"
+        assert slaf.config["format_version"] == "0.5"
 
         # Verify layers table exists
         assert slaf.layers is not None
@@ -71,7 +71,7 @@ def test_convert_anndata_without_layers(anndata_without_layers):
         # Load and verify
         slaf = SLAFArray(tmpdir, load_metadata=False)
         assert slaf.shape == anndata_without_layers.shape
-        assert slaf.config["format_version"] == "0.4"
+        assert slaf.config["format_version"] == "0.5"
 
         # Verify layers table does not exist
         assert slaf.layers is None
@@ -248,7 +248,7 @@ def test_round_trip_conversion(anndata_with_layers):
         assert unspliced_matrix.shape == anndata_with_layers.shape
 
         # Step 5: Verify config
-        assert slaf.config["format_version"] == "0.4"
+        assert slaf.config["format_version"] == "0.5"
         assert "layers" in slaf.config["tables"]
         assert "layers" in slaf.config
 
@@ -293,7 +293,7 @@ def test_convert_anndata_chunked_with_layers(anndata_with_layers):
         # Load and verify
         slaf = SLAFArray(tmpdir, load_metadata=False)
         assert slaf.shape == anndata_with_layers.shape
-        assert slaf.config["format_version"] == "0.4"
+        assert slaf.config["format_version"] == "0.5"
 
         # Verify layers table exists
         assert slaf.layers is not None
@@ -359,7 +359,7 @@ def test_convert_multiple_files_consistent_layers():
 
         # Load and verify
         slaf = SLAFArray(output_path, load_metadata=False)
-        assert slaf.config["format_version"] == "0.4"
+        assert slaf.config["format_version"] == "0.5"
 
         # Verify layers table exists
         assert slaf.layers is not None
@@ -436,7 +436,7 @@ def test_convert_multiple_files_inconsistent_layers():
 
         # Load and verify
         slaf = SLAFArray(output_path, load_metadata=False)
-        assert slaf.config["format_version"] == "0.4"
+        assert slaf.config["format_version"] == "0.5"
 
         # Verify layers table does NOT exist
         assert slaf.layers is None

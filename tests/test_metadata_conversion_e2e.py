@@ -75,7 +75,7 @@ def test_convert_anndata_with_obsm(anndata_with_metadata):
         # Load and verify
         slaf = SLAFArray(tmpdir, load_metadata=False)
         assert slaf.shape == anndata_with_metadata.shape
-        assert slaf.config["format_version"] == "0.4"
+        assert slaf.config["format_version"] == "0.5"
 
         # Verify config has obsm metadata
         assert "obsm" in slaf.config

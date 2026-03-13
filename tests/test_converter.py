@@ -37,7 +37,7 @@ class TestSLAFConverter:
         # Check config version
         with open(output_path / "config.json") as f:
             config = json.load(f)
-        assert config["format_version"] == "0.4"
+        assert config["format_version"] == "0.5"
 
     def test_expression_data_consistency(self, small_sample_adata, tmp_path):
         """Test that expression data is consistent in COO format"""
@@ -253,7 +253,7 @@ class TestSLAFConverter:
             config = json.load(f)
 
         # Check format version
-        assert config["format_version"] == "0.4"
+        assert config["format_version"] == "0.5"
 
         # Check that metadata section exists
         assert "metadata" in config
@@ -2199,7 +2199,7 @@ class TestSLAFConverter:
         with open(output_path / "config.json") as f:
             config = json.load(f)
 
-        assert config["format_version"] == "0.4"
+        assert config["format_version"] == "0.5"
         assert "layers" in config
         assert set(config["layers"]["available"]) == {"spliced", "unspliced"}
         assert "layers" in config["tables"]
@@ -2259,7 +2259,7 @@ class TestSLAFConverter:
         with open(output_path / "config.json") as f:
             config = json.load(f)
 
-        assert config["format_version"] == "0.4"
+        assert config["format_version"] == "0.5"
         assert "layers" in config
         assert set(config["layers"]["available"]) == {"spliced", "unspliced"}
         assert "layers" in config["tables"]
@@ -2324,7 +2324,7 @@ class TestSLAFConverter:
         with open(output_path / "config.json") as f:
             config = json.load(f)
 
-        assert config["format_version"] == "0.4"
+        assert config["format_version"] == "0.5"
         assert "layers" not in config
         assert "layers" not in config["tables"]
 
@@ -2367,6 +2367,6 @@ class TestSLAFConverter:
         with open(output_path / "config.json") as f:
             config = json.load(f)
 
-        assert config["format_version"] == "0.4"
+        assert config["format_version"] == "0.5"
         assert "layers" not in config
         assert "layers" not in config["tables"]
