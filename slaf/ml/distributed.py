@@ -33,93 +33,108 @@ image = (
     .pip_install("uv")
     .uv_pip_install(
         "slafdb[ml]",
-        force_build=True,
     )
     .run_commands(f"echo 'Image built at {_BUILD_TS}'")
 )
 
-# Create SLAF-specific Modal app
-# IMPORTANT: This app must be deployed before use. Options (install-path agnostic):
-#   Python:  from slaf.ml.distributed import deploy_dataloader_app; deploy_dataloader_app()
-#   CLI:     slaf deploy
-# See: https://modal.com/docs/guide/apps#deployed-apps
-app = modal.App("slaf-distributed-dataloader")
+# App name used for deploy and for loader's Function.from_name()
+_APP_NAME = "slaf-distributed-dataloader"
 
 
-def deploy_dataloader_app(*, show_logs: bool = False) -> None:
+def create_app(
+    *,
+    cpu: float = 8,
+    memory: int = 32768,  # 32 GB per worker
+) -> modal.App:
+    """Create the SLAF distributed dataloader Modal app with given per-worker resources."""
+    app = modal.App(_APP_NAME)
+
+    @app.function(
+        image=image,
+        cpu=cpu,
+        memory=memory,
+        timeout=3600,
+        secrets=[modal.Secret.from_name("s3-credentials")],
+        serialized=True,  # Required: function is defined inside create_app(), not global scope
+    )
+    def distributed_prefetch_worker(
+        worker_id: str,
+        partition_indices: list[int],
+        data_source_config: dict[str, Any],
+        processor_config: dict[str, Any],
+        queue_name: str,
+        n_scanners: int = 8,
+        prefetch_batch_count: int = 32,
+        prefetch_batch_size: int = 16384,
+        max_batches: int | None = None,
+        partial_groups_kv_name: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        SLAF-specific Modal worker function with SLAF image.
+
+        This function wraps the framework-agnostic worker implementation and
+        handles all Modal-specific setup (Queue, KV store, etc.).
+        """
+        from slaf.distributed.worker import prefetch_worker
+
+        queue = modal.Queue.from_name(queue_name, create_if_missing=True)
+        partial_groups_kv = None
+        if (
+            processor_config.get("enable_cross_worker_boundary_merging", False)
+            and partial_groups_kv_name
+        ):
+            partial_groups_kv = modal.Dict.from_name(
+                partial_groups_kv_name, create_if_missing=True
+            )
+        return prefetch_worker(
+            worker_id=worker_id,
+            partition_indices=partition_indices,
+            data_source_config=data_source_config,
+            processor_config=processor_config,
+            queue=queue,
+            n_scanners=n_scanners,
+            prefetch_batch_count=prefetch_batch_count,
+            prefetch_batch_size=prefetch_batch_size,
+            max_batches=max_batches,
+            partial_groups_kv=partial_groups_kv,
+            queue_name=queue_name,
+        )
+
+    return app
+
+
+# Default app (8 CPU, 32 GB per worker) for backwards compatibility and for
+# deploy_dataloader_app() when called with defaults.
+# IMPORTANT: Deploy before use. Python: deploy_dataloader_app(); CLI: slaf deploy-dataloader
+app = create_app(cpu=8, memory=32768)
+
+
+def deploy_dataloader_app(
+    *,
+    show_logs: bool = False,
+    cpu: float = 8,
+    memory: int = 32768,  # 32 GB per worker
+) -> None:
     """Deploy the SLAF distributed dataloader Modal app so it is available for training.
 
     Call this from a training script (or anywhere slaf is installed) to deploy the
     app before using DistributedSLAFDataLoader. Works regardless of install method
-    (uv, pip, venv, conda, containers).
+    (uv, pip, venv, conda, containers). Use the same cpu and memory when creating
+    the loader so the deployed app matches.
 
     Args:
         show_logs: If True, stream Modal build/deploy logs to stdout. Default False
             so deploy is quiet when called from a training script that logs its own
             progress (avoids interleaving with trainer logs).
+        cpu: CPU cores per worker (default 8).
+        memory: Memory in MiB per worker (default 32768 = 32 GB).
     """
+    deployable = create_app(cpu=cpu, memory=memory)
     if show_logs:
         with modal.enable_output():
-            app.deploy()
+            deployable.deploy()
     else:
-        app.deploy()
-
-
-@app.function(
-    image=image,
-    cpu=8,
-    memory=32768,  # 32 GB per worker
-    timeout=3600,
-    secrets=[modal.Secret.from_name("s3-credentials")],
-)
-def distributed_prefetch_worker(
-    worker_id: str,
-    partition_indices: list[int],
-    data_source_config: dict[str, Any],
-    processor_config: dict[str, Any],
-    queue_name: str,
-    n_scanners: int = 8,
-    prefetch_batch_count: int = 32,
-    prefetch_batch_size: int = 16384,
-    max_batches: int | None = None,
-    partial_groups_kv_name: str | None = None,
-) -> dict[str, Any]:
-    """
-    SLAF-specific Modal worker function with SLAF image.
-
-    This function wraps the framework-agnostic worker implementation and
-    handles all Modal-specific setup (Queue, KV store, etc.).
-    """
-    from slaf.distributed.worker import prefetch_worker
-
-    # Create Modal Queue
-    # Use create_if_missing=True to ensure queue exists (it should be created in __init__)
-    queue = modal.Queue.from_name(queue_name, create_if_missing=True)
-
-    # Create Modal Dict for cross-worker boundary merging if enabled
-    partial_groups_kv = None
-    if (
-        processor_config.get("enable_cross_worker_boundary_merging", False)
-        and partial_groups_kv_name
-    ):
-        partial_groups_kv = modal.Dict.from_name(
-            partial_groups_kv_name, create_if_missing=True
-        )
-
-    # Call the framework-agnostic implementation
-    return prefetch_worker(
-        worker_id=worker_id,
-        partition_indices=partition_indices,
-        data_source_config=data_source_config,
-        processor_config=processor_config,
-        queue=queue,
-        n_scanners=n_scanners,
-        prefetch_batch_count=prefetch_batch_count,
-        prefetch_batch_size=prefetch_batch_size,
-        max_batches=max_batches,
-        partial_groups_kv=partial_groups_kv,
-        queue_name=queue_name,
-    )
+        deployable.deploy()
 
 
 class DistributedSLAFDataLoader:
@@ -143,6 +158,8 @@ class DistributedSLAFDataLoader:
         tokenizer: SLAFTokenizer | None = None,
         n_workers: int = 64,
         n_scanners: int = 16,
+        cpu: float = 8,
+        memory: int = 32768,  # 32 GB per worker; must match deploy_dataloader_app(cpu=..., memory=...)
         prefetch_batch_size: int = 16384,  # 16K rows per Lance batch (small default for testing; raise e.g. 262144 for prod)
         prefetch_batch_count: int = 32,
         batch_size: int = 32,
@@ -170,6 +187,8 @@ class DistributedSLAFDataLoader:
             tokenizer [PRODUCER]: SLAFTokenizer instance (optional, created automatically from tokenizer_type if None)
             n_workers: [PRODUCER] Number of Modal workers (producer-side parallelism)
             n_scanners: [PRODUCER] Number of scanners per worker (for Mixture of Scanners)
+            cpu: [PRODUCER] CPU cores per worker; must match deploy_dataloader_app(cpu=...).
+            memory: [PRODUCER] Memory in MiB per worker; must match deploy_dataloader_app(memory=...).
             prefetch_batch_size: [PRODUCER] Max rows per Lance batch (passed to fragment.to_batches).
                                  Lower = less worker memory; peak ≈ n_scanners * prefetch_batch_count * this.
             prefetch_batch_count: [PRODUCER] Number of Lance batches read per partition before processing.
@@ -297,10 +316,9 @@ class DistributedSLAFDataLoader:
         # when called from another Modal app
         # The app must be deployed first: modal deploy slaf/ml/distributed.py
         worker_function = modal.Function.from_name(
-            "slaf-distributed-dataloader", "distributed_prefetch_worker"
+            _APP_NAME, "distributed_prefetch_worker"
         )
-        # Explicitly hydrate the function to ensure it's synchronized with the Modal server
-        # This is needed when referencing a function from a deployed app
+        # Optional: hydrate now; from_name is lazy and spawn() would hydrate on first use (see Modal Function docs).
         worker_function.hydrate()
 
         worker_handles = []

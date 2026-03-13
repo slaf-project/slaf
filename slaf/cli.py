@@ -47,13 +47,25 @@ def deploy_dataloader(
         "-l",
         help="Stream Modal build/deploy logs to stdout (default: quiet so trainer logs stay clean)",
     ),
+    cpu: float = typer.Option(
+        8,
+        "--cpu",
+        "-c",
+        help="CPU cores per worker (must match DistributedSLAFDataLoader(cpu=...))",
+    ),
+    memory: int = typer.Option(
+        32768,
+        "--memory",
+        "-m",
+        help="Memory in MiB per worker (default 32768 = 32 GB; must match loader)",
+    ),
 ):
     """Deploy the SLAF distributed dataloader Modal app.
 
     Run this before training that uses DistributedSLAFDataLoader. Works from any
-    repo that has slaf installed (uv, pip, venv, conda, containers). The app must
-    be deployed so that dataloader workers can be spawned. Default is quiet so
-    when called from a training script your own logs are not mixed with deploy output.
+    repo that has slaf installed (uv, pip, venv, conda, containers). Use the same
+    --cpu and --memory when creating the loader. Default is quiet so when called
+    from a training script your own logs are not mixed with deploy output.
     """
     try:
         from slaf.ml.distributed import deploy_dataloader_app
@@ -61,7 +73,7 @@ def deploy_dataloader(
         typer.echo("❌ SLAF not installed or slaf.ml.distributed not available")
         raise typer.Exit(1) from e
     typer.echo("🚀 Deploying SLAF distributed dataloader app to Modal...")
-    deploy_dataloader_app(show_logs=logs)
+    deploy_dataloader_app(show_logs=logs, cpu=cpu, memory=memory)
     typer.echo("✅ Deploy complete. You can now use DistributedSLAFDataLoader.")
 
 
