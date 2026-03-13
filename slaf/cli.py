@@ -40,6 +40,32 @@ def check_dependencies() -> None:
 
 
 @app.command()
+def deploy_dataloader(
+    logs: bool = typer.Option(
+        False,
+        "--logs",
+        "-l",
+        help="Stream Modal build/deploy logs to stdout (default: quiet so trainer logs stay clean)",
+    ),
+):
+    """Deploy the SLAF distributed dataloader Modal app.
+
+    Run this before training that uses DistributedSLAFDataLoader. Works from any
+    repo that has slaf installed (uv, pip, venv, conda, containers). The app must
+    be deployed so that dataloader workers can be spawned. Default is quiet so
+    when called from a training script your own logs are not mixed with deploy output.
+    """
+    try:
+        from slaf.ml.distributed import deploy_dataloader_app
+    except ImportError as e:
+        typer.echo("❌ SLAF not installed or slaf.ml.distributed not available")
+        raise typer.Exit(1) from e
+    typer.echo("🚀 Deploying SLAF distributed dataloader app to Modal...")
+    deploy_dataloader_app(show_logs=logs)
+    typer.echo("✅ Deploy complete. You can now use DistributedSLAFDataLoader.")
+
+
+@app.command()
 def version():
     """Show SLAF version."""
     display_ascii_art()
