@@ -34,6 +34,8 @@
 
 See our detailed benchmarks for [bioinformaticians](benchmarks/bioinformatics_benchmarks.md) and [ML engineers](benchmarks/ml_benchmarks.md).
 
+**Want to contribute?** See the [Contributing guide](development/contributing.md).
+
 ---
 
 ## **Why SLAF?**
