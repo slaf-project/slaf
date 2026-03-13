@@ -32,18 +32,37 @@ image = (
     .apt_install("build-essential", "python3-dev", "git")
     .pip_install("uv")
     .uv_pip_install(
-        "git+https://github.com/slaf-project/slaf.git@distributed_dataloader#egg=slafdb[ml]",
+        "slafdb[ml]",
         force_build=True,
     )
     .run_commands(f"echo 'Image built at {_BUILD_TS}'")
 )
 
 # Create SLAF-specific Modal app
-# IMPORTANT: This app must be deployed before use:
-#   modal deploy slaf/ml/distributed.py
-# This makes it a persistent deployed app that can be invoked from other Modal functions.
+# IMPORTANT: This app must be deployed before use. Options (install-path agnostic):
+#   Python:  from slaf.ml.distributed import deploy_dataloader_app; deploy_dataloader_app()
+#   CLI:     slaf deploy
 # See: https://modal.com/docs/guide/apps#deployed-apps
 app = modal.App("slaf-distributed-dataloader")
+
+
+def deploy_dataloader_app(*, show_logs: bool = False) -> None:
+    """Deploy the SLAF distributed dataloader Modal app so it is available for training.
+
+    Call this from a training script (or anywhere slaf is installed) to deploy the
+    app before using DistributedSLAFDataLoader. Works regardless of install method
+    (uv, pip, venv, conda, containers).
+
+    Args:
+        show_logs: If True, stream Modal build/deploy logs to stdout. Default False
+            so deploy is quiet when called from a training script that logs its own
+            progress (avoids interleaving with trainer logs).
+    """
+    if show_logs:
+        with modal.enable_output():
+            app.deploy()
+    else:
+        app.deploy()
 
 
 @app.function(
