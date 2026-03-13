@@ -365,8 +365,12 @@ slaf info dataset.slaf
 - [API Reference](https://slaf-project.github.io/slaf/api/)
 - [Examples](https://slaf-project.github.io/slaf/examples/getting-started/)
 - [User Guide](https://slaf-project.github.io/slaf/user-guide/how-slaf-works/)
-- [Developers Guide](https://slaf-project.github.io/slaf/development/contributing/)
+- [Contributing](https://slaf-project.github.io/slaf/development/contributing/) — setup, workflow, and how to contribute
 - [Maintainers Guide](https://slaf-project.github.io/slaf/development/maintaining/)
+
+## 💬 Community
+
+- [Discord](https://discord.gg/7Q95RVhURe) — chat, questions, and updates
 
 ## 🙏 Acknowledgments
 
