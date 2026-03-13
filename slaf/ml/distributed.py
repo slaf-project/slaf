@@ -56,6 +56,7 @@ def create_app(
         timeout=3600,
         secrets=[modal.Secret.from_name("s3-credentials")],
         serialized=True,  # Required: function is defined inside create_app(), not global scope
+        name="distributed_prefetch_worker",  # Stable name for Function.from_name() lookup from training/other apps
     )
     def distributed_prefetch_worker(
         worker_id: str,
