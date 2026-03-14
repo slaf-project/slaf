@@ -637,7 +637,7 @@ def slaf_with_layers(temp_dir):
 
     # Create config.json with layers
     config = {
-        "format_version": "0.4",
+        "format_version": "0.5",
         "array_shape": [3, 2],
         "n_cells": 3,
         "n_genes": 2,
@@ -711,7 +711,7 @@ def slaf_without_layers(temp_dir):
 
     # Create config.json without layers (format 0.4 but no layers)
     config = {
-        "format_version": "0.4",
+        "format_version": "0.5",
         "array_shape": [3, 2],
         "n_cells": 3,
         "n_genes": 2,
@@ -825,7 +825,7 @@ def slaf_with_obs_columns(temp_dir):
 
     # Create config.json with obs columns
     config = {
-        "format_version": "0.4",
+        "format_version": "0.5",
         "array_shape": [3, 2],
         "n_cells": 3,
         "n_genes": 2,
@@ -900,7 +900,7 @@ def slaf_with_var_columns(temp_dir):
 
     # Create config.json with var columns
     config = {
-        "format_version": "0.4",
+        "format_version": "0.5",
         "array_shape": [3, 2],
         "n_cells": 3,
         "n_genes": 2,

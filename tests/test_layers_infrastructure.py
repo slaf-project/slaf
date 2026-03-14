@@ -59,7 +59,7 @@ def slaf_dataset_without_layers(temp_slaf_dir):
 
     # Create config.json (format 0.4 but no layers)
     config = {
-        "format_version": "0.4",
+        "format_version": "0.5",
         "array_shape": [2, 2],
         "n_cells": 2,
         "n_genes": 2,
@@ -128,7 +128,7 @@ def slaf_dataset_with_layers(temp_slaf_dir):
 
     # Create config.json with layers
     config = {
-        "format_version": "0.4",
+        "format_version": "0.5",
         "array_shape": [2, 2],
         "n_cells": 2,
         "n_genes": 2,
@@ -168,7 +168,7 @@ def test_load_dataset_without_layers(slaf_dataset_without_layers):
 
     # Verify basic properties
     assert slaf.shape == (2, 2)
-    assert slaf.config["format_version"] == "0.4"
+    assert slaf.config["format_version"] == "0.5"
 
     # Verify layers table is None
     assert slaf.layers is None
@@ -185,7 +185,7 @@ def test_load_dataset_with_layers(slaf_dataset_with_layers):
 
     # Verify basic properties
     assert slaf.shape == (2, 2)
-    assert slaf.config["format_version"] == "0.4"
+    assert slaf.config["format_version"] == "0.5"
 
     # Verify layers table is loaded
     assert slaf.layers is not None
@@ -239,7 +239,7 @@ def test_config_format_version_0_4(slaf_dataset_with_layers):
     # Disable async metadata loading to avoid errors with temporary datasets
     slaf = SLAFArray(slaf_dataset_with_layers, load_metadata=False)
 
-    assert slaf.config["format_version"] == "0.4"
+    assert slaf.config["format_version"] == "0.5"
 
 
 def test_layers_table_schema(slaf_dataset_with_layers):

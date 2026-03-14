@@ -2923,7 +2923,7 @@ class LazyCooViewBase(LazyDictionaryViewMixin):
                 coo_table,
                 table_path,
                 mode="overwrite",
-                data_storage_version="2.1",
+                data_storage_version="2.2",
             )
         else:
             existing = cast(pl.DataFrame, pl.from_arrow(table.to_table()))
@@ -2949,7 +2949,7 @@ class LazyCooViewBase(LazyDictionaryViewMixin):
                 merged.to_arrow(),
                 table_path,
                 mode="overwrite",
-                data_storage_version="2.1",
+                data_storage_version="2.2",
             )
         setattr(self._slaf_array, self._table_attr, lance.dataset(table_path))
         cfg_path = self._slaf_array._join_path(
@@ -3001,7 +3001,7 @@ class LazyCooViewBase(LazyDictionaryViewMixin):
             ),
         )
         lance.write_dataset(
-            new_table, table_path, mode="overwrite", data_storage_version="2.1"
+            new_table, table_path, mode="overwrite", data_storage_version="2.2"
         )
         setattr(self._slaf_array, self._table_attr, lance.dataset(table_path))
         cfg_path = self._slaf_array._join_path(

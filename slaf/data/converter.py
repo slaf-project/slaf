@@ -795,14 +795,14 @@ class SLAFConverter:
                             cells_path,
                             mode="overwrite",
                             enable_v2_manifest_paths=self.enable_v2_manifest,
-                            data_storage_version="2.1",
+                            data_storage_version="2.2",
                         )
                         lance.write_dataset(
                             gene_metadata_table,
                             genes_path,
                             mode="overwrite",
                             enable_v2_manifest_paths=self.enable_v2_manifest,
-                            data_storage_version="2.1",
+                            data_storage_version="2.2",
                         )
                         total_genes = len(var_df)
                     elif should_write_metadata:
@@ -812,7 +812,7 @@ class SLAFConverter:
                             cells_path,
                             mode="append",
                             enable_v2_manifest_paths=self.enable_v2_manifest,
-                            data_storage_version="2.1",
+                            data_storage_version="2.2",
                         )
 
                     # Process expression data in chunks with checkpointing support
@@ -1046,7 +1046,7 @@ class SLAFConverter:
                             os.path.join(existing_slaf_path, "cells.lance"),
                             mode="overwrite",
                             enable_v2_manifest_paths=self.enable_v2_manifest,
-                            data_storage_version="2.1",
+                            data_storage_version="2.2",
                         )
                         logger.info("✓ Added source_file column to existing dataset")
 
@@ -1067,7 +1067,7 @@ class SLAFConverter:
                         cells_path,
                         mode="append",
                         enable_v2_manifest_paths=self.enable_v2_manifest,
-                        data_storage_version="2.1",
+                        data_storage_version="2.2",
                     )
 
                     # Process expression data in chunks with checkpointing support
@@ -1670,14 +1670,14 @@ class SLAFConverter:
             f"{output_path}/cells.lance",
             mode="overwrite",
             enable_v2_manifest_paths=self.enable_v2_manifest,
-            data_storage_version="2.1",
+            data_storage_version="2.2",
         )
         lance.write_dataset(
             gene_metadata_table,
             f"{output_path}/genes.lance",
             mode="overwrite",
             enable_v2_manifest_paths=self.enable_v2_manifest,
-            data_storage_version="2.1",
+            data_storage_version="2.2",
         )
 
         logger.info("Metadata tables written!")
@@ -1767,7 +1767,7 @@ class SLAFConverter:
             schema=schema,
             max_rows_per_file=self.max_rows_per_file,
             enable_v2_manifest_paths=self.enable_v2_manifest,
-            data_storage_version="2.1",
+            data_storage_version="2.2",
         )
 
         # Process chunks sequentially
@@ -1835,7 +1835,7 @@ class SLAFConverter:
                 mode="append",
                 max_rows_per_file=self.max_rows_per_file,
                 enable_v2_manifest_paths=self.enable_v2_manifest,
-                data_storage_version="2.1",
+                data_storage_version="2.2",
             )
 
         # Final memory report
@@ -2039,7 +2039,7 @@ class SLAFConverter:
                 schema=schema,
                 max_rows_per_file=self.max_rows_per_file,
                 enable_v2_manifest_paths=self.enable_v2_manifest,
-                data_storage_version="2.1",
+                data_storage_version="2.2",
             )
 
         # Process chunks sequentially with checkpointing
@@ -2159,7 +2159,7 @@ class SLAFConverter:
                     mode="append",
                     max_rows_per_file=self.max_rows_per_file,
                     enable_v2_manifest_paths=self.enable_v2_manifest,
-                    data_storage_version="2.1",
+                    data_storage_version="2.2",
                 )
 
             except StopIteration:
@@ -2318,7 +2318,7 @@ class SLAFConverter:
                         mode="overwrite",
                         max_rows_per_file=self.max_rows_per_file,
                         enable_v2_manifest_paths=self.enable_v2_manifest,
-                        data_storage_version="2.1",
+                        data_storage_version="2.2",
                     )
                 else:
                     # Append to existing dataset (either subsequent chunks or append operations)
@@ -2331,7 +2331,7 @@ class SLAFConverter:
                         mode="append",
                         max_rows_per_file=self.max_rows_per_file,
                         enable_v2_manifest_paths=self.enable_v2_manifest,
-                        data_storage_version="2.1",
+                        data_storage_version="2.2",
                     )
 
             except StopIteration:
@@ -3063,7 +3063,7 @@ class SLAFConverter:
             mode="overwrite",
             max_rows_per_file=self.max_rows_per_file,
             enable_v2_manifest_paths=self.enable_v2_manifest,
-            data_storage_version="2.1",
+            data_storage_version="2.2",
         )
 
         logger.info(f"Successfully converted {len(layer_names)} layers: {layer_names}")
@@ -3405,7 +3405,7 @@ class SLAFConverter:
             table,
             cellsxcells_path,
             enable_v2_manifest_paths=self.enable_v2_manifest,
-            data_storage_version="2.1",
+            data_storage_version="2.2",
         )
         logger.info(
             f"Successfully converted {len(obsp_keys)} obsp keys to COO: {obsp_keys}"
@@ -3488,7 +3488,7 @@ class SLAFConverter:
             table,
             genesxgenes_path,
             enable_v2_manifest_paths=self.enable_v2_manifest,
-            data_storage_version="2.1",
+            data_storage_version="2.2",
         )
         logger.info(
             f"Successfully converted {len(varp_keys)} varp keys to COO: {varp_keys}"
@@ -3665,14 +3665,14 @@ class SLAFConverter:
                     table_path,
                     max_rows_per_file=self.max_rows_per_file,
                     enable_v2_manifest_paths=self.enable_v2_manifest,
-                    data_storage_version="2.1",
+                    data_storage_version="2.2",
                 )
             else:
                 lance.write_dataset(
                     table,
                     table_path,
                     enable_v2_manifest_paths=self.enable_v2_manifest,
-                    data_storage_version="2.1",
+                    data_storage_version="2.2",
                 )
 
         # Create indices after all tables are written (if enabled)
@@ -3990,7 +3990,7 @@ class SLAFConverter:
             tables["genesxgenes"] = "genesxgenes.lance"
 
         config = {
-            "format_version": "0.4",  # Bumped to 0.4 for layers support
+            "format_version": "0.5",  # Bumped to 0.5 for default lance version pinned to 2.2
             "array_shape": [n_cells, n_genes],
             "n_cells": n_cells,
             "n_genes": n_genes,
@@ -4127,7 +4127,7 @@ class SLAFConverter:
         total_cells_from_files = sum(info["n_cells"] for info in source_file_info)
 
         config = {
-            "format_version": "0.4",  # Bumped to 0.4 for layers support
+            "format_version": "0.5",  # Bumped to 0.4 for default lance version pinned to 2.2
             "array_shape": [n_cells, n_genes],
             "n_cells": n_cells,
             "n_genes": n_genes,
