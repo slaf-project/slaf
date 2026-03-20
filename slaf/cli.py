@@ -334,6 +334,11 @@ def convert(
         "--tiledb-collection",
         help="Name of the measurement collection for TileDB format (default: RNA)",
     ),
+    tiledb_layer_name: str = typer.Option(
+        "data",
+        "--tiledb-layer",
+        help="Name of the X layer for TileDB format (default: data). Common values: data, raw, norm, norm_10k",
+    ),
     skip_validation: bool = typer.Option(
         False,
         "--skip-validation",
@@ -378,6 +383,7 @@ def convert(
             enable_v2_manifest=enable_v2_manifest,
             compact_after_write=compact_after_write,
             tiledb_collection_name=tiledb_collection_name,
+            tiledb_layer_name=tiledb_layer_name,
             max_rows_per_file=max_rows_per_file,
         )
 

@@ -1006,7 +1006,8 @@ class ChunkedTileDBReader(BaseChunkedReader):
     """Chunked reader for TileDB SOMA format files."""
 
     def __init__(
-        self, tiledb_path: str, collection_name: str = "RNA", value_type: str = "auto"
+        self, tiledb_path: str, collection_name: str = "RNA", value_type: str = "auto",
+        layer_name: str = "data"
     ):
         """
         Initialize TileDB chunked reader.
@@ -1015,10 +1016,13 @@ class ChunkedTileDBReader(BaseChunkedReader):
             tiledb_path: Path to TileDB SOMA experiment directory
             collection_name: Name of the measurement collection (default: "RNA")
             value_type: Data type for expression values (default: "uint16")
+            layer_name: Name of the X layer to read (default: "data"). Common values:
+                       "data", "raw", "norm", "norm_10k"
         """
         super().__init__(tiledb_path)
         self.collection_name = collection_name
         self.value_type = value_type
+        self.layer_name = layer_name
         self._experiment: Any = None
         self._X: Any = None
         self._obs_df: pd.DataFrame | None = None
@@ -1045,7 +1049,16 @@ class ChunkedTileDBReader(BaseChunkedReader):
                 f"Available collections: {available_collections}"
             )
 
-        self._X = self._experiment.ms[self.collection_name].X["data"]
+        # Get the X layer
+        x_collection = self._experiment.ms[self.collection_name].X
+        if self.layer_name not in x_collection:
+            available_layers = list(x_collection.keys())
+            raise ValueError(
+                f"Layer '{self.layer_name}' not found in X. "
+                f"Available layers: {available_layers}"
+            )
+
+        self._X = x_collection[self.layer_name]
 
     def _close_file(self) -> None:
         """Close TileDB SOMA experiment."""
@@ -1677,6 +1690,7 @@ def create_chunked_reader(
     chunk_size: int = 25000,
     value_type: str = "uint16",
     collection_name: str = "RNA",
+    layer_name: str = "data",
 ) -> BaseChunkedReader:
     """
     Factory function to create the appropriate chunked reader based on file format.
@@ -1691,6 +1705,9 @@ def create_chunked_reader(
         Data type for expression values. Default: "uint16".
     collection_name : str
         Name of the measurement collection for TileDB format. Default: "RNA".
+    layer_name : str
+        Name of the X layer for TileDB format. Default: "data".
+        Common values: "data", "raw", "norm", "norm_10k".
 
     Returns:
     --------
@@ -1722,7 +1739,8 @@ def create_chunked_reader(
         # For TileDB, use "auto" as default to preserve original data types for validation
         tiledb_value_type = value_type if value_type != "uint16" else "auto"
         return ChunkedTileDBReader(
-            file_path, collection_name=collection_name, value_type=tiledb_value_type
+            file_path, collection_name=collection_name, value_type=tiledb_value_type,
+            layer_name=layer_name
         )
     else:
         raise ValueError(f"Unsupported format for chunked reading: {format_type}")
