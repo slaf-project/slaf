@@ -89,6 +89,7 @@ class SLAFConverter:
         enable_v2_manifest: bool = True,  # Enable v2 manifest paths for better performance
         compact_after_write: bool = False,  # Compact dataset after writing for optimal storage (disabled by default to avoid manifest corruption)
         tiledb_collection_name: str = "RNA",  # Collection name for TileDB format
+        tiledb_layer_name: str = "data",  # Layer name for TileDB format (e.g., "data", "raw", "norm", "norm_10k")
         enable_checkpointing: bool = True,  # Enable checkpointing for long-running conversions
         max_rows_per_file: int = 100_000_000,  # Max rows per Lance fragment (default: 100M to stay under HuggingFace's 10k file limit)
     ):
@@ -116,6 +117,8 @@ class SLAFConverter:
                                This creates a new version but significantly reduces file size.
             tiledb_collection_name: Name of the measurement collection for TileDB format.
                                   Default: "RNA". Only used when converting from TileDB format.
+            tiledb_layer_name: Name of the X layer for TileDB format. Default: "data".
+                             Common values: "data", "raw", "norm", "norm_10k".
             enable_checkpointing: Enable checkpointing for long-running conversions.
                                 This allows resuming from the last completed chunk if the
                                 conversion is interrupted. Default: True.
@@ -150,6 +153,7 @@ class SLAFConverter:
         self.enable_v2_manifest = enable_v2_manifest
         self.compact_after_write = compact_after_write
         self.tiledb_collection_name = tiledb_collection_name
+        self.tiledb_layer_name = tiledb_layer_name
         self.enable_checkpointing = enable_checkpointing
         self.max_rows_per_file = max_rows_per_file
 
@@ -736,6 +740,7 @@ class SLAFConverter:
                     file_path,
                     chunk_size=self.chunk_size,
                     collection_name=self.tiledb_collection_name,
+                    layer_name=self.tiledb_layer_name,
                 ) as reader:
                     logger.info(
                         f"Loaded: {reader.n_obs:,} cells × {reader.n_vars:,} genes"
@@ -995,6 +1000,7 @@ class SLAFConverter:
                     chunk_size=self.chunk_size,
                     value_type=existing_value_type,
                     collection_name=self.tiledb_collection_name,
+                    layer_name=self.tiledb_layer_name,
                 ) as reader:
                     logger.info(
                         f"Loaded: {reader.n_obs:,} cells × {reader.n_vars:,} genes"
@@ -1546,6 +1552,7 @@ class SLAFConverter:
             h5ad_path,
             chunk_size=self.chunk_size,
             collection_name=self.tiledb_collection_name,
+            layer_name=self.tiledb_layer_name,
         ) as temp_reader:
             # Validate optimized data types and determine value type
             validation_result, value_type = self._validate_optimized_dtypes(temp_reader)
@@ -1558,6 +1565,7 @@ class SLAFConverter:
             chunk_size=self.chunk_size,
             value_type=value_type,
             collection_name=self.tiledb_collection_name,
+            layer_name=self.tiledb_layer_name,
         ) as reader:
             logger.info(f"Loaded: {reader.n_obs:,} cells × {reader.n_vars:,} genes")
 
