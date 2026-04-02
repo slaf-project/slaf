@@ -215,6 +215,27 @@ def small_sample_adata():
 
 
 @pytest.fixture
+def tiledb_soma_two_x_layers_path(temp_dir, small_sample_adata):
+    """Minimal TileDB SOMA experiment with two X layers: ``data`` and ``norm``.
+
+    Ingests ``small_sample_adata`` as the default ``data`` layer, then adds ``norm``
+    with the same sparsity pattern and values scaled by 10.0 so tests can tell
+    layers apart without relying on TileDB SOMA internals.
+    """
+    pytest.importorskip("tiledbsoma")
+    import tiledbsoma as soma
+    from tiledbsoma import io
+
+    uri = str(Path(temp_dir) / "soma_two_x_layers")
+    io.from_anndata(uri, small_sample_adata, measurement_name="RNA")
+    norm_X = small_sample_adata.X.copy().astype(np.float32)
+    norm_X.data = norm_X.data * 10.0
+    with soma.Experiment.open(uri, "w") as exp:
+        io.add_X_layer(exp, "RNA", "norm", norm_X)
+    return uri
+
+
+@pytest.fixture
 def large_sample_adata():
     """Create a larger sample AnnData object for optimization testing"""
     # Set random seed for reproducible tests
