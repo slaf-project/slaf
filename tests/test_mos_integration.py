@@ -1,8 +1,11 @@
-"""Integration tests for MoS cell boundary reassembly correctness.
+"""Optional integration tests against a large real dataset (heart_10k).
 
-Uses the real heart_10k dataset with a small prefetch_batch_size to force
-many intra-fragment cell splits, then verifies that reassembly produces
-correct output: no lost rows, no duplicates, all cells emitted exactly once.
+CI coverage for cell-boundary / MoS correctness lives in
+``tests/test_cell_boundary_reassembly.py`` (synthetic multi-fragment fixture).
+
+These tests are skipped unless ``SLAF_HEART_10K_PATH`` points at a checkout of
+``heart_10k.slaf``; they stress many intra-fragment reads with a small
+``prefetch_batch_size``.
 """
 
 import os
@@ -12,11 +15,13 @@ import polars as pl
 import pytest
 
 from slaf.core.slaf import SLAFArray
-from slaf.ml.datasets import PrefetchBatchProcessor, RawPrefetchBatch
 from slaf.ml.aggregators import ScGPTWindow
+from slaf.ml.datasets import PrefetchBatchProcessor, RawPrefetchBatch
 from slaf.ml.samplers import RandomShuffle
 
-HEART_10K_PATH = os.environ.get("SLAF_HEART_10K_PATH", os.path.expanduser("~/slaf-datasets/heart_10k.slaf"))
+HEART_10K_PATH = os.environ.get(
+    "SLAF_HEART_10K_PATH", os.path.expanduser("~/slaf-datasets/heart_10k.slaf")
+)
 
 pytestmark = [
     pytest.mark.integration,
@@ -103,7 +108,9 @@ class TestMoSCellBoundaryReassembly:
             obs_count = row["gene_count"]
             expected = ground_truth_gene_counts.get(cell_id)
             if expected is None:
-                mismatches.append(f"cell {cell_id}: unexpected cell (not in ground truth)")
+                mismatches.append(
+                    f"cell {cell_id}: unexpected cell (not in ground truth)"
+                )
             elif obs_count != expected:
                 mismatches.append(
                     f"cell {cell_id}: observed {obs_count} genes, expected {expected}"
@@ -131,9 +138,11 @@ class TestMoSCellBoundaryReassembly:
             f"Found {total - unique} duplicate (cell, gene) rows out of {total} total"
         )
 
-    def test_all_cells_emitted_exactly_once(self, all_mos_batches):
-        """Every cell 0..7712 must appear exactly once across all batches."""
+    def test_all_cells_emitted_exactly_once(self, all_mos_batches, heart_slaf):
+        """Every cell index must appear exactly once across all batches (size from CSI)."""
         batches, _ = all_mos_batches
+        heart_slaf.wait_for_metadata()
+        n_cells = len(heart_slaf._cell_start_index) - 1
 
         # Collect cell IDs from each batch's metadata
         all_cell_ids = []
@@ -141,7 +150,7 @@ class TestMoSCellBoundaryReassembly:
             all_cell_ids.extend(batch.cell_integer_ids)
 
         cell_counts = Counter(all_cell_ids)
-        expected_cells = set(range(7713))
+        expected_cells = set(range(n_cells))
         observed_cells = set(cell_counts.keys())
 
         missing = expected_cells - observed_cells
