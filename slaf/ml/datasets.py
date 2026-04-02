@@ -656,6 +656,8 @@ class PrefetchBatchProcessor:
                     i for i, active in enumerate(self.generator_active) if active
                 ]
 
+                mos_skip_to_unified_processing = False
+
                 if not active_indices:
                     # Flush any remaining partial cells as the final batch
                     if self.partial_cell_data:
@@ -663,6 +665,7 @@ class PrefetchBatchProcessor:
                         self.partial_cell_data = {}
                         combined_df = pl.concat(partial_dfs, how="vertical")  # type: ignore
                         batch_count = 0
+                        mos_skip_to_unified_processing = True
                     # Check if we should start a new epoch
                     elif self.current_epoch + 1 < self.n_epochs:
                         print_epoch_transition(
@@ -675,106 +678,113 @@ class PrefetchBatchProcessor:
                     else:
                         raise StopIteration("No more epochs available") from None
 
-                # Randomly sample from active generators
-                n_to_sample = min(self.n_scanners, len(active_indices))
-                selected_indices = np.random.choice(
-                    active_indices, size=n_to_sample, replace=False
-                )
-
-                if self.verbose and self.batch_id % 100 == 0:
-                    print_prefetch(
-                        f"MoS sampling: {len(active_indices)} active generators, "
-                        f"sampling from {n_to_sample} generators, "
-                        f"reading {self.batches_per_chunk} batches per generator, "
-                        f"{len(self.partial_cell_data)} incomplete cells pending",
-                        self.verbose,
+                if not mos_skip_to_unified_processing:
+                    # Randomly sample from active generators
+                    n_to_sample = min(self.n_scanners, len(active_indices))
+                    selected_indices = np.random.choice(
+                        active_indices, size=n_to_sample, replace=False
                     )
 
-                # Collect batches from selected generators
-                mos_batch_dfs: list[pl.DataFrame] = []
-                generator_results: list[tuple[pl.DataFrame | None, int, bool]] = []
+                    if self.verbose and self.batch_id % 100 == 0:
+                        print_prefetch(
+                            f"MoS sampling: {len(active_indices)} active generators, "
+                            f"sampling from {n_to_sample} generators, "
+                            f"reading {self.batches_per_chunk} batches per generator, "
+                            f"{len(self.partial_cell_data)} incomplete cells pending",
+                            self.verbose,
+                        )
 
-                if self.parallelize_fragment_reads:
-                    # Parallel read: use ThreadPoolExecutor to read from all selected generators concurrently
-                    # This is critical for cloud scenarios where network latency dominates
-                    with ThreadPoolExecutor(
-                        max_workers=len(selected_indices)
-                    ) as executor:
-                        futures = {
-                            executor.submit(self._read_from_generator, gen_idx): gen_idx
-                            for gen_idx in selected_indices
-                        }
-                        for future in as_completed(futures):
-                            try:
-                                result = future.result()
-                                generator_results.append(result)
-                            except Exception as e:
-                                logger.warning(f"Error reading from generator: {e}")
-                                # Mark generator as exhausted on error
-                                gen_idx = futures[future]
-                                self.generator_active[gen_idx] = False
-                else:
-                    # Sequential read: read from generators one at a time
-                    # This is better for local data where parallelization adds overhead
-                    for generator_idx in selected_indices:
-                        result = self._read_from_generator(generator_idx)
-                        generator_results.append(result)
+                    # Collect batches from selected generators
+                    mos_batch_dfs: list[pl.DataFrame] = []
+                    generator_results: list[tuple[pl.DataFrame | None, int, bool]] = []
 
-                # Process results and handle incomplete cells (sequential to maintain correctness)
-                for (
-                    generator_combined,
-                    generator_idx,
-                    is_exhausted,
-                ) in generator_results:
-                    if is_exhausted:
-                        self.generator_active[generator_idx] = False
-                        continue
+                    if self.parallelize_fragment_reads:
+                        # Parallel read: use ThreadPoolExecutor to read from all selected generators concurrently
+                        # This is critical for cloud scenarios where network latency dominates
+                        with ThreadPoolExecutor(
+                            max_workers=len(selected_indices)
+                        ) as executor:
+                            futures = {
+                                executor.submit(
+                                    self._read_from_generator, gen_idx
+                                ): gen_idx
+                                for gen_idx in selected_indices
+                            }
+                            for future in as_completed(futures):
+                                try:
+                                    result = future.result()
+                                    generator_results.append(result)
+                                except Exception as e:
+                                    logger.warning(f"Error reading from generator: {e}")
+                                    # Mark generator as exhausted on error
+                                    gen_idx = futures[future]
+                                    self.generator_active[gen_idx] = False
+                    else:
+                        # Sequential read: read from generators one at a time
+                        # This is better for local data where parallelization adds overhead
+                        for generator_idx in selected_indices:
+                            result = self._read_from_generator(generator_idx)
+                            generator_results.append(result)
 
-                    if generator_combined is None:
-                        continue
+                    # Process results and handle incomplete cells (sequential to maintain correctness)
+                    for (
+                        generator_combined,
+                        generator_idx,
+                        is_exhausted,
+                    ) in generator_results:
+                        if is_exhausted:
+                            self.generator_active[generator_idx] = False
+                            continue
 
-                    # Handle incomplete cells from previous read
-                    last_cell_for_generator = self.generator_last_cells[generator_idx]
-                    if last_cell_for_generator is not None:
-                        first_cell = generator_combined["cell_integer_id"].item(0)  # type: ignore
+                        if generator_combined is None:
+                            continue
 
-                        if (
-                            first_cell == last_cell_for_generator
-                            or first_cell == last_cell_for_generator + 1
-                        ):
-                            # Cell split across reads or confirmed complete —
-                            # prepend any held-back partial data for this cell
-                            if last_cell_for_generator in self.partial_cell_data:
-                                incomplete_records = self.partial_cell_data.pop(
-                                    last_cell_for_generator
-                                )
-                                generator_combined = pl.concat(
-                                    [incomplete_records, generator_combined],
-                                    how="vertical",
-                                )  # type: ignore
+                        # Handle incomplete cells from previous read
+                        last_cell_for_generator = self.generator_last_cells[
+                            generator_idx
+                        ]
+                        if last_cell_for_generator is not None:
+                            first_cell = generator_combined["cell_integer_id"].item(0)  # type: ignore
 
-                                if self.verbose and self.batch_id % 100 == 0:
-                                    print_prefetch(
-                                        f"Completed cell {last_cell_for_generator} by prepending {len(incomplete_records)} records",
-                                        self.verbose,
+                            if (
+                                first_cell == last_cell_for_generator
+                                or first_cell == last_cell_for_generator + 1
+                            ):
+                                # Cell split across reads or confirmed complete —
+                                # prepend any held-back partial data for this cell
+                                if last_cell_for_generator in self.partial_cell_data:
+                                    incomplete_records = self.partial_cell_data.pop(
+                                        last_cell_for_generator
                                     )
+                                    generator_combined = pl.concat(
+                                        [incomplete_records, generator_combined],
+                                        how="vertical",
+                                    )  # type: ignore
 
-                    # Update last cell for this generator
-                    if isinstance(generator_combined, pl.DataFrame):
-                        self.generator_last_cells[generator_idx] = (
-                            generator_combined.get_column("cell_integer_id").item(-1)
-                        )  # type: ignore
+                                    if self.verbose and self.batch_id % 100 == 0:
+                                        print_prefetch(
+                                            f"Completed cell {last_cell_for_generator} by prepending {len(incomplete_records)} records",
+                                            self.verbose,
+                                        )
 
-                    # Add to batch collection
-                    mos_batch_dfs.append(generator_combined)
+                        # Update last cell for this generator
+                        if isinstance(generator_combined, pl.DataFrame):
+                            self.generator_last_cells[generator_idx] = (
+                                generator_combined.get_column("cell_integer_id").item(
+                                    -1
+                                )
+                            )  # type: ignore
 
-                if not mos_batch_dfs:
-                    # All selected generators are exhausted, continue to next iteration
-                    continue
+                        # Add to batch collection
+                        mos_batch_dfs.append(generator_combined)
 
-                # Combine all batches
-                combined_df = pl.concat(mos_batch_dfs, how="vertical")  # type: ignore
-                batch_count = len(mos_batch_dfs)
+                    if not mos_batch_dfs:
+                        # All selected generators are exhausted, continue to next iteration
+                        continue
+
+                    # Combine all batches
+                    combined_df = pl.concat(mos_batch_dfs, how="vertical")  # type: ignore
+                    batch_count = len(mos_batch_dfs)
 
             elif self.by_fragment:
                 # Fragment-based approach: load one fragment at a time
