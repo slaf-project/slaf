@@ -97,6 +97,7 @@ test = [
     "h5py>=3.10.0",
     "psutil>=6.0.0",
     "torch>=2.5.0",
+    "tiledbsoma>=1.17.1",
 ]
 
 # Full installation includes all optional dependencies
@@ -116,9 +117,9 @@ include = ["slaf*"]
 [tool.ruff]
 target-version = "py312"
 line-length = 88
-unfixable = ["E501"]
 
 [tool.ruff.lint]
+unfixable = ["E501"]
 select = [
     "E",  # pycodestyle errors
     "W",  # pycodestyle warnings
