@@ -179,49 +179,16 @@ def test_mos_exhaustion_flushes_remaining_partial_cells(slaf_mos_boundary_reasse
     assert set(out["gene_integer_id"].to_list()) == set(range(6))
 
 
-@pytest.mark.parametrize(
-    "use_mixture_of_scanners,by_fragment",
-    [
-        pytest.param(True, True, id="mos"),
-        pytest.param(
-            False,
-            True,
-            id="fragment_sequential",
-            marks=pytest.mark.skip(
-                reason=(
-                    "Non-MoS prefetch defers the last cell_integer_id in each Lance chunk; "
-                    "with one expression fragment that tail cell is never merged before "
-                    "epoch end. MoS uses CSI-based reassembly instead."
-                )
-            ),
-        ),
-        pytest.param(
-            False,
-            False,
-            id="batch_sequential",
-            marks=pytest.mark.skip(
-                reason=(
-                    "Same last-cell buffering as fragment_sequential when the epoch ends "
-                    "before the deferred cell is emitted."
-                )
-            ),
-        ),
-    ],
-)
-def test_tiny_slaf_one_epoch_raw_matches_cell_start_index(
-    tiny_slaf,
-    use_mixture_of_scanners: bool,
-    by_fragment: bool,
-):
-    """Single-fragment SLAF: MoS matches CSI per cell for one raw epoch (see skips for non-MoS)."""
+def test_tiny_slaf_one_epoch_mos_raw_matches_cell_start_index(tiny_slaf):
+    """Single-fragment AnnData SLAF: one MoS raw epoch matches CSI (non-MoS modes differ; not exercised here)."""
     processor = PrefetchBatchProcessor(
         slaf_array=tiny_slaf,
         window=ScGPTWindow(),
         shuffle=RandomShuffle(),
         tokenizer=None,
         raw_mode=True,
-        use_mixture_of_scanners=use_mixture_of_scanners,
-        by_fragment=by_fragment,
+        use_mixture_of_scanners=True,
+        by_fragment=True,
         n_scanners=4,
         prefetch_batch_size=1000,
         batch_size=32,
