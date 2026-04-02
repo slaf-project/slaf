@@ -179,8 +179,54 @@ def test_mos_exhaustion_flushes_remaining_partial_cells(slaf_mos_boundary_reasse
     assert set(out["gene_integer_id"].to_list()) == set(range(6))
 
 
+@pytest.mark.parametrize("by_fragment", [True, False], ids=["fragment", "batch"])
+def test_tiny_slaf_one_epoch_non_mos_raw_matches_cell_start_index(
+    tiny_slaf, by_fragment: bool
+):
+    """Single-fragment SLAF: sequential fragment/batch loaders must match CSI for one epoch."""
+    processor = PrefetchBatchProcessor(
+        slaf_array=tiny_slaf,
+        window=ScGPTWindow(),
+        shuffle=RandomShuffle(),
+        tokenizer=None,
+        raw_mode=True,
+        use_mixture_of_scanners=False,
+        by_fragment=by_fragment,
+        prefetch_batch_size=1000,
+        batch_size=32,
+        seed=42,
+        n_epochs=1,
+        verbose=False,
+    )
+    batches = _collect_raw_prefetch_epoch(processor)
+    _assert_raw_epoch_matches_cell_start_index(tiny_slaf, batches)
+
+
+@pytest.mark.parametrize("by_fragment", [True, False], ids=["fragment", "batch"])
+def test_cross_fragment_slaf_one_epoch_non_mos_raw_matches_cell_start_index(
+    slaf_mos_boundary_reassembly, by_fragment: bool
+):
+    """Multi-fragment SLAF with a cell spanning fragments: non-MoS must still match CSI."""
+    processor = PrefetchBatchProcessor(
+        slaf_array=slaf_mos_boundary_reassembly,
+        window=ScGPTWindow(),
+        shuffle=RandomShuffle(),
+        tokenizer=None,
+        raw_mode=True,
+        use_mixture_of_scanners=False,
+        by_fragment=by_fragment,
+        prefetch_batch_size=1000,
+        batch_size=8,
+        seed=42,
+        n_epochs=1,
+        verbose=False,
+    )
+    batches = _collect_raw_prefetch_epoch(processor)
+    _assert_raw_epoch_matches_cell_start_index(slaf_mos_boundary_reassembly, batches)
+
+
 def test_tiny_slaf_one_epoch_mos_raw_matches_cell_start_index(tiny_slaf):
-    """Single-fragment AnnData SLAF: one MoS raw epoch matches CSI (non-MoS modes differ; not exercised here)."""
+    """Single-fragment AnnData SLAF: one MoS raw epoch matches _cell_start_index."""
     processor = PrefetchBatchProcessor(
         slaf_array=tiny_slaf,
         window=ScGPTWindow(),

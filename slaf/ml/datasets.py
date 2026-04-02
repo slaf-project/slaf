@@ -370,6 +370,8 @@ class PrefetchBatchProcessor:
         self.partial_cell_data: dict[
             Any, pl.DataFrame
         ] = {}  # Store partial cell data across chunks
+        # When true, non-MoS path should emit all rows in combined_df (epoch-end partial flush).
+        self._non_mos_pending_tail_flush = False
         self.window_kwargs: dict[str, Any] = {}
 
         # Track prefetch statistics
@@ -488,6 +490,7 @@ class PrefetchBatchProcessor:
         self.current_epoch = epoch
         self.batch_id = 0
         self.partial_cell_data = {}  # Reset partial cell data
+        self._non_mos_pending_tail_flush = False
 
         # Reinitialize the data iterator based on the approach
         if self.use_mixture_of_scanners:
@@ -804,8 +807,14 @@ class PrefetchBatchProcessor:
                     combined_df = combined_df_raw
                     batch_count = 1  # One fragment
                 except StopIteration:
-                    # Check if we should start a new epoch
-                    if self.current_epoch + 1 < self.n_epochs:
+                    # Emit deferred partial cells (non-MoS holds max cell id per chunk).
+                    if self.partial_cell_data:
+                        partial_dfs = list(self.partial_cell_data.values())
+                        self.partial_cell_data = {}
+                        combined_df = pl.concat(partial_dfs, how="vertical")  # type: ignore
+                        batch_count = 0
+                        self._non_mos_pending_tail_flush = True
+                    elif self.current_epoch + 1 < self.n_epochs:
                         print_epoch_transition(
                             f"Epoch {self.current_epoch} complete, starting epoch {self.current_epoch + 1}",
                             self.verbose,
@@ -833,8 +842,13 @@ class PrefetchBatchProcessor:
                         break
 
                 if not batch_dfs:
-                    # Check if we should start a new epoch
-                    if self.current_epoch + 1 < self.n_epochs:
+                    if self.partial_cell_data:
+                        partial_dfs = list(self.partial_cell_data.values())
+                        self.partial_cell_data = {}
+                        combined_df = pl.concat(partial_dfs, how="vertical")  # type: ignore
+                        batch_count = 0
+                        self._non_mos_pending_tail_flush = True
+                    elif self.current_epoch + 1 < self.n_epochs:
                         print_epoch_transition(
                             f"Epoch {self.current_epoch} complete, starting epoch {self.current_epoch + 1}",
                             self.verbose,
@@ -844,10 +858,10 @@ class PrefetchBatchProcessor:
                         continue
                     else:
                         raise StopIteration("No more epochs available") from None
-
-                # Combine all batches
-                combined_df = pl.concat(batch_dfs, how="vertical")  # type: ignore
-                batch_count = len(batch_dfs)
+                else:
+                    # Combine all batches (skip when tail flush already set combined_df).
+                    combined_df = pl.concat(batch_dfs, how="vertical")  # type: ignore
+                    batch_count = len(batch_dfs)
             load_time = time.time() - load_start
 
             # Record lance loading timing
@@ -918,22 +932,28 @@ class PrefetchBatchProcessor:
 
             else:
                 # Non-MoS mode: use existing boundary logic
-                # Find the last complete cell_integer_id
-                cell_counts = combined_df.group_by("cell_integer_id").len()  # type: ignore
-                last_complete_cell = cell_counts["cell_integer_id"].max()
+                if self._non_mos_pending_tail_flush:
+                    # Epoch-end flush of deferred tail cell(s); no following Lance read.
+                    self._non_mos_pending_tail_flush = False
+                    complete_df = combined_df
+                    self.partial_cell_data = {}
+                else:
+                    # Find the last complete cell_integer_id
+                    cell_counts = combined_df.group_by("cell_integer_id").len()  # type: ignore
+                    last_complete_cell = cell_counts["cell_integer_id"].max()
 
-                # Split into complete cells and partial cells
-                complete_df = combined_df.filter(
-                    pl.col("cell_integer_id") < last_complete_cell  # type: ignore[arg-type]
-                )
-                partial_df = combined_df.filter(
-                    pl.col("cell_integer_id") == last_complete_cell  # type: ignore[arg-type]
-                )
+                    # Split into complete cells and partial cells
+                    complete_df = combined_df.filter(
+                        pl.col("cell_integer_id") < last_complete_cell  # type: ignore[arg-type]
+                    )
+                    partial_df = combined_df.filter(
+                        pl.col("cell_integer_id") == last_complete_cell  # type: ignore[arg-type]
+                    )
 
-                # Store partial cell data for next chunk
-                self.partial_cell_data = {}
-                if len(partial_df) > 0:
-                    self.partial_cell_data[last_complete_cell] = partial_df  # type: ignore
+                    # Store partial cell data for next chunk
+                    self.partial_cell_data = {}
+                    if len(partial_df) > 0:
+                        self.partial_cell_data[last_complete_cell] = partial_df  # type: ignore
 
             # Process complete cells
             if len(complete_df) > 0:
