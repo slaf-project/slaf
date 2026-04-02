@@ -117,9 +117,9 @@ include = ["slaf*"]
 [tool.ruff]
 target-version = "py312"
 line-length = 88
-unfixable = ["E501"]
 
 [tool.ruff.lint]
+unfixable = ["E501"]
 select = [
     "E",  # pycodestyle errors
     "W",  # pycodestyle warnings

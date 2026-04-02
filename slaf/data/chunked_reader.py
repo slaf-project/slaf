@@ -1006,8 +1006,11 @@ class ChunkedTileDBReader(BaseChunkedReader):
     """Chunked reader for TileDB SOMA format files."""
 
     def __init__(
-        self, tiledb_path: str, collection_name: str = "RNA", value_type: str = "auto",
-        layer_name: str = "data"
+        self,
+        tiledb_path: str,
+        collection_name: str = "RNA",
+        value_type: str = "auto",
+        layer_name: str = "data",
     ):
         """
         Initialize TileDB chunked reader.
@@ -1739,8 +1742,10 @@ def create_chunked_reader(
         # For TileDB, use "auto" as default to preserve original data types for validation
         tiledb_value_type = value_type if value_type != "uint16" else "auto"
         return ChunkedTileDBReader(
-            file_path, collection_name=collection_name, value_type=tiledb_value_type,
-            layer_name=layer_name
+            file_path,
+            collection_name=collection_name,
+            value_type=tiledb_value_type,
+            layer_name=layer_name,
         )
     else:
         raise ValueError(f"Unsupported format for chunked reading: {format_type}")
