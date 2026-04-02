@@ -3,6 +3,10 @@ site_description: Sparse Lazy Array Format - High-performance single-cell data s
 site_author: Pavan Ramkumar
 site_url: https://slaf-project.github.io/slaf/
 
+# Keep internal drafts versioned but unpublished
+exclude_docs: |
+  blog/drafts/**
+
 # Repository
 repo_name: slaf-project/slaf
 repo_url: https://github.com/slaf-project/slaf
