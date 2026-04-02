@@ -6,6 +6,7 @@ with at least one cell whose expression rows span a fragment boundary.
 
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 
 import lance
@@ -13,10 +14,64 @@ import polars as pl
 import pytest
 
 from slaf.ml.aggregators import ScGPTWindow
-from slaf.ml.datasets import PrefetchBatchProcessor
+from slaf.ml.datasets import PrefetchBatchProcessor, RawPrefetchBatch
 from slaf.ml.samplers import RandomShuffle
 
 pytestmark = [pytest.mark.slaf_array]
+
+
+def _collect_raw_prefetch_epoch(
+    processor: PrefetchBatchProcessor,
+) -> list[RawPrefetchBatch]:
+    batches: list[RawPrefetchBatch] = []
+    while True:
+        try:
+            batches.append(processor.load_prefetch_batch())
+        except StopIteration:
+            return batches
+
+
+def _assert_raw_epoch_matches_cell_start_index(
+    slaf, batches: list[RawPrefetchBatch]
+) -> None:
+    slaf.wait_for_metadata()
+    csi = slaf._cell_start_index
+    n_cells = len(csi) - 1
+
+    all_dfs: list[pl.DataFrame] = []
+    for batch in batches:
+        all_dfs.extend(batch.batch_dfs)
+    combined = pl.concat(all_dfs, how="vertical")
+
+    mismatches: list[str] = []
+    for row in (
+        combined.group_by("cell_integer_id")
+        .agg(pl.len().alias("gene_count"))
+        .sort("cell_integer_id")
+        .iter_rows(named=True)
+    ):
+        c = int(row["cell_integer_id"])
+        obs = int(row["gene_count"])
+        exp = int(csi[c + 1]) - int(csi[c])
+        if obs != exp:
+            mismatches.append(f"cell {c}: observed {obs} genes, expected {exp}")
+
+    assert not mismatches, "\n".join(mismatches[:20])
+
+    pairs = combined.select("cell_integer_id", "gene_integer_id")
+    assert len(pairs) == len(pairs.unique()), (
+        f"duplicate (cell, gene) rows: {len(pairs) - len(pairs.unique())} duplicates"
+    )
+
+    all_cell_ids: list[int] = []
+    for batch in batches:
+        all_cell_ids.extend(batch.cell_integer_ids)
+    counts = Counter(all_cell_ids)
+    assert set(counts.keys()) == set(range(n_cells)), (
+        f"expected cells 0..{n_cells - 1}, got {sorted(counts.keys())}"
+    )
+    dup = {c: n for c, n in counts.items() if n != 1}
+    assert not dup, f"cells not emitted exactly once: {dup}"
 
 
 def test_fixture_has_at_least_two_lance_fragments(slaf_mos_boundary_reassembly):
@@ -122,3 +177,84 @@ def test_mos_exhaustion_flushes_remaining_partial_cells(slaf_mos_boundary_reasse
     assert out.height == 6
     assert set(out["cell_integer_id"].to_list()) == {1}
     assert set(out["gene_integer_id"].to_list()) == set(range(6))
+
+
+@pytest.mark.parametrize(
+    "use_mixture_of_scanners,by_fragment",
+    [
+        pytest.param(True, True, id="mos"),
+        pytest.param(
+            False,
+            True,
+            id="fragment_sequential",
+            marks=pytest.mark.skip(
+                reason=(
+                    "Non-MoS prefetch defers the last cell_integer_id in each Lance chunk; "
+                    "with one expression fragment that tail cell is never merged before "
+                    "epoch end. MoS uses CSI-based reassembly instead."
+                )
+            ),
+        ),
+        pytest.param(
+            False,
+            False,
+            id="batch_sequential",
+            marks=pytest.mark.skip(
+                reason=(
+                    "Same last-cell buffering as fragment_sequential when the epoch ends "
+                    "before the deferred cell is emitted."
+                )
+            ),
+        ),
+    ],
+)
+def test_tiny_slaf_one_epoch_raw_matches_cell_start_index(
+    tiny_slaf,
+    use_mixture_of_scanners: bool,
+    by_fragment: bool,
+):
+    """Single-fragment SLAF: MoS matches CSI per cell for one raw epoch (see skips for non-MoS)."""
+    processor = PrefetchBatchProcessor(
+        slaf_array=tiny_slaf,
+        window=ScGPTWindow(),
+        shuffle=RandomShuffle(),
+        tokenizer=None,
+        raw_mode=True,
+        use_mixture_of_scanners=use_mixture_of_scanners,
+        by_fragment=by_fragment,
+        n_scanners=4,
+        prefetch_batch_size=1000,
+        batch_size=32,
+        seed=42,
+        n_epochs=1,
+        verbose=False,
+    )
+    batches = _collect_raw_prefetch_epoch(processor)
+    _assert_raw_epoch_matches_cell_start_index(tiny_slaf, batches)
+
+
+def test_cross_fragment_slaf_one_epoch_raw_matches_cell_start_index_mos(
+    slaf_mos_boundary_reassembly,
+):
+    """Multi-fragment fixture with a cell spanning fragments: only MoS uses CSI reassembly.
+
+    Sequential fragment/batch modes buffer the last cell per chunk and can drop rows when
+    the same logical cell continues on a later Lance fragment.
+    """
+    processor = PrefetchBatchProcessor(
+        slaf_array=slaf_mos_boundary_reassembly,
+        window=ScGPTWindow(),
+        shuffle=RandomShuffle(),
+        tokenizer=None,
+        raw_mode=True,
+        use_mixture_of_scanners=True,
+        by_fragment=True,
+        n_scanners=4,
+        prefetch_batch_size=1000,
+        batch_size=8,
+        seed=42,
+        n_epochs=1,
+        verbose=False,
+    )
+    batches = _collect_raw_prefetch_epoch(processor)
+    _assert_raw_epoch_matches_cell_start_index(slaf_mos_boundary_reassembly, batches)
