@@ -541,6 +541,7 @@ class TestCLI:
                     enable_v2_manifest=True,
                     compact_after_write=False,
                     tiledb_collection_name="RNA",
+                    tiledb_layer_name="data",
                     max_rows_per_file=100_000_000,
                 )
 
@@ -979,6 +980,7 @@ class TestCLI:
                         enable_v2_manifest=True,
                         compact_after_write=False,
                         tiledb_collection_name="RNA",
+                        tiledb_layer_name="data",
                         max_rows_per_file=100_000_000,
                     )
 
@@ -1021,6 +1023,7 @@ class TestCLI:
                     enable_v2_manifest=True,
                     compact_after_write=False,
                     tiledb_collection_name="RNA",
+                    tiledb_layer_name="data",
                     max_rows_per_file=100_000_000,
                 )
 
@@ -1063,6 +1066,7 @@ class TestCLI:
             enable_v2_manifest=True,
             compact_after_write=False,
             tiledb_collection_name="RNA",
+            tiledb_layer_name="data",
             max_rows_per_file=100_000_000,
         )
 
