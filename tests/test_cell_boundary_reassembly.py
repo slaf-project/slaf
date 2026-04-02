@@ -12,6 +12,10 @@ import lance
 import polars as pl
 import pytest
 
+from slaf.ml.aggregators import ScGPTWindow
+from slaf.ml.datasets import PrefetchBatchProcessor
+from slaf.ml.samplers import RandomShuffle
+
 pytestmark = [pytest.mark.slaf_array]
 
 
@@ -73,3 +77,48 @@ def test_fixture_expected_row_and_gene_totals(slaf_mos_boundary_reassembly):
     assert slaf.config.get("n_cells") == 6
     assert slaf.config.get("n_genes") == 10
     assert slaf.config.get("metadata", {}).get("expression_count") == 16
+
+
+def test_mos_exhaustion_flushes_remaining_partial_cells(slaf_mos_boundary_reassembly):
+    """When every fragment generator is exhausted, remaining partial rows must still be emitted.
+
+    Repro: previously `combined_df` was built from `partial_cell_data` but execution fell
+    through to the sampling path with no active generators, hit `continue`, and dropped
+    the flushed rows (then raised StopIteration).
+    """
+    slaf = slaf_mos_boundary_reassembly
+    processor = PrefetchBatchProcessor(
+        slaf_array=slaf,
+        window=ScGPTWindow(),
+        shuffle=RandomShuffle(),
+        tokenizer=None,
+        raw_mode=True,
+        use_mixture_of_scanners=True,
+        n_scanners=2,
+        prefetch_batch_size=1000,
+        batch_size=8,
+        seed=42,
+        n_epochs=1,
+        verbose=False,
+    )
+
+    # Full cell 1 (6 genes) so MoS CSI check treats rows as complete and emits them
+    partial = pl.DataFrame(
+        {
+            "cell_integer_id": [1] * 6,
+            "gene_integer_id": [0, 1, 2, 3, 4, 5],
+            "value": [1.0] * 6,
+        }
+    )
+    for i in range(len(processor.generator_active)):
+        processor.generator_active[i] = False
+    processor.partial_cell_data = {1: partial}
+
+    batch = processor.load_prefetch_batch()
+    all_dfs = []
+    for df in batch.batch_dfs:
+        all_dfs.append(df)
+    out = pl.concat(all_dfs, how="vertical")
+    assert out.height == 6
+    assert set(out["cell_integer_id"].to_list()) == {1}
+    assert set(out["gene_integer_id"].to_list()) == set(range(6))
