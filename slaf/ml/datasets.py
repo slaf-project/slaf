@@ -370,6 +370,8 @@ class PrefetchBatchProcessor:
         self.partial_cell_data: dict[
             Any, pl.DataFrame
         ] = {}  # Store partial cell data across chunks
+        # When true, non-MoS path should emit all rows in combined_df (epoch-end partial flush).
+        self._non_mos_pending_tail_flush = False
         self.window_kwargs: dict[str, Any] = {}
 
         # Track prefetch statistics
@@ -488,6 +490,7 @@ class PrefetchBatchProcessor:
         self.current_epoch = epoch
         self.batch_id = 0
         self.partial_cell_data = {}  # Reset partial cell data
+        self._non_mos_pending_tail_flush = False
 
         # Reinitialize the data iterator based on the approach
         if self.use_mixture_of_scanners:
@@ -661,9 +664,18 @@ class PrefetchBatchProcessor:
                     i for i, active in enumerate(self.generator_active) if active
                 ]
 
+                mos_skip_to_unified_processing = False
+
                 if not active_indices:
+                    # Flush any remaining partial cells as the final batch
+                    if self.partial_cell_data:
+                        partial_dfs = list(self.partial_cell_data.values())
+                        self.partial_cell_data = {}
+                        combined_df = pl.concat(partial_dfs, how="vertical")  # type: ignore
+                        batch_count = 0
+                        mos_skip_to_unified_processing = True
                     # Check if we should start a new epoch
-                    if self.current_epoch + 1 < self.n_epochs:
+                    elif self.current_epoch + 1 < self.n_epochs:
                         print_epoch_transition(
                             f"Epoch {self.current_epoch} complete, starting epoch {self.current_epoch + 1}",
                             self.verbose,
@@ -674,129 +686,113 @@ class PrefetchBatchProcessor:
                     else:
                         raise StopIteration("No more epochs available") from None
 
-                # Randomly sample from active generators
-                n_to_sample = min(self.n_scanners, len(active_indices))
-                selected_indices = np.random.choice(
-                    active_indices, size=n_to_sample, replace=False
-                )
-
-                if self.verbose and self.batch_id % 100 == 0:
-                    print_prefetch(
-                        f"MoS sampling: {len(active_indices)} active generators, "
-                        f"sampling from {n_to_sample} generators, "
-                        f"reading {self.batches_per_chunk} batches per generator, "
-                        f"{len(self.partial_cell_data)} incomplete cells pending",
-                        self.verbose,
+                if not mos_skip_to_unified_processing:
+                    # Randomly sample from active generators
+                    n_to_sample = min(self.n_scanners, len(active_indices))
+                    selected_indices = np.random.choice(
+                        active_indices, size=n_to_sample, replace=False
                     )
 
-                # Collect batches from selected generators
-                mos_batch_dfs: list[pl.DataFrame] = []
-                generator_results: list[tuple[pl.DataFrame | None, int, bool]] = []
+                    if self.verbose and self.batch_id % 100 == 0:
+                        print_prefetch(
+                            f"MoS sampling: {len(active_indices)} active generators, "
+                            f"sampling from {n_to_sample} generators, "
+                            f"reading {self.batches_per_chunk} batches per generator, "
+                            f"{len(self.partial_cell_data)} incomplete cells pending",
+                            self.verbose,
+                        )
 
-                if self.parallelize_fragment_reads:
-                    # Parallel read: use ThreadPoolExecutor to read from all selected generators concurrently
-                    # This is critical for cloud scenarios where network latency dominates
-                    with ThreadPoolExecutor(
-                        max_workers=len(selected_indices)
-                    ) as executor:
-                        futures = {
-                            executor.submit(self._read_from_generator, gen_idx): gen_idx
-                            for gen_idx in selected_indices
-                        }
-                        for future in as_completed(futures):
-                            try:
-                                result = future.result()
-                                generator_results.append(result)
-                            except Exception as e:
-                                logger.warning(f"Error reading from generator: {e}")
-                                # Mark generator as exhausted on error
-                                gen_idx = futures[future]
-                                self.generator_active[gen_idx] = False
-                else:
-                    # Sequential read: read from generators one at a time
-                    # This is better for local data where parallelization adds overhead
-                    for generator_idx in selected_indices:
-                        result = self._read_from_generator(generator_idx)
-                        generator_results.append(result)
+                    # Collect batches from selected generators
+                    mos_batch_dfs: list[pl.DataFrame] = []
+                    generator_results: list[tuple[pl.DataFrame | None, int, bool]] = []
 
-                # Process results and handle incomplete cells (sequential to maintain correctness)
-                for (
-                    generator_combined,
-                    generator_idx,
-                    is_exhausted,
-                ) in generator_results:
-                    if is_exhausted:
-                        self.generator_active[generator_idx] = False
-                        continue
+                    if self.parallelize_fragment_reads:
+                        # Parallel read: use ThreadPoolExecutor to read from all selected generators concurrently
+                        # This is critical for cloud scenarios where network latency dominates
+                        with ThreadPoolExecutor(
+                            max_workers=len(selected_indices)
+                        ) as executor:
+                            futures = {
+                                executor.submit(
+                                    self._read_from_generator, gen_idx
+                                ): gen_idx
+                                for gen_idx in selected_indices
+                            }
+                            for future in as_completed(futures):
+                                try:
+                                    result = future.result()
+                                    generator_results.append(result)
+                                except Exception as e:
+                                    logger.warning(f"Error reading from generator: {e}")
+                                    # Mark generator as exhausted on error
+                                    gen_idx = futures[future]
+                                    self.generator_active[gen_idx] = False
+                    else:
+                        # Sequential read: read from generators one at a time
+                        # This is better for local data where parallelization adds overhead
+                        for generator_idx in selected_indices:
+                            result = self._read_from_generator(generator_idx)
+                            generator_results.append(result)
 
-                    if generator_combined is None:
-                        continue
+                    # Process results and handle incomplete cells (sequential to maintain correctness)
+                    for (
+                        generator_combined,
+                        generator_idx,
+                        is_exhausted,
+                    ) in generator_results:
+                        if is_exhausted:
+                            self.generator_active[generator_idx] = False
+                            continue
 
-                    # Handle incomplete cells from previous read
-                    last_cell_for_generator = self.generator_last_cells[generator_idx]
-                    if last_cell_for_generator is not None:
-                        first_cell = generator_combined["cell_integer_id"].item(0)  # type: ignore
-                        expected_cell = last_cell_for_generator + 1
+                        if generator_combined is None:
+                            continue
 
-                        if first_cell == expected_cell:
-                            # Continuity detected - check if we can complete the last cell
-                            last_cell_id = last_cell_for_generator
-                            if last_cell_id in self.partial_cell_data:
-                                # STEP 1: Get the incomplete records for this cell
-                                incomplete_records = self.partial_cell_data[
-                                    last_cell_id
-                                ]
-
-                                # STEP 2: Prepend incomplete records to the current batch
-                                generator_combined = pl.concat(
-                                    [incomplete_records, generator_combined],
-                                    how="vertical",
-                                )  # type: ignore
-
-                                # STEP 3: Pop the completed cell from incomplete_cells
-                                self.partial_cell_data.pop(last_cell_id)
-
-                                if self.verbose and self.batch_id % 100 == 0:
-                                    print_prefetch(
-                                        f"Completed cell {last_cell_id} by prepending {len(incomplete_records)} records",
-                                        self.verbose,
-                                    )
-                        else:
-                            # Gap detected - check for zombie incomplete cells
-                            # Remove any incomplete cells for this generator that can't be completed
-                            keys_to_remove = []
-                            for cell_id in list(self.partial_cell_data.keys()):
-                                if cell_id <= last_cell_for_generator:
-                                    keys_to_remove.append(cell_id)
-                            for key in keys_to_remove:
-                                self.partial_cell_data.pop(key, None)
+                        # Handle incomplete cells from previous read
+                        last_cell_for_generator = self.generator_last_cells[
+                            generator_idx
+                        ]
+                        if last_cell_for_generator is not None:
+                            first_cell = generator_combined["cell_integer_id"].item(0)  # type: ignore
 
                             if (
-                                keys_to_remove
-                                and self.verbose
-                                and self.batch_id % 100 == 0
+                                first_cell == last_cell_for_generator
+                                or first_cell == last_cell_for_generator + 1
                             ):
-                                print_prefetch(
-                                    f"Cleaned up {len(keys_to_remove)} zombie incomplete cells due to gap",
-                                    self.verbose,
+                                # Cell split across reads or confirmed complete —
+                                # prepend any held-back partial data for this cell
+                                if last_cell_for_generator in self.partial_cell_data:
+                                    incomplete_records = self.partial_cell_data.pop(
+                                        last_cell_for_generator
+                                    )
+                                    generator_combined = pl.concat(
+                                        [incomplete_records, generator_combined],
+                                        how="vertical",
+                                    )  # type: ignore
+
+                                    if self.verbose and self.batch_id % 100 == 0:
+                                        print_prefetch(
+                                            f"Completed cell {last_cell_for_generator} by prepending {len(incomplete_records)} records",
+                                            self.verbose,
+                                        )
+
+                        # Update last cell for this generator
+                        if isinstance(generator_combined, pl.DataFrame):
+                            self.generator_last_cells[generator_idx] = (
+                                generator_combined.get_column("cell_integer_id").item(
+                                    -1
                                 )
+                            )  # type: ignore
 
-                    # Update last cell for this generator
-                    if isinstance(generator_combined, pl.DataFrame):
-                        self.generator_last_cells[generator_idx] = (
-                            generator_combined.get_column("cell_integer_id").item(-1)
-                        )  # type: ignore
+                        # Add to batch collection
+                        mos_batch_dfs.append(generator_combined)
 
-                    # Add to batch collection
-                    mos_batch_dfs.append(generator_combined)
+                    if not mos_batch_dfs:
+                        # All selected generators are exhausted, continue to next iteration
+                        continue
 
-                if not mos_batch_dfs:
-                    # All selected generators are exhausted, continue to next iteration
-                    continue
-
-                # Combine all batches
-                combined_df = pl.concat(mos_batch_dfs, how="vertical")  # type: ignore
-                batch_count = len(mos_batch_dfs)
+                    # Combine all batches
+                    combined_df = pl.concat(mos_batch_dfs, how="vertical")  # type: ignore
+                    batch_count = len(mos_batch_dfs)
 
             elif self.by_fragment:
                 # Fragment-based approach: load one fragment at a time
@@ -811,8 +807,14 @@ class PrefetchBatchProcessor:
                     combined_df = combined_df_raw
                     batch_count = 1  # One fragment
                 except StopIteration:
-                    # Check if we should start a new epoch
-                    if self.current_epoch + 1 < self.n_epochs:
+                    # Emit deferred partial cells (non-MoS holds max cell id per chunk).
+                    if self.partial_cell_data:
+                        partial_dfs = list(self.partial_cell_data.values())
+                        self.partial_cell_data = {}
+                        combined_df = pl.concat(partial_dfs, how="vertical")  # type: ignore
+                        batch_count = 0
+                        self._non_mos_pending_tail_flush = True
+                    elif self.current_epoch + 1 < self.n_epochs:
                         print_epoch_transition(
                             f"Epoch {self.current_epoch} complete, starting epoch {self.current_epoch + 1}",
                             self.verbose,
@@ -840,8 +842,13 @@ class PrefetchBatchProcessor:
                         break
 
                 if not batch_dfs:
-                    # Check if we should start a new epoch
-                    if self.current_epoch + 1 < self.n_epochs:
+                    if self.partial_cell_data:
+                        partial_dfs = list(self.partial_cell_data.values())
+                        self.partial_cell_data = {}
+                        combined_df = pl.concat(partial_dfs, how="vertical")  # type: ignore
+                        batch_count = 0
+                        self._non_mos_pending_tail_flush = True
+                    elif self.current_epoch + 1 < self.n_epochs:
                         print_epoch_transition(
                             f"Epoch {self.current_epoch} complete, starting epoch {self.current_epoch + 1}",
                             self.verbose,
@@ -851,10 +858,10 @@ class PrefetchBatchProcessor:
                         continue
                     else:
                         raise StopIteration("No more epochs available") from None
-
-                # Combine all batches
-                combined_df = pl.concat(batch_dfs, how="vertical")  # type: ignore
-                batch_count = len(batch_dfs)
+                else:
+                    # Combine all batches (skip when tail flush already set combined_df).
+                    combined_df = pl.concat(batch_dfs, how="vertical")  # type: ignore
+                    batch_count = len(batch_dfs)
             load_time = time.time() - load_start
 
             # Record lance loading timing
@@ -885,39 +892,68 @@ class PrefetchBatchProcessor:
 
             # Handle cell boundary crossing
             if self.use_mixture_of_scanners:
-                # MoS mode: add last cell from each batch to partial_cell_data
-                # Since fragments contain complete cells, we don't need complex boundary logic
-                # Just add the last cell from the combined data as potentially incomplete
-                if len(combined_df) > 0:
-                    last_cell_id = combined_df["cell_integer_id"].max()  # type: ignore
-                    last_cell_data = combined_df.filter(
-                        pl.col("cell_integer_id") == last_cell_id  # type: ignore
-                    )
-                    self.partial_cell_data[last_cell_id] = last_cell_data  # type: ignore
+                # MoS mode: validate each cell's row count against ground
+                # truth (_cell_start_index) to handle both intra-fragment
+                # read splits and cross-fragment boundary splits.
+                csi = self.slaf_array._cell_start_index
 
-                # All cells except the last are complete
-                complete_df = combined_df.filter(
-                    pl.col("cell_integer_id") < last_cell_id  # type: ignore
-                )
+                self.partial_cell_data = {}
+                if len(combined_df) > 0:
+                    cell_counts = combined_df.group_by("cell_integer_id").agg(
+                        pl.len().alias("observed")
+                    )
+                    cell_ids_series = cell_counts["cell_integer_id"]
+                    expected = (
+                        csi.gather(cell_ids_series + 1) - csi.gather(cell_ids_series)
+                    ).alias("expected")
+                    cell_counts = cell_counts.with_columns(expected)
+
+                    incomplete_mask = cell_counts["observed"] < cell_counts["expected"]
+                    if incomplete_mask.any():
+                        incomplete_ids = cell_counts.filter(incomplete_mask)[
+                            "cell_integer_id"
+                        ].to_list()
+
+                        incomplete_df = combined_df.filter(
+                            pl.col("cell_integer_id").is_in(incomplete_ids)
+                        )
+                        for cell_id, group in incomplete_df.partition_by(
+                            "cell_integer_id", as_dict=True
+                        ).items():
+                            self.partial_cell_data[cell_id] = group  # type: ignore
+
+                        complete_df = combined_df.filter(
+                            ~pl.col("cell_integer_id").is_in(incomplete_ids)
+                        )
+                    else:
+                        complete_df = combined_df
+                else:
+                    complete_df = combined_df
 
             else:
                 # Non-MoS mode: use existing boundary logic
-                # Find the last complete cell_integer_id
-                cell_counts = combined_df.group_by("cell_integer_id").len()  # type: ignore
-                last_complete_cell = cell_counts["cell_integer_id"].max()
+                if self._non_mos_pending_tail_flush:
+                    # Epoch-end flush of deferred tail cell(s); no following Lance read.
+                    self._non_mos_pending_tail_flush = False
+                    complete_df = combined_df
+                    self.partial_cell_data = {}
+                else:
+                    # Find the last complete cell_integer_id
+                    cell_counts = combined_df.group_by("cell_integer_id").len()  # type: ignore
+                    last_complete_cell = cell_counts["cell_integer_id"].max()
 
-                # Split into complete cells and partial cells
-                complete_df = combined_df.filter(
-                    pl.col("cell_integer_id") < last_complete_cell  # type: ignore[arg-type]
-                )
-                partial_df = combined_df.filter(
-                    pl.col("cell_integer_id") == last_complete_cell  # type: ignore[arg-type]
-                )
+                    # Split into complete cells and partial cells
+                    complete_df = combined_df.filter(
+                        pl.col("cell_integer_id") < last_complete_cell  # type: ignore[arg-type]
+                    )
+                    partial_df = combined_df.filter(
+                        pl.col("cell_integer_id") == last_complete_cell  # type: ignore[arg-type]
+                    )
 
-                # Store partial cell data for next chunk
-                self.partial_cell_data = {}
-                if len(partial_df) > 0:
-                    self.partial_cell_data[last_complete_cell] = partial_df  # type: ignore
+                    # Store partial cell data for next chunk
+                    self.partial_cell_data = {}
+                    if len(partial_df) > 0:
+                        self.partial_cell_data[last_complete_cell] = partial_df  # type: ignore
 
             # Process complete cells
             if len(complete_df) > 0:
@@ -1249,13 +1285,16 @@ class AsyncPrefetcher:
                 logger.info(f"Error loading batch: {e}")
                 break
 
-    def get_batch(self) -> PrefetchBatch | None:
+    def get_batch(self, timeout: float = 10.0) -> PrefetchBatch | None:
         """
         Get the next pre-processed batch from the queue.
 
         This method retrieves a batch that has been pre-processed by the background
-        worker thread. If no batch is available, it waits up to 1 second before
-        returning None.
+        worker thread. If no batch is available, it waits up to `timeout` seconds
+        before returning None.
+
+        Args:
+            timeout: Maximum time to wait for a batch, in seconds. Default: 10.0.
 
         Returns:
             PrefetchBatch | None: The next pre-processed batch, or None if no batch
@@ -1291,7 +1330,7 @@ class AsyncPrefetcher:
             Batch available: False
         """
         try:
-            return self.queue.get(timeout=10.0)  # Increased from 1.0 to 10.0 seconds
+            return self.queue.get(timeout=timeout)
         except queue.Empty:
             return None
 
@@ -1493,6 +1532,7 @@ class SLAFIterableDataset(IterableDataset):
         n_scanners: int = 16,  # Add n_scanners parameter for MoS
         prefetch_batch_size: int = 4194304,  # Add prefetch_batch_size parameter for MoS
         parallelize_fragment_reads: bool = False,  # Parallelize fragment reads in MoS (cloud optimization)
+        prefetcher_ready_timeout: float = 10.0,  # Timeout for waiting for prefetcher to be ready
     ):
         super().__init__()
         self.slaf_array = slaf_array
@@ -1574,7 +1614,7 @@ class SLAFIterableDataset(IterableDataset):
         self.prefetcher.start()
 
         # Wait for prefetcher to initialize
-        self._wait_for_prefetcher_ready()
+        self._wait_for_prefetcher_ready(timeout=prefetcher_ready_timeout)
 
     def _wait_for_prefetcher_ready(self, timeout: float = 10.0):
         """

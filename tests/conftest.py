@@ -457,6 +457,110 @@ def small_slaf(temp_dir, small_adata):
     return slaf_array
 
 
+def _build_slaf_mos_boundary_reassembly_dir(slaf_dir: Path) -> None:
+    """Write a minimal SLAF dataset with 2+ Lance fragments and a cell split across them.
+
+    Expression layout (16 rows total):
+    - Fragment 1 (5 rows): cell 0 (2 genes), then cell 1 (3 of 6 genes).
+    - Fragment 2 (11 rows): cell 1 (remaining 3 genes), then cells 2–5.
+
+    This matches real converter behavior (append writes → multiple fragments) and
+    guarantees cell 1 spans a fragment boundary for MoS / prefetch reassembly tests.
+    """
+    import json
+
+    import lance
+    import pyarrow as pa
+
+    slaf_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- expression: two append writes → two fragments; cell 1 split across fragments ---
+    frag1_cell = [0, 0, 1, 1, 1]
+    frag1_gene = [0, 1, 0, 1, 2]
+    frag2_cell = [1, 1, 1, 2, 2, 3, 3, 3, 4, 4, 5]
+    frag2_gene = [3, 4, 5, 0, 1, 0, 1, 2, 0, 1, 0]
+
+    expr_path = slaf_dir / "expression.lance"
+    t1 = pa.table(
+        {
+            "cell_integer_id": pa.array(frag1_cell, type=pa.int32()),
+            "gene_integer_id": pa.array(frag1_gene, type=pa.int32()),
+            "value": pa.array([1.0] * len(frag1_cell), type=pa.float32()),
+        }
+    )
+    t2 = pa.table(
+        {
+            "cell_integer_id": pa.array(frag2_cell, type=pa.int32()),
+            "gene_integer_id": pa.array(frag2_gene, type=pa.int32()),
+            "value": pa.array([1.0] * len(frag2_cell), type=pa.float32()),
+        }
+    )
+
+    lance.write_dataset(
+        t1,
+        str(expr_path),
+        mode="create",
+        max_rows_per_file=10_000,
+    )
+    lance.write_dataset(
+        t2,
+        str(expr_path),
+        mode="append",
+        max_rows_per_file=10_000,
+    )
+
+    cells_data = pa.table(
+        {
+            "cell_integer_id": list(range(6)),
+            "cell_id": [f"cell_{i}" for i in range(6)],
+        }
+    )
+    genes_data = pa.table(
+        {
+            "gene_integer_id": list(range(10)),
+            "gene_id": [f"gene_{i}" for i in range(10)],
+        }
+    )
+
+    lance.write_dataset(cells_data, str(slaf_dir / "cells.lance"))
+    lance.write_dataset(genes_data, str(slaf_dir / "genes.lance"))
+
+    config = {
+        "format_version": "0.4",
+        "array_shape": [6, 10],
+        "n_cells": 6,
+        "n_genes": 10,
+        "tables": {
+            "expression": "expression.lance",
+            "cells": "cells.lance",
+            "genes": "genes.lance",
+        },
+        "optimizations": {
+            "use_integer_keys": True,
+            "optimize_storage": True,
+        },
+        "metadata": {
+            "expression_count": 16,
+            "sparsity": 0.0,
+            "density": 1.0,
+            "total_possible_elements": 60,
+        },
+    }
+
+    with open(slaf_dir / "config.json", "w") as f:
+        json.dump(config, f, indent=2)
+
+
+@pytest.fixture
+def slaf_mos_boundary_reassembly(temp_dir):
+    """SLAFArray with multiple expression fragments; cell 1 crosses a fragment boundary."""
+    slaf_dir = Path(temp_dir) / "mos_boundary_reassembly.slaf"
+    _build_slaf_mos_boundary_reassembly_dir(slaf_dir)
+    arr = SLAFArray(str(slaf_dir))
+    arr.wait_for_metadata()
+    return arr
+
+
 @pytest.fixture
 def tiny_slaf_path(temp_dir):
     """Create a tiny sample SLAF dataset and return its path"""
