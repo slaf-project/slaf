@@ -10,6 +10,7 @@ Tests metadata conversion functionality:
 - Testing round-trip: convert -> load -> access -> verify data matches
 """
 
+import os
 import tempfile
 
 import numpy as np
@@ -411,6 +412,124 @@ def test_round_trip_metadata_conversion(anndata_with_metadata):
         assert set(adata2.uns.keys()) == set(anndata_with_metadata.uns.keys())
         assert adata2.uns["neighbors"]["params"]["n_neighbors"] == 15
         assert isinstance(adata2.uns["pca"]["variance_ratio"], list)
+
+
+@pytest.fixture
+def anndata_with_spatial_metadata():
+    """Create an AnnData object with spatial obsm, varm, and uns for testing"""
+    import scanpy as sc
+
+    np.random.seed(99)
+    n_cells, n_genes = 10, 5
+
+    X = csr_matrix(np.random.rand(n_cells, n_genes), dtype=np.float32)
+    adata = sc.AnnData(X=X)
+    adata.obs_names = [f"cell_{i}" for i in range(n_cells)]
+    adata.var_names = [f"gene_{i}" for i in range(n_genes)]
+
+    # Spatial coords (2-D) and a regular embedding
+    adata.obsm["spatial"] = np.random.rand(n_cells, 2).astype(np.float32)
+    adata.obsm["X_pca"] = np.random.rand(n_cells, 50).astype(np.float32)
+
+    adata.varm["PCs"] = np.random.rand(n_genes, 50).astype(np.float32)
+
+    # Typical Visium-style uns['spatial'] with nested structure
+    adata.uns["spatial"] = {
+        "library_id": {
+            "scalefactors": {
+                "tissue_hires_scalef": 0.17,
+                "spot_diameter_fullres": 89.5,
+            },
+            "metadata": {"chemistry": "Visium"},
+        }
+    }
+
+    return adata
+
+
+def test_spatial_obsm_round_trip(anndata_with_spatial_metadata):
+    """obsm['spatial'] round-trip: convert -> load -> verify coords match"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        converter = SLAFConverter(
+            use_optimized_dtypes=False,
+            compact_after_write=False,
+            chunked=False,
+        )
+        converter.convert_anndata(anndata_with_spatial_metadata, tmpdir)
+
+        slaf = SLAFArray(tmpdir, load_metadata=False)
+        adata = LazyAnnData(slaf)
+
+        assert "spatial" in adata.obsm
+        original = anndata_with_spatial_metadata.obsm["spatial"]
+        converted = adata.obsm["spatial"]
+        assert converted.shape == (10, 2)
+        np.testing.assert_array_almost_equal(converted, original, decimal=5)
+
+        # config dimensions
+        assert slaf.config["obsm"]["dimensions"]["spatial"] == 2
+
+
+def test_spatial_uns_round_trip(anndata_with_spatial_metadata):
+    """uns['spatial'] round-trip: nested numpy-free dict survives JSON"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        converter = SLAFConverter(
+            use_optimized_dtypes=False,
+            compact_after_write=False,
+            chunked=False,
+        )
+        converter.convert_anndata(anndata_with_spatial_metadata, tmpdir)
+
+        slaf = SLAFArray(tmpdir, load_metadata=False)
+        adata = LazyAnnData(slaf)
+
+        assert "spatial" in adata.uns
+        assert adata.uns["spatial"]["library_id"]["scalefactors"][
+            "tissue_hires_scalef"
+        ] == pytest.approx(0.17)
+        assert (
+            adata.uns["spatial"]["library_id"]["metadata"]["chemistry"] == "Visium"
+        )
+
+
+def test_spatial_h5ad_file_round_trip(anndata_with_spatial_metadata):
+    """Full file-based round-trip through backed mode for spatial metadata."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        h5ad_path = os.path.join(tmpdir, "spatial.h5ad")
+        anndata_with_spatial_metadata.write(h5ad_path)
+
+        output_path = os.path.join(tmpdir, "spatial.slaf")
+        converter = SLAFConverter(
+            chunked=False,
+            use_optimized_dtypes=False,
+            compact_after_write=False,
+        )
+        converter.convert(h5ad_path, output_path)
+
+        slaf = SLAFArray(output_path, load_metadata=False)
+        adata = LazyAnnData(slaf)
+
+        # obsm['spatial'] preserved
+        assert "spatial" in adata.obsm
+        np.testing.assert_array_almost_equal(
+            adata.obsm["spatial"],
+            anndata_with_spatial_metadata.obsm["spatial"],
+            decimal=5,
+        )
+
+        # uns['spatial'] preserved
+        assert "spatial" in adata.uns
+        assert adata.uns["spatial"]["library_id"]["scalefactors"][
+            "tissue_hires_scalef"
+        ] == pytest.approx(0.17)
+
+        # varm preserved
+        assert "PCs" in adata.varm
+        np.testing.assert_array_almost_equal(
+            adata.varm["PCs"],
+            anndata_with_spatial_metadata.varm["PCs"],
+            decimal=5,
+        )
 
 
 if __name__ == "__main__":
