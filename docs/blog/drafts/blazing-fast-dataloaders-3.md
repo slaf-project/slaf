@@ -30,20 +30,31 @@ Those ideas share a hidden assumption: **the CPU that prefetches and the GPU tha
 
 When data lives in object storage and compute is ephemeral, we still stream, shuffle, and tokenize online, but peak single-node throughput drops because round-trips now cross the network path to the bucket.
 
-Even with aggressive vertical scaling (XX vCPUs and threads), cloud-streamed throughput on **one** node tended to **plateau around ~2–3k cells/sec**. That is still a non-trivial rate, but it sits **below** the roughly **5–6k cells/sec** we target to saturate one H100 at scGPT-style settings. Pushing further on a single node yielded diminishing returns, opening a natural path to scaling data ingestion into the training cluster **horizontally**.
+The deeper constraint is **I/O concurrency into S3**: one ingest host, however many vCPUs, ultimately funnels several **logical read streams** through **one** place—NIC, connection pool, and implicit per-prefix request budgeting all pile up on that path. **Horizontal** ingestion is different: each CPU worker is its **own** client talking to object storage from its **own** container. You are not only adding cores; you are adding **independent read parallelism** against the bucket. That raises the **aggregate** ceiling far beyond what “more threads on the same box” can unlock.
 
-The scaling story splits into two regimes:
+On **Tahoe-100M (train split) streamed from S3**, we measured the same MoS pipeline on Modal (**raw mode**, batch size 64). **Vertical** scaling—larger single-node ingest—lifts throughput from about **2.2k** to **~3.5k cells/sec** and then **levels off**; 16 and 32 vCPUs stay in the same band as 8, consistent with a **single-path** limit rather than “keep adding CPU forever.”
 
-| Scaling strategy | Throughput | Ceiling |
-| ---------------- | ---------- | ------- |
-| Vertical (more threads, single node) | ~[X] cells/sec | Hard ceiling: network / request asymptote |
-| Horizontal (more nodes, distributed) | ~[Y] cells/sec per node | Stays linear up to [Z] nodes in our tests |
+| vCPUs | Throughput (cells/sec) |
+| ----- | ---------------------: |
+| 4 | 2,169 |
+| 8 | 3,572 |
+| 16 | 3,126 |
+| 32 | 3,459 |
 
-_Fill in X, Y, Z when benchmarks are finalized. Scaffold note: up to 64 CPU worker nodes tested; on the order of ~64k cells/sec aggregate observed at 64 nodes._
+**Horizontal** scaling—**distributed** producers on the same dataset—shows why that ceiling is not the end of the story. Aggregate cells/sec reaches the **tens of thousands** while the vertical curve stays stuck near **~3.5k** on one host.
 
-The practical lesson: **vertical scaling on the training host has an asymptote once storage I/O is the cap; horizontal scaling on the ingestion side does not** (within the limits of your object store and wallet). If GPUs keep getting faster and atlases keep growing, the durable fix is to **add dataloading capacity** the same way you add training capacity: as its **own** fleet, not only as a side effect of buying a bigger GPU box.
+| Producer nodes | Aggregate throughput (cells/sec) |
+| --- | ---: |
+| 1 | 1,012 |
+| 4 | 8,575 |
+| 16 | 29,526 |
+| 32 | 30,581 |
 
-> 💡 **Figure (placeholder).** Two curves: vertical throughput flattening versus near-linear horizontal scaling. Mark the crossover where distributed ingestion wins.
+The benchmark harnesses are **good enough** for the argument we care about here: the **shape**—flattening on one machine versus a **much higher** aggregate when many clients read in parallel from object storage—not publication-grade coupling of every tuning knob.
+
+The practical lesson: **scale ingest the same way the cloud scales storage: as many readers as you need**, not only a bigger single-node prefetcher. If GPUs keep getting faster and atlases keep growing, the durable move is **distributed dataloading** with its own fleet, so **distributed I/O concurrency** matches the **ceiling object storage can offer**, which is far above what one node’s worth of S3 client parallelism tends to realize.
+
+> 💡 **Figure (placeholder).** Two curves: vertical throughput flattening (low thousands) versus horizontal **aggregate** throughput climbing toward **~30k cells/sec**. Mark where multi-reader ingestion crosses the single-node plateau.
 
 ---
 
@@ -75,7 +86,7 @@ Because the **outer loop** (read, rank genes, tokenize, shuffle) and the **inner
 
 The standard distributed-systems move is a **queue** as the narrow waist—pub/sub intuition without requiring you to name a particular broker. **Producers** push prepared samples; **consumers** pop and train. Decoupling **throughput** from **latency**: if the network hiccups, depth in the queue buys time; if the GPU experiment steps up batch size, you drain faster without rewriting preprocessing code for efficiency.
 
-Two papers anchor that story without turning this post into a literature review.
+Two papers anchor that story.
 
 **GoldMiner** (Alibaba and collaborators, **SIGMOD 2023**) attacks the moment when **faster GPUs make CPU preprocessing the bottleneck**. Training is inherently multi-stage: features are transformed, embeddings are gathered, bytes are decoded—**before** the kernel launch you care about. GoldMiner **splits** the preprocessing graph from GPU training and **elastically scales** the preprocessing side (including automatic identification of stateless operators and scheduler-aware scaling). The useful mental model for us: **the long pole is not always `loss.backward()`**; sometimes it is everything that has to happen **before** the tensor hits the device—and that stage deserves its **own** fleet.
 
@@ -163,16 +174,14 @@ Economically, this is the shape you want: **CPU hours are cheap relative to H100
 
 The repo’s **Benchmarks** section reports end-to-end Modal runs; the rows below are copied from that README for the **`scgpt`** preset (**~51.1M trainable parameters**), **Tahoe-100M**, **`max_genes=512`**, **128 cells per GPU per step** (effective global batch **1024** on 8 GPUs), **`--data-source s3`**, **Flash Attention 4**, **`--sparse-gene-head`**, **`--no-use-compile`**, and **two CPU prefetch workers** on the distributed run. Step time on 8 GPUs is the **median** of per-step **max over ranks** (slowest rank sets the barrier); global **cells/s** is **global batch ÷ that step time**.
 
-| Config | Step latency (ms) | Global cells/sec | Dataloader wait (ms) | Training efficiency |
+| Config | Median step latency (ms) | Global cells/sec | Dataloader wait (ms) | Training efficiency |
 | ------ | ----------------- | ---------------- | -------------------- | ------------------- |
-| Single GPU (1× **H200**, `modal_train.py`) | **323** (median) | **~396** | **~0** (`train_step` **`dl`** chunk in README profile) | MFU **~23.7%**; peak VRAM **~68 GB** |
-| Multi-GPU (8× **H100**, `modal_train_distributed.py`) | **56** (median) | **~18.3k** | not split out on this run† | MFU **~17.3%**; peak VRAM **~71.7 GB / GPU** |
+| Single GPU (1× **H200**, `modal_train.py`) | **323** | **~396** | **~0** (`train_step` **`dl`** chunk in README profile) | MFU **~23.7%**; peak VRAM **~68 GB** |
+| Multi-GPU (8× **H100**, `modal_train_distributed.py`) | **56** | **~18.3k** | not split out on this run† | MFU **~17.3%**; peak VRAM **~71.7 GB / GPU** |
 
 †On the single-GPU trace, time blocked on `next(batch)` is reported as **~0 ms** once warm. The 8-GPU README table does not break out the same **`dl`** field; steady-state **56 ms** steps are the joint result of compute, collectives, and feeding the global batch.
 
 **Multi-node:** the README documents the `modal run … --multinode` command line but does not publish a second throughput table yet—when it does, this post can add a third row.
-
-We ship the repo under the **MIT License** as reference **infrastructure**, not as a new pretrained foundation checkpoint.
 
 At multi-node scale, variance across CPU workers should disappear into **queue depth** instead of showing up as idle GPU time.
 
@@ -190,7 +199,7 @@ They also point to **roughly three to four days on four A100s** for that job—a
 
 **Same cell budget, 2026 stack:** the [`fast-scgpt` README](https://github.com/slaf-project/fast-scgpt) benchmark on **8× H100** reports **~18.3k cells/s** **global** training throughput in steady state (forward + backward + optimizer + NCCL—not dataloader-only). If you push **62 million** such presentations through at that rate, **62 × 10⁶ / 18 300 ≈ 3 390 s**—about **56 minutes** of **GPU-wall** time in the idealized steady state (Modal startup, queue ramp, compile warmup, checkpointing, and eval still add real minutes).
 
-**Sticker math:** **8 GPUs** × (**~3 390 s** / **3 600 s/h**) ≈ **7.5** billed GPU-hours if every device is busy for that wall. At **\$2.50 / H100 / hour**, that is **~\$19** in GPU line items—**under twenty bucks**, with **CPU prefetch workers and egress** still rounding noise next to eight H100s. And you never **mirrored the whole atlas onto cluster scratch**: Tahoe-100M stays in **object storage**; the dataloader meets you there.
+**Sticker math:** **8 GPUs** × (**~3 390 s** / **3 600 s/h**) ≈ **7.5** billed GPU-hours if every device is busy for that wall. At **\$2.50 / H100 / hour**, that is **~\$19** in GPU line items—**under twenty bucks**, with **CPU prefetch workers and egress** still rounding noise next to eight H100s. And you never **mirrored the whole atlas onto cluster storage**: Tahoe-100M stays in **object storage**; the dataloader meets you there.
 
 So the headline is not “cheaper than one burrito” at this exact cell count—it is **under an hour and under twenty dollars on paper** for the **same order of magnitude of training traffic** the original issue discussed, versus **half a week on four A100s** in 2023. Different silicon, different stack, different dollars-per-hour—but the **magnitude** of the lifestyle change is the point.
 
@@ -217,8 +226,6 @@ Ray Data’s Lance integration schedules partition ranges centrally. MoS needs t
 ### 3. The cross-partition boundary problem
 
 Ray Data does not give a first-class primitive for **logical records split across physical fragments**. SLAF’s COO layout needs **stateful** coordination between workers—exactly the niche `modal.Dict` fills. Alternatives imply **pre-localizing** cells to fragments (violating store-once, query-in-place) or **custom actors** bolted beside Ray Data.
-
-None of that is a knock on Ray Data **in general**. It is the intersection of **our** sparse row model and **our** shuffle requirements with **their** abstractions.
 
 ---
 
