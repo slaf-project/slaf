@@ -459,7 +459,7 @@ class TestSLAFIterableDataset:
         # Test that processor can be initialized with window strategy
         assert isinstance(processor.tokenizer.window, GeneformerWindow)
         assert processor.shuffle is shuffle
-        assert processor.tokenizer.max_genes == 512
+        assert processor.tokenizer.max_genes == 2048
 
     def test_multi_epoch_initialization(self, tiny_slaf):
         """Test SLAFIterableDataset initialization with multi-epoch support"""
