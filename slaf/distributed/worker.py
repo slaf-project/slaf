@@ -97,21 +97,33 @@ def prefetch_worker(
         tokenizer_module = importlib.import_module(tokenizer_config["module"])
         tokenizer_class = getattr(tokenizer_module, tokenizer_config["class"])
 
+        # SLAFTokenizer needs a slaf_array, so we need to recreate it from the data source path
+        # Extract slaf_path from data_source_config (assumes Lance path is under slaf_path/expression.lance)
         if data_source_config["type"] == "lance":
             lance_path = data_source_config["path"]
+            # Assume lance_path is like "path/to/slaf/expression.lance"
             slaf_path = lance_path.replace("/expression.lance", "")
 
+            # Recreate SLAFArray in worker
             from slaf.core.slaf import SLAFArray
 
             slaf_array = SLAFArray(slaf_path, load_metadata=False)
+
+            # Create tokenizer instance
             tokenizer_instance = tokenizer_class(
                 slaf_array=slaf_array, **tokenizer_config["kwargs"]
             )
 
+            # Create tokenizer function that works with grouped DataFrame
+            # The grouped DataFrame has gene_sequence and optionally expr_sequence columns
             def tokenize_grouped(
                 grouped_df: pl.DataFrame, schema: DataSchema
             ) -> dict[str, Any]:
+                """Tokenize grouped DataFrame with gene sequences."""
+                # Extract gene sequences and expression sequences
                 gene_sequences = grouped_df[schema.item_list_key].to_list()
+
+                # Check if we have expression sequences (for scGPT)
                 if (
                     schema.value_list_key
                     and schema.value_list_key in grouped_df.columns

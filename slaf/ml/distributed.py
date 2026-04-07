@@ -261,6 +261,7 @@ class DistributedSLAFDataLoader:
             tokenizer_cls = None
             self.tokenizer = None
             self.special_tokens = None
+            
         # Create data source
         lance_path = f"{slaf_array.slaf_path}/expression.lance"
         data_source = LanceDataSource(lance_path)
