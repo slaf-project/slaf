@@ -90,37 +90,9 @@ def prefetch_worker(
     # - Out of the box: uses Window/Shuffle from slaf.distributed if no factory config
     # - No hardcoded dependencies on slaf.ml in slaf.distributed code
 
-    # Window: use factory if provided, otherwise use default
-    if processor_config.get("window_factory"):
-        # Dynamic import based on config - module path comes from config, not hardcoded
-        factory_config = processor_config["window_factory"]
-        window_module = __import__(
-            factory_config["module"], fromlist=[factory_config["function"]]
-        )
-        window_factory = getattr(window_module, factory_config["function"])
-        window = window_factory(
-            factory_config["type"], **factory_config.get("kwargs", {})
-        )
-    else:
-        # Use generic implementation (works out of the box)
-        window = Window()
-
-    # Shuffle: use factory if provided, otherwise use default
-    if processor_config.get("shuffle_factory"):
-        # Dynamic import based on config - module path comes from config, not hardcoded
-        factory_config = processor_config["shuffle_factory"]
-        shuffle_module = __import__(
-            factory_config["module"], fromlist=[factory_config["function"]]
-        )
-        shuffle_factory = getattr(shuffle_module, factory_config["function"])
-        shuffle = shuffle_factory(
-            factory_config["type"], **factory_config.get("kwargs", {})
-        )
-    else:
-        # Use generic implementation (works out of the box)
-        shuffle = Shuffle()
-
-    # Tokenizer is passed as a factory function name (will be created in ml/distributed.py)
+    # Tokenizer is passed as a factory function name (will be created in ml/distributed.py).
+    # Built before window when use_tokenizer_window is set so tokenizer_instance.window exists.
+    tokenizer_instance = None
     tokenizer_fn = None
     if processor_config.get("tokenizer_factory"):
         # Dynamic import and factory call
@@ -175,6 +147,40 @@ def prefetch_worker(
                 }
 
             tokenizer_fn = tokenize_grouped
+
+    # Shuffle: use factory if provided, otherwise use default
+    if processor_config.get("shuffle_factory"):
+        # Dynamic import based on config - module path comes from config, not hardcoded
+        factory_config = processor_config["shuffle_factory"]
+        shuffle_module = __import__(
+            factory_config["module"], fromlist=[factory_config["function"]]
+        )
+        shuffle_factory = getattr(shuffle_module, factory_config["function"])
+        shuffle = shuffle_factory(
+            factory_config["type"], **factory_config.get("kwargs", {})
+        )
+    else:
+        # Use generic implementation (works out of the box)
+        shuffle = Shuffle()
+
+    # Window: use tokenizer.window when use_tokenizer_window (aligns with ml tokenizers owning Window);
+    # else factory if provided; otherwise generic Window (works out of the box).
+    use_tokenizer_window = processor_config.get("use_tokenizer_window", False)
+    if use_tokenizer_window and tokenizer_instance is not None:
+        window = tokenizer_instance.window
+    elif processor_config.get("window_factory"):
+        # Dynamic import based on config - module path comes from config, not hardcoded
+        factory_config = processor_config["window_factory"]
+        window_module = __import__(
+            factory_config["module"], fromlist=[factory_config["function"]]
+        )
+        window_factory = getattr(window_module, factory_config["function"])
+        window = window_factory(
+            factory_config["type"], **factory_config.get("kwargs", {})
+        )
+    else:
+        # Use generic implementation (works out of the box)
+        window = Window()
 
     # Create processor with data schema
     schema = DataSchema(**processor_config["schema"])

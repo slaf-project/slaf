@@ -2,7 +2,13 @@ import polars as pl
 import pytest
 import torch
 
-from slaf.ml.dataloaders import SLAFDataLoader, get_device_info, get_optimal_device
+from slaf.ml.dataloaders import (
+    GeneformerTokenizer,
+    ScGPTTokenizer,
+    SLAFDataLoader,
+    get_device_info,
+    get_optimal_device,
+)
 
 
 class TestSLAFDataLoader:
@@ -14,9 +20,10 @@ class TestSLAFDataLoader:
 
         # Check basic attributes
         assert dataloader.slaf_array is tiny_slaf
-        assert dataloader.tokenizer_type == "geneformer"
+        assert isinstance(dataloader.tokenizer, GeneformerTokenizer)
         assert dataloader.batch_size == 32
         assert dataloader.max_genes == 2048
+        assert dataloader.tokenizer.max_genes == 2048
 
         # Check tokenizer initialization
         assert dataloader.tokenizer is not None
@@ -36,9 +43,10 @@ class TestSLAFDataLoader:
             n_expression_bins=5,
         )
 
-        assert dataloader.tokenizer_type == "scgpt"
+        assert isinstance(dataloader.tokenizer, ScGPTTokenizer)
         assert dataloader.batch_size == 16
         assert dataloader.max_genes == 1024
+        assert dataloader.tokenizer.max_genes == 1024
         assert dataloader.tokenizer.vocab_size == 1000
         assert dataloader.tokenizer.n_expression_bins == 5
 
@@ -66,7 +74,7 @@ class TestSLAFDataLoader:
 
             assert input_ids.shape[0] == attention_mask.shape[0]
             assert input_ids.shape[0] == cell_ids.shape[0]
-            assert input_ids.shape[1] == 2048  # Geneformer default
+            assert input_ids.shape[1] == 10  # matches max_genes
 
             # Check data types
             assert input_ids.dtype == torch.long
@@ -103,7 +111,7 @@ class TestSLAFDataLoader:
 
             assert input_ids.shape[0] == attention_mask.shape[0]
             assert input_ids.shape[0] == cell_ids.shape[0]
-            assert input_ids.shape[1] == 2050  # scGPT: 2*1024+2
+            assert input_ids.shape[1] == 22  # scGPT: 2 * max_genes + 2
 
             # Check data types
             assert input_ids.dtype == torch.long
@@ -378,7 +386,7 @@ class TestSLAFDataLoader:
 
         # Verify all parameters are set correctly
         assert dataloader.n_epochs == 4
-        assert dataloader.tokenizer_type == "scgpt"
+        assert isinstance(dataloader.tokenizer, ScGPTTokenizer)
         assert dataloader.batch_size == 6
         assert (
             dataloader._dataset.batch_processor.use_binned_expressions is False
@@ -742,7 +750,6 @@ class TestSLAFDataLoader:
             slaf_array=tiny_slaf,
             tokenizer_type="scgpt",
             batch_size=16,
-            max_genes=512,
             use_mixture_of_scanners=True,
             n_scanners=6,
             prefetch_batch_size=1048576,
@@ -752,9 +759,9 @@ class TestSLAFDataLoader:
         assert dataloader.use_mixture_of_scanners is True
         assert dataloader.n_scanners == 6
         assert dataloader.prefetch_batch_size == 1048576
-        assert dataloader.tokenizer_type == "scgpt"
+        assert isinstance(dataloader.tokenizer, ScGPTTokenizer)
         assert dataloader.batch_size == 16
-        assert dataloader.max_genes == 512
+        assert dataloader.max_genes == 2048
 
         # Test iteration
         batch_count = 0

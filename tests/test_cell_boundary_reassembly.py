@@ -13,7 +13,6 @@ import lance
 import polars as pl
 import pytest
 
-from slaf.ml.aggregators import ScGPTWindow
 from slaf.ml.datasets import PrefetchBatchProcessor, RawPrefetchBatch
 from slaf.ml.samplers import RandomShuffle
 
@@ -144,7 +143,6 @@ def test_mos_exhaustion_flushes_remaining_partial_cells(slaf_mos_boundary_reasse
     slaf = slaf_mos_boundary_reassembly
     processor = PrefetchBatchProcessor(
         slaf_array=slaf,
-        window=ScGPTWindow(),
         shuffle=RandomShuffle(),
         tokenizer=None,
         raw_mode=True,
@@ -186,7 +184,6 @@ def test_tiny_slaf_one_epoch_non_mos_raw_matches_cell_start_index(
     """Single-fragment SLAF: sequential fragment/batch loaders must match CSI for one epoch."""
     processor = PrefetchBatchProcessor(
         slaf_array=tiny_slaf,
-        window=ScGPTWindow(),
         shuffle=RandomShuffle(),
         tokenizer=None,
         raw_mode=True,
@@ -209,7 +206,6 @@ def test_cross_fragment_slaf_one_epoch_non_mos_raw_matches_cell_start_index(
     """Multi-fragment SLAF with a cell spanning fragments: non-MoS must still match CSI."""
     processor = PrefetchBatchProcessor(
         slaf_array=slaf_mos_boundary_reassembly,
-        window=ScGPTWindow(),
         shuffle=RandomShuffle(),
         tokenizer=None,
         raw_mode=True,
@@ -229,7 +225,6 @@ def test_tiny_slaf_one_epoch_mos_raw_matches_cell_start_index(tiny_slaf):
     """Single-fragment AnnData SLAF: one MoS raw epoch matches _cell_start_index."""
     processor = PrefetchBatchProcessor(
         slaf_array=tiny_slaf,
-        window=ScGPTWindow(),
         shuffle=RandomShuffle(),
         tokenizer=None,
         raw_mode=True,
@@ -256,7 +251,6 @@ def test_cross_fragment_slaf_one_epoch_raw_matches_cell_start_index_mos(
     """
     processor = PrefetchBatchProcessor(
         slaf_array=slaf_mos_boundary_reassembly,
-        window=ScGPTWindow(),
         shuffle=RandomShuffle(),
         tokenizer=None,
         raw_mode=True,

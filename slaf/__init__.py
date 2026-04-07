@@ -31,10 +31,9 @@ def _import_ml_components():
         SLAFTokenizer,
         TokenizerType,
         create_shuffle,
-        create_window,
     )
 
-    return SLAFDataLoader, SLAFTokenizer, TokenizerType, create_shuffle, create_window
+    return SLAFDataLoader, SLAFTokenizer, TokenizerType, create_shuffle
 
 
 # Expose lazy import functions

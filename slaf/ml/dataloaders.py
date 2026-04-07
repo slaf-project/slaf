@@ -4,7 +4,7 @@ from loguru import logger
 
 from slaf.core.slaf import SLAFArray
 
-from .tokenizers import SLAFTokenizer
+from .tokenizers import GeneformerTokenizer, ScGPTTokenizer, SLAFTokenizer
 
 # Try to import torch, but make it optional
 try:
@@ -413,7 +413,6 @@ class SLAFDataLoader:
             Error: n_scanners must be at least 1
         """
         self.slaf_array = slaf_array
-        self.tokenizer_type = tokenizer_type
         self.batch_size = batch_size
         self.max_genes = max_genes
         self.n_epochs = n_epochs
@@ -454,13 +453,26 @@ class SLAFDataLoader:
             )
 
         # Initialize tokenizer (only needed for non-raw mode)
+
         if not self.raw_mode:
-            self.tokenizer = SLAFTokenizer(
-                slaf_array=slaf_array,
-                tokenizer_type=tokenizer_type,
-                vocab_size=vocab_size,
-                n_expression_bins=n_expression_bins,
-            )
+            if tokenizer_type == "geneformer":
+                self.tokenizer = GeneformerTokenizer(
+                    slaf_array=slaf_array,
+                    vocab_size=vocab_size,
+                    max_genes=max_genes,
+                )
+            elif tokenizer_type == "scgpt":
+                self.tokenizer = ScGPTTokenizer(
+                    slaf_array=slaf_array,
+                    vocab_size=vocab_size,
+                    n_expression_bins=n_expression_bins,
+                    max_genes=max_genes,
+                )
+            else:
+                raise ValueError(
+                    "tokenizer_type must be one of ['geneformer', 'scgpt']; "
+                    f"{tokenizer_type=} is not supported."
+                )
 
             # Get special tokens from tokenizer
             self.special_tokens = self.tokenizer.special_tokens
@@ -476,7 +488,6 @@ class SLAFDataLoader:
             batch_size=batch_size,
             seed=42,  # TODO: make configurable
             max_queue_size=max_queue_size,  # Pass max_queue_size to dataset
-            tokenizer_type=tokenizer_type,
             n_epochs=n_epochs,  # Pass n_epochs to dataset
             raw_mode=raw_mode,  # Pass raw_mode to dataset
             verbose=verbose,  # Pass verbose to dataset

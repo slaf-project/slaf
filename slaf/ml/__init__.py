@@ -3,8 +3,6 @@ from .aggregators import (
     ScGPTWindow,
     SimpleWindow,
     Window,
-    WindowType,
-    create_window,
 )
 from .dataloaders import SLAFDataLoader
 from .datasets import (
@@ -38,11 +36,9 @@ __all__ = [
     "TokenizerType",
     # Window Functions
     "Window",
-    "WindowType",
     "ScGPTWindow",
     "GeneformerWindow",
     "SimpleWindow",
-    "create_window",
     # Shuffle Strategies
     "Shuffle",
     "ShuffleType",
