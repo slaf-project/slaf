@@ -454,6 +454,7 @@ class SLAFDataLoader:
             )
 
         # Initialize tokenizer (only needed for non-raw mode)
+
         if not self.raw_mode:
             if tokenizer_type == "geneformer":
                 self.tokenizer = GeneformerTokenizer(
@@ -465,6 +466,10 @@ class SLAFDataLoader:
                     slaf_array=slaf_array,
                     vocab_size=vocab_size,
                     n_expression_bins=n_expression_bins,
+                )
+            else:
+                raise ValueError(
+                    f"tokenizer_type must be one of ['geneformer, 'scgpt']; {tokenizer_type=} is not supported."
                 )
 
             # Get special tokens from tokenizer
@@ -481,7 +486,6 @@ class SLAFDataLoader:
             batch_size=batch_size,
             seed=42,  # TODO: make configurable
             max_queue_size=max_queue_size,  # Pass max_queue_size to dataset
-            tokenizer_type=tokenizer_type,
             n_epochs=n_epochs,  # Pass n_epochs to dataset
             raw_mode=raw_mode,  # Pass raw_mode to dataset
             verbose=verbose,  # Pass verbose to dataset

@@ -54,7 +54,6 @@ except ImportError:
     logger.warning("Polars not available. Fragment loading will be disabled.")
 
 from slaf.core.slaf import SLAFArray
-from slaf.ml.aggregators import Window
 from slaf.ml.samplers import Shuffle
 from slaf.ml.tokenizers import SLAFTokenizer
 
@@ -311,11 +310,9 @@ class PrefetchBatchProcessor:
     def __init__(
         self,
         slaf_array: SLAFArray,
-        window: "Window",
         shuffle: "Shuffle",
         tokenizer: SLAFTokenizer | None,
         seed: int = 42,
-        max_genes: int = 1024,
         batches_per_chunk: int = 1,  # Default to 1 for MoS (was 50 for sequential)
         n_expression_bins: int = 10,
         use_binned_expressions: bool = True,
@@ -332,11 +329,9 @@ class PrefetchBatchProcessor:
     ):
         """Initialize the PrefetchBatchProcessor."""
         self.slaf_array = slaf_array
-        self.window = window
         self.shuffle = shuffle
         self.tokenizer = tokenizer
         self.seed = seed
-        self.max_genes = max_genes
         self.batches_per_chunk = batches_per_chunk
         self.n_expression_bins = n_expression_bins
         self.use_binned_expressions = use_binned_expressions
@@ -1028,9 +1023,14 @@ class PrefetchBatchProcessor:
                     window_params.update(
                         self.window_kwargs
                     )  # Add any additional kwargs
-                    grouped = self.window.apply(
+
+                    tokenizer = self.tokenizer
+                    if tokenizer is None:
+                        raise RuntimeError("Tokenizer is required for tokenized mode")
+
+                    grouped = tokenizer.window.apply(
                         shuffled_df,  # type: ignore[arg-type]  # Use the shuffled DataFrame
-                        self.max_genes,
+                        tokenizer.max_genes,
                         **window_params,
                     )
                     window_time = time.time() - window_start
@@ -1048,7 +1048,6 @@ class PrefetchBatchProcessor:
                             if "expr_sequence" in grouped.columns
                             else None
                         ),
-                        max_genes=self.max_genes,
                     )
 
                     tokenize_time = time.time() - tokenize_start
@@ -1475,7 +1474,6 @@ class SLAFIterableDataset(IterableDataset):
         max_queue_size: Maximum size of the prefetch queue (default: 10)
         pin_memory: Whether to pin memory for faster GPU transfer (default: False)
         sampler_strategy: Sampling strategy for cells (default: "sequential")
-        tokenizer_type: Type of tokenizer ("geneformer" or "scgpt", default: "geneformer")
         use_binned_expressions: Whether to use binned expressions for scGPT (default: False)
         n_epochs: Number of epochs to run. The generator will automatically reset
                  after each epoch, enabling multi-epoch training on small datasets.
@@ -1491,20 +1489,20 @@ class SLAFIterableDataset(IterableDataset):
 
     Examples:
         >>> # Single epoch training
-        >>> dataset = SLAFIterableDataset(slaf_array, tokenizer, n_epochs=1)
+        >>> dataset = SLAFIterableDataset(slaf_array, tokenizer, window, n_epochs=1)
         >>> for batch in dataset:
         ...     # Training loop
         ...     pass
 
         >>> # Multi-epoch training for small datasets
-        >>> dataset = SLAFIterableDataset(slaf_array, tokenizer, n_epochs=10)
+        >>> dataset = SLAFIterableDataset(slaf_array, tokenizer, window, n_epochs=10)
         >>> for batch in dataset:
         ...     # Training loop - will automatically go through 10 epochs
         ...     pass
 
         >>> # Fragment-based loading for higher entropy
         >>> dataset = SLAFIterableDataset(
-        ...     slaf_array, tokenizer,
+        ...     slaf_array, tokenizer, window,
         ...     by_fragment=True
         ... )
         >>> for batch in dataset:
@@ -1521,7 +1519,6 @@ class SLAFIterableDataset(IterableDataset):
         max_queue_size: int = 5000,  # Increased default queue size
         pin_memory: bool = False,
         sampler_strategy: str = "sequential",
-        tokenizer_type: str = "geneformer",  # Add tokenizer type parameter
         use_binned_expressions: bool = False,  # Add binned expressions parameter
         n_epochs: int = 1,  # Add n_epochs parameter
         raw_mode: bool = False,  # Add raw_mode parameter
@@ -1540,10 +1537,6 @@ class SLAFIterableDataset(IterableDataset):
         self.batch_size = batch_size
         self.seed = seed
         self.max_queue_size = max_queue_size
-        self.tokenizer_type = tokenizer_type
-        self.max_genes = (
-            1024 if tokenizer_type == "scgpt" else 2048
-        )  # Default max_genes
         self.pin_memory = pin_memory
         self.n_epochs = n_epochs
         self.raw_mode = raw_mode  # Add raw_mode attribute
@@ -1560,37 +1553,26 @@ class SLAFIterableDataset(IterableDataset):
         # Device-agnostic: always use CPU tensors
         self.device = torch.device("cpu")
 
-        # Initialize processor based on loading strategy
-        max_genes = 1024 if tokenizer_type == "scgpt" else 2048
-
         # Create window and shuffle strategies using factory functions
-        from slaf.ml.aggregators import WindowType, create_window
         from slaf.ml.samplers import ShuffleType, create_shuffle
 
         # For raw mode, we don't need a window, but we need to pass something
         # Use geneformer as default since it's the most common
-        if self.raw_mode:
-            window = create_window(WindowType.GENEFORMER)
-        else:
-            window = create_window(WindowType(tokenizer_type))
         shuffle = create_shuffle(ShuffleType.RANDOM)
 
         # Get expression binning parameters from tokenizer (only for non-raw mode)
-        if not self.raw_mode and tokenizer is not None:
-            n_expression_bins = tokenizer.n_expression_bins
-        else:
-            n_expression_bins = 10  # Default value for raw mode
+        n_expression_bins = getattr(
+            tokenizer, "n_expression_bins", 10
+        )  # Default value for raw mode
 
         # Set binning based on tokenizer type
         use_binned_expressions = use_binned_expressions  # Use parameter value
 
         self.batch_processor = PrefetchBatchProcessor(
             slaf_array=slaf_array,
-            window=window,
             shuffle=shuffle,
             tokenizer=tokenizer,
             seed=seed,
-            max_genes=max_genes,
             batches_per_chunk=batches_per_chunk,
             n_expression_bins=n_expression_bins,
             use_binned_expressions=use_binned_expressions,
@@ -1631,7 +1613,7 @@ class SLAFIterableDataset(IterableDataset):
 
         Examples:
             >>> # Wait for prefetcher to be ready
-            >>> dataset = SLAFIterableDataset(slaf_array, tokenizer)
+            >>> dataset = SLAFIterableDataset(slaf_array, tokenizer, window)
             >>> # The _wait_for_prefetcher_ready method is called automatically
             >>> # during dataset initialization
             >>> print("Dataset initialized successfully")
@@ -1684,7 +1666,7 @@ class SLAFIterableDataset(IterableDataset):
 
         Examples:
             >>> # Basic iteration
-            >>> dataset = SLAFIterableDataset(slaf_array, tokenizer)
+            >>> dataset = SLAFIterableDataset(slaf_array, tokenizer, window)
             >>> batch_count = 0
             >>> for batch in dataset:
             ...     print(f"Batch {batch_count}: {batch['input_ids'].shape}")
@@ -1696,7 +1678,7 @@ class SLAFIterableDataset(IterableDataset):
             Batch 2: torch.Size([32, 2048])
 
             >>> # Multi-epoch iteration
-            >>> dataset = SLAFIterableDataset(slaf_array, tokenizer, n_epochs=2)
+            >>> dataset = SLAFIterableDataset(slaf_array, tokenizer, window, n_epochs=2)
             >>> epochs_seen = set()
             >>> for batch in dataset:
             ...     if 'epoch' in batch:
@@ -1707,7 +1689,7 @@ class SLAFIterableDataset(IterableDataset):
             Epochs seen: [0, 1]
 
             >>> # Check batch contents
-            >>> dataset = SLAFIterableDataset(slaf_array, tokenizer)
+            >>> dataset = SLAFIterableDataset(slaf_array, tokenizer, window)
             >>> for batch in dataset:
             ...     print(f"Keys: {list(batch.keys())}")
             ...     print(f"Input shape: {batch['input_ids'].shape}")
@@ -1720,7 +1702,7 @@ class SLAFIterableDataset(IterableDataset):
             Cell IDs shape: torch.Size([32])
 
             >>> # Device-agnostic tensors
-            >>> dataset = SLAFIterableDataset(slaf_array, tokenizer)
+            >>> dataset = SLAFIterableDataset(slaf_array, tokenizer, window)
             >>> for batch in dataset:
             ...     print(f"Input device: {batch['input_ids'].device}")
             ...     print(f"Attention device: {batch['attention_mask'].device}")
@@ -1912,7 +1894,7 @@ class SLAFIterableDataset(IterableDataset):
 
         Examples:
             >>> # Dataset cleanup happens automatically
-            >>> dataset = SLAFIterableDataset(slaf_array, tokenizer)
+            >>> dataset = SLAFIterableDataset(slaf_array, tokenizer, window)
             >>> print("Dataset created")
             Dataset created
             >>> # When dataset goes out of scope, __del__ is called automatically
@@ -1921,7 +1903,7 @@ class SLAFIterableDataset(IterableDataset):
             Dataset destroyed and cleaned up
 
             >>> # Manual cleanup (not usually needed)
-            >>> dataset = SLAFIterableDataset(slaf_array, tokenizer)
+            >>> dataset = SLAFIterableDataset(slaf_array, tokenizer, window)
             >>> dataset.__del__()
             >>> print("Manual cleanup completed")
             Manual cleanup completed
