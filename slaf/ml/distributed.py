@@ -4,6 +4,7 @@ SLAF-specific distributed dataloader.
 Composes generic distributed components with SLAF-specific logic.
 """
 
+import os
 from datetime import datetime
 from typing import Any
 
@@ -33,12 +34,20 @@ image = (
     .pip_install("uv")
     .uv_pip_install(
         "slafdb[ml]",
+        "psutil>=6.0.0",  # prefetch memory stats in slaf.ml.datasets (not a core slaf dep)
     )
     .run_commands(f"echo 'Image built at {_BUILD_TS}'")
 )
 
 # App name used for deploy and for loader's Function.from_name()
 _APP_NAME = "slaf-distributed-dataloader"
+
+
+def _modal_named_kwargs(environment_name: str | None) -> dict[str, str]:
+    """Optional Modal Environment for Queue/Dict namespacing (e.g. environment_name='main')."""
+    if environment_name:
+        return {"environment_name": environment_name}
+    return {}
 
 
 def create_app(
@@ -69,6 +78,7 @@ def create_app(
         prefetch_batch_size: int = 16384,
         max_batches: int | None = None,
         partial_groups_kv_name: str | None = None,
+        modal_queue_environment: str | None = None,
     ) -> dict[str, Any]:
         """
         SLAF-specific Modal worker function with SLAF image.
@@ -78,14 +88,22 @@ def create_app(
         """
         from slaf.distributed.worker import prefetch_worker
 
-        queue = modal.Queue.from_name(queue_name, create_if_missing=True)
+        # Inline env kwargs — do not call module helpers here. ``serialized=True`` workers
+        # unpickle against site-packages slaf; a PyPI lag behind your deploy machine would
+        # raise DeserializationError if this referenced e.g. ``_modal_named_kwargs``.
+        _q_kw: dict[str, str] = (
+            {"environment_name": modal_queue_environment}
+            if modal_queue_environment
+            else {}
+        )
+        queue = modal.Queue.from_name(queue_name, create_if_missing=True, **_q_kw)
         partial_groups_kv = None
         if (
             processor_config.get("enable_cross_worker_boundary_merging", False)
             and partial_groups_kv_name
         ):
             partial_groups_kv = modal.Dict.from_name(
-                partial_groups_kv_name, create_if_missing=True
+                partial_groups_kv_name, create_if_missing=True, **_q_kw
             )
         return prefetch_worker(
             worker_id=worker_id,
@@ -104,10 +122,17 @@ def create_app(
     return app
 
 
-# Default app (8 CPU, 32 GB per worker) for backwards compatibility and for
-# deploy_dataloader_app() when called with defaults.
+# Default app (8 CPU, 32 GB per worker) for `modal deploy slaf/ml/distributed.py` and
+# `from slaf.ml.distributed import app`.  When this module is imported *inside* another
+# Modal function (e.g. a benchmark that only uses Function.from_name + spawn), registering
+# a second App in-process makes Modal try to provision ``distributed_prefetch_worker`` for
+# that run and container startup can fail.  Set ``SLAF_MODAL_DEFER_DEFAULT_APP=1`` before
+# importing this module in those containers (see benchmarks/benchmark_scaling_modal.py).
 # IMPORTANT: Deploy before use. Python: deploy_dataloader_app(); CLI: slaf deploy-dataloader
-app = create_app(cpu=8, memory=32768)
+if os.environ.get("SLAF_MODAL_DEFER_DEFAULT_APP") == "1":
+    app: modal.App | None = None
+else:
+    app = create_app(cpu=8, memory=32768)
 
 
 def deploy_dataloader_app(
@@ -174,6 +199,7 @@ class DistributedSLAFDataLoader:
         queue_timeout: float = 1.0,
         seed: int = 42,
         queue_name: str | None = None,
+        modal_queue_environment: str | None = None,
         **window_kwargs: Any,
     ):
         """
@@ -214,6 +240,8 @@ class DistributedSLAFDataLoader:
                           Default: 1.0 seconds.
             seed: Random seed for reproducibility
             queue_name: Name of Modal Queue (auto-generated if None)
+            modal_queue_environment: Optional Modal Environment name for Queue/Dict
+                (match consumer’s ``modal.Queue.from_name(..., environment_name=…)``, e.g. ``"main"`` in some apps).
             **window_kwargs: Additional window function parameters
         """
         # Handle raw_mode
@@ -242,7 +270,8 @@ class DistributedSLAFDataLoader:
         # Create queue and KV store (same name used for consumer and workers — see queue flow below)
         if queue_name is None:
             queue_name = f"slaf-dataloader-{id(slaf_array)}"
-        modal.Queue.from_name(queue_name, create_if_missing=True)
+        _env = _modal_named_kwargs(modal_queue_environment)
+        modal.Queue.from_name(queue_name, create_if_missing=True, **_env)
 
         # Create KV store for cross-worker boundary merging
         # We'll create it after processor_config is defined, but the name is deterministic
@@ -288,7 +317,7 @@ class DistributedSLAFDataLoader:
 
         # Create the KV dict to ensure it exists before workers try to access it
         if processor_config.get("enable_cross_worker_boundary_merging", True):
-            modal.Dict.from_name(partial_groups_kv_name, create_if_missing=True)
+            modal.Dict.from_name(partial_groups_kv_name, create_if_missing=True, **_env)
 
         # Tokenizer factory config (for dynamic import in worker)
         # Only include tokenizer if not in raw mode
@@ -341,6 +370,7 @@ class DistributedSLAFDataLoader:
                     prefetch_batch_count=prefetch_batch_count,
                     prefetch_batch_size=prefetch_batch_size,
                     partial_groups_kv_name=partial_groups_kv_name,
+                    modal_queue_environment=modal_queue_environment,
                 )
                 worker_handles.append(handle)
                 logger.info(
@@ -364,7 +394,7 @@ class DistributedSLAFDataLoader:
         # - Each worker does modal.Queue.from_name(queue_name, ...) and calls queue.put_many(...).
         # - We get the same queue by name here; DistributedDataLoader iterates via queue.get_many().
         # So the queue we pass into DistributedDataLoader is the same one workers write to.
-        modal_queue = modal.Queue.from_name(queue_name, create_if_missing=True)
+        modal_queue = modal.Queue.from_name(queue_name, create_if_missing=True, **_env)
         # Workers compress items (zlib) to stay under Modal's 1 MiB/item limit; decompress on read
         consumer_queue = DecompressingQueueWrapper(modal_queue)
 
@@ -396,6 +426,7 @@ class DistributedSLAFDataLoader:
         )
         self.worker_handles = worker_handles
         self.queue_name = queue_name  # Store queue name for external access
+        self.modal_queue_environment = modal_queue_environment
         self.partial_groups_kv_name = (
             partial_groups_kv_name  # Store KV store name for external access
         )
@@ -420,7 +451,8 @@ class DistributedSLAFDataLoader:
         """
         import time
 
-        queue = modal.Queue.from_name(self.queue_name, create_if_missing=True)
+        _env = _modal_named_kwargs(self.modal_queue_environment)
+        queue = modal.Queue.from_name(self.queue_name, create_if_missing=True, **_env)
         for _ in range(int(timeout_seconds)):
             try:
                 size = queue.len()
