@@ -19,9 +19,7 @@ from slaf.distributed.dataloader import DecompressingQueueWrapper, DistributedDa
 from slaf.distributed.processor import DataSchema
 
 # Import SLAF-specific components (for type hints and adapters)
-from slaf.ml.aggregators import Window
-from slaf.ml.samplers import Shuffle
-from slaf.ml.tokenizers import SLAFTokenizer
+from slaf.ml.tokenizers import GeneformerTokenizer, ScGPTTokenizer
 
 # Configure Modal image for SLAF workers
 # Cache bust: the git install runs inside run_commands with a client-side timestamp
@@ -150,13 +148,12 @@ class DistributedSLAFDataLoader:
     (raw_mode=True, wait for queue size >= 50, then iterate).
     """
 
+    tokenizer: GeneformerTokenizer | ScGPTTokenizer | None
+
     def __init__(
         self,
         slaf_array: SLAFArray,
         tokenizer_type: str = "geneformer",
-        window: Window | None = None,
-        shuffle: Shuffle | None = None,
-        tokenizer: SLAFTokenizer | None = None,
         n_workers: int = 64,
         n_scanners: int = 16,
         cpu: float = 8,
@@ -183,9 +180,6 @@ class DistributedSLAFDataLoader:
             slaf_array: SLAFArray instance containing the data
             tokenizer_type [PRODUCER]: Tokenization strategy ("geneformer", "scgpt", or "raw")
                            If "raw", raw_mode is automatically enabled
-            window [PRODUCER]: Window function instance (optional, created automatically if None)
-            shuffle [PRODUCER]: Shuffle function instance (optional, created automatically if None)
-            tokenizer [PRODUCER]: SLAFTokenizer instance (optional, created automatically from tokenizer_type if None)
             n_workers: [PRODUCER] Number of Modal workers (producer-side parallelism)
             n_scanners: [PRODUCER] Number of scanners per worker (for Mixture of Scanners)
             cpu: [PRODUCER] CPU cores per worker; must match deploy_dataloader_app(cpu=...).
@@ -216,21 +210,57 @@ class DistributedSLAFDataLoader:
             queue_name: Name of Modal Queue (auto-generated if None)
             **window_kwargs: Additional window function parameters
         """
-        # Handle raw_mode
-        if tokenizer_type == "raw":
-            raw_mode = True
-            tokenizer = None
-        elif raw_mode:
-            tokenizer = None
+        self.slaf_array = slaf_array
+        self.batch_size = batch_size
+        self.max_genes = max_genes
+        self.n_epochs = n_epochs
+        self.raw_mode = raw_mode
+        self.return_tensors = return_tensors
+        self.prefetch_factor = prefetch_factor
+        self.queue_timeout = queue_timeout
+        self.n_workers = n_workers
+        self.n_scanners = n_scanners
+        self.prefetch_batch_size = prefetch_batch_size
+        self.prefetch_batch_count = prefetch_batch_count
+        self.cpu = cpu
+        self.memory = memory
+        self.seed = seed
 
-        # Create tokenizer if not provided and not in raw mode
-        if tokenizer is None and not raw_mode:
-            tokenizer = SLAFTokenizer(
-                slaf_array=slaf_array,
-                tokenizer_type=tokenizer_type,
-                vocab_size=vocab_size,
-                n_expression_bins=n_expression_bins,
+        tokenizer_type = tokenizer_type.lower()
+        if tokenizer_type not in {"geneformer", "scgpt", "raw"}:
+            raise ValueError(
+                f"Unsupported tokenizer_type: {tokenizer_type!r}; expected 'geneformer', 'scgpt', or 'raw'."
             )
+
+        if tokenizer_type == "raw":
+            self.raw_mode = True
+
+        self.tokenizer_type = "raw" if self.raw_mode else tokenizer_type
+
+        window_kwargs = dict(window_kwargs)
+        window_kwargs.setdefault("n_expression_bins", n_expression_bins)
+        window_kwargs.setdefault("use_binned_expressions", True)
+
+        tokenizer_factory_kwargs: dict[str, Any] | None = None
+        tokenizer_cls: type[GeneformerTokenizer] | type[ScGPTTokenizer] | None = None
+        if not self.raw_mode:
+            if tokenizer_type == "geneformer":
+                tokenizer_cls = GeneformerTokenizer
+            else:
+                tokenizer_cls = ScGPTTokenizer
+            tokenizer_factory_kwargs = {"vocab_size": vocab_size}
+            if tokenizer_type == "scgpt":
+                tokenizer_factory_kwargs["n_expression_bins"] = n_expression_bins
+            self.tokenizer = tokenizer_cls(
+                slaf_array=slaf_array,
+                **tokenizer_factory_kwargs,
+            )
+            self.special_tokens = self.tokenizer.special_tokens
+        else:
+            tokenizer_factory_kwargs = None
+            tokenizer_cls = None
+            self.tokenizer = None
+            self.special_tokens = None
         # Create data source
         lance_path = f"{slaf_array.slaf_path}/expression.lance"
         data_source = LanceDataSource(lance_path)
@@ -273,39 +303,28 @@ class DistributedSLAFDataLoader:
                 "item_list_key": schema.item_list_key,
                 "value_list_key": schema.value_list_key,
             },
-            # Window factory config (module path in config, not hardcoded)
-            # For now, we'll use None and let the worker use the default Window
-            # TODO: Add factory functions to slaf.ml.aggregators and slaf.ml.samplers
-            "window_factory": None,  # Will use default Window from slaf.distributed
-            "shuffle_factory": None,  # Will use default Shuffle from slaf.distributed
-            "max_items": max_genes,  # Generic name
+            "window_factory": None,
+            "shuffle_factory": None,
+            "max_items": max_genes,
             "seed": seed,
             "n_epochs": n_epochs,
             "window_kwargs": window_kwargs,
-            "continuity_check": "sequential",  # How to detect continuity between partitions
-            "enable_cross_worker_boundary_merging": True,  # Enable cross-worker merging via KV store
+            "continuity_check": "sequential",
+            "enable_cross_worker_boundary_merging": True,
+            "use_tokenizer_window": not self.raw_mode,
         }
 
         # Create the KV dict to ensure it exists before workers try to access it
         if processor_config.get("enable_cross_worker_boundary_merging", True):
             modal.Dict.from_name(partial_groups_kv_name, create_if_missing=True)
 
-        # Tokenizer factory config (for dynamic import in worker)
-        # Only include tokenizer if not in raw mode
-        if tokenizer and not raw_mode:
+        if self.tokenizer is not None and tokenizer_cls is not None:
             processor_config["tokenizer_factory"] = {
-                "module": "slaf.ml.tokenizers",
-                "class": "SLAFTokenizer",
-                "kwargs": {
-                    # Serialize tokenizer config (vocab size, etc.)
-                    # Tokenizer instance itself can't be serialized
-                    "tokenizer_type": tokenizer.tokenizer_type.value,
-                    "vocab_size": tokenizer.vocab_size,
-                    "n_expression_bins": tokenizer.n_expression_bins,
-                },
+                "module": tokenizer_cls.__module__,
+                "class": tokenizer_cls.__name__,
+                "kwargs": tokenizer_factory_kwargs or {},
             }
         else:
-            # Raw mode - no tokenizer
             processor_config["tokenizer_factory"] = None
 
         # Spawn workers
