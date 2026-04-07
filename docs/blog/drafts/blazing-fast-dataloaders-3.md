@@ -66,8 +66,9 @@ datasets and staging them to cluster-attached storage. This is expensive in
 storage terms and inflexible: each new training configuration requires a new
 copy. The alternative — randomizing during streaming without a throughput penalty
 — lacks a general-purpose solution. SLAF's Mixture of Scanners solves this for
-Lance-backed data by randomly assigning which fragments each scanner reads at
-each iteration, then applying a block-level shuffle within the prefetch batch.
+Lance-backed data by keeping one sequential `to_batches` iterator per fragment,
+randomly sampling which iterators to advance each step, then applying a
+block-level shuffle within the prefetch batch.
 The pipeline reaches 88–90% of theoretical maximum entropy at 97% of sequential
 throughput. The dataset stays untouched in object storage; randomization happens
 in the delivery mechanism. ([Post 2](https://slaf-project.github.io/slaf/blog/blazing-fast-dataloaders-2/))
@@ -372,45 +373,3 @@ fleet meets it there.
 The full training harness is [`fast-scgpt`](https://github.com/slaf-project/fast-scgpt).
 Point it at the Tahoe-100M SLAF dataset on HuggingFace via `hf://datasets/slaf-project/Tahoe-100M`
 and it streams directly without staging.
-
-The queue abstraction separating producers from consumers is not specific to
-single-cell data. The same pattern — stateless CPU workers, a managed queue,
-a thin GPU consumer — applies to any training workload where the outer loop
-can be made stateless and the inner loop doesn't need to know where its batches
-came from.
-
----
-
-## Appendix: Why not build on Ray Data?
-
-*For readers who want to understand the specific evaluation.*
-
-Ray Data is a well-engineered system backed by solid research in its streaming
-batch paper (arXiv 2501.12407). Three specific mismatches led us toward a custom
-solution.
-
-**Training-time shuffle is local, not global.** The practical option in Ray Data
-during streaming training is `local_shuffle_buffer_size` — a bounded window
-shuffle that operates without network transfer. Ray's own documentation is clear
-that this is not a global shuffle. The Mixture of Scanners achieves 88–90% of
-theoretical maximum entropy at streaming speed, without materializing the dataset.
-Reproducing that required sub-fragment control over read assignment that
-`read_lance()` doesn't expose.
-
-**No fine-grained partition control.** Mixture of Scanners requires each scanner
-to start at a randomly selected row offset within a Lance fragment and read a
-contiguous block from there. Ray Data's scheduler manages partition assignment
-centrally for load balancing; it doesn't provide an API for directing specific
-scanners to specific byte ranges within a file.
-
-**No first-class solution for cross-partition records.** SLAF's COO layout means
-a single cell can straddle two fragments. Ray Data's partition model treats
-partitions as independent units; assembling records split across partition
-boundaries requires custom actor logic alongside the Ray Data pipeline. The
-`modal.Dict`-based scratchpad handles this in roughly ten lines and cleans up
-after itself.
-
-Ray Data is solving a harder and more general problem — arbitrary heterogeneous
-pipelines across arbitrary cluster topologies. The tradeoffs that make it
-general are the precise places where SLAF's layout required something more
-specific.
