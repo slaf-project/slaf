@@ -1,232 +1,416 @@
-# Blazing Fast Dataloaders #3: From object storage to distributed training
+# Pretraining scGPT on Tahoe-100M for under $20 over a lunch break
 
-## Train single-cell foundation models on a lunch break. Spend less than a doordash meal.
+## How distributed dataloading changes the economics of single-cell foundation models
 
-_This is the third post in the Blazing Fast Dataloaders series. [Post 1](../blazing-fast-dataloaders.md) covered throughput: thread-based prefetch, vectorized outer loop, and contiguous reads. [Post 2](../blazing-fast-dataloaders-2.md) covered randomness: the Mixture of Scanners architecture for near-perfect shuffling at streaming speed. This post covers scale: training from object storage, when the bottleneck shifts to the network, and how we split CPU-side ingestion from GPU training with a queue-backed distributed dataloader._
-
----
-
-The first two posts describe a single-node pipeline that reaches roughly **28,207 cells per second** from **local disk**, more than enough to keep one H100 fed at single-cell GPT (scGPT)-scale batch sizes. The stack is still useful as-is for workstations and staged data.
-
-Atlas-scale training in the cloud is different: the canonical copy of the data sits in **object storage**, and compute is **ephemeral**. Pointing the same pipeline at S3 (or any similar cloud storage backend) does not achieve the same throughput. On a single node, adding cores and prefetch threads eventually stops helping because egress bandwidth and request economics cap how much data can reach that box, regardless of how efficiently the CPU would transform it afterward. In other words, once the link to storage is the limiter, vertical scaling on the training host is the wrong knob.
-
-This post describes how we **separate concerns**—CPU workers that stream and preprocess in parallel, a narrow-waist queue, and GPU workers that mostly train—implemented today as **`DistributedSLAFDataLoader`** on Modal.
-
----
-
-## The story so far
-
-In posts 1 and 2, we described the optimizations that led to a single-node dataloader that squeezes everything it can from one machine:
-
-- **Thread-based prefetch** uses GIL-releasing work in Lance, Arrow, and NumPy so prefetch threads overlap I/O and preprocessing without paying for multiprocessing copies.
-- The **vectorized outer loop** moves tokenization out of the per-step hot path and applies it across large prefetch batches, riding sub-linear scaling of Polars window-function costs (roughly **3× better per-cell efficiency** at 1024 cells versus 32 in our scaling tables).
-- **Mixture of Scanners (MoS)** streams contiguous reads while approximating a global shuffle: random subsets of scanners read sequential runs from different offsets, then an in-memory block shuffle mixes deliveries, reaching **88–90%** of theoretical maximum entropy at **97%** of sequential throughput.
-
-Those ideas share a hidden assumption: **the CPU that prefetches and the GPU that trains share one box**. They compete for the same cores, memory bandwidth, and NUMA domains. On a workstation with fast local disk, that competition is usually secondary to “can we read and transform fast enough?” In the cloud, with a dataset as large as **Tahoe-100M on S3** and multi-GPU jobs, **network delivery** often joins (or replaces) that story as the hard ceiling on a single ingest host.
+*This is the third post in the Blazing Fast Dataloaders series.
+[Post 1](https://slaf-project.github.io/slaf/blog/blazing-fast-dataloaders/)
+covered throughput: thread-based prefetch, vectorized outer loop, and contiguous
+reads — achieving 28k cells/sec on local disk.
+[Post 2](https://slaf-project.github.io/slaf/blog/blazing-fast-dataloaders-2/)
+covered randomness: the Mixture of Scanners architecture for near-perfect
+shuffling without drop in throughput. This post covers scale: what changes when training
+data lives in object storage, why vertical scaling hits a wall, and how
+separating ingestion from training makes the economics of pretraining look very
+different.*
 
 ---
 
-## The cloud storage wall
+## Dataloaders: the unglamorous work that makes GPUs useful
 
-When data lives in object storage and compute is ephemeral, we still stream, shuffle, and tokenize online, but peak single-node throughput drops because round-trips now cross the network path to the bucket.
+Training a foundation model spends most of its wall-clock time on three things:
+matrix operations that compute gradients, parameter updates that apply them, and
+everything that has to happen before any of that can start. The third category is
+the dataloader's job.
 
-The deeper constraint is **I/O concurrency into S3**: one ingest host, however many vCPUs, ultimately funnels several **logical read streams** through **one** place—NIC, connection pool, and implicit per-prefix request budgeting all pile up on that path. **Horizontal** ingestion is different: each CPU worker is its **own** client talking to object storage from its **own** container. You are not only adding cores; you are adding **independent read parallelism** against the bucket. That raises the **aggregate** ceiling far beyond what “more threads on the same box” can unlock.
+A dataloader coordinates the pipeline from raw storage to training-ready tensors.
+It fetches data asynchronously so the GPU never sits idle waiting for the next
+batch. It handles filtering, normalization, and tokenization. It shuffles samples
+so the model doesn't develop spurious biases from the order data was
+collected or stored. It packs individual samples into the batch shapes the training regime
+expects. None of this is computationally interesting in the way that attention
+mechanisms or optimizer algorithms are — but leave it unoptimized, and you end
+up with expensive GPU hardware waiting on a CPU bottleneck for most of its
+working life.
 
-On **Tahoe-100M (train split) streamed from S3**, we measured the same MoS pipeline on Modal (**raw mode**, batch size 64). **Vertical** scaling—larger single-node ingest—lifts throughput from about **2.2k** to **~3.5k cells/sec** and then **levels off**; 16 and 32 vCPUs stay in the same band as 8, consistent with a **single-path** limit rather than “keep adding CPU forever.”
+A few design patterns have emerged over the years for keeping GPUs fed.
 
-| vCPUs | Throughput (cells/sec) |
-| ----- | ---------------------: |
-| 4 | 2,169 |
-| 8 | 3,572 |
-| 16 | 3,126 |
-| 32 | 3,459 |
+**Async prefetch with threads.** The canonical PyTorch approach spawns one worker
+process per prefetch thread. Each process loads and preprocesses samples
+independently, shipping results back to the main process for batching. This works
+but carries costs: spawning processes duplicates memory, pickles tensors across
+process boundaries, and imposes coordination overhead that scales poorly. A
+thread-based alternative, explored in recent work by
+[NVIDIA](https://developer.nvidia.com/blog/improved-data-loading-with-threads/),
+[Meta](https://ai.meta.com/blog/spdl-faster-ai-model-training-with-thread-based-data-loading-reality-labs/),
+and [Ray](https://docs.ray.io/en/latest/train/user-guides/data-loading-preprocessing.html),
+uses concurrent threads instead of processes. The GIL is not an obstacle for
+I/O-bound and numerical work because Lance, Arrow, NumPy, and Polars all release
+it during their hot paths. Threads share memory with the training process, avoid
+pickling, and start in milliseconds rather than seconds. SLAF adopted this design
+from the beginning. ([Post 1](https://slaf-project.github.io/slaf/blog/blazing-fast-dataloaders/))
 
-**Horizontal** scaling—**distributed** producers on the same dataset—shows why that ceiling is not the end of the story. Aggregate cells/sec reaches the **tens of thousands** while the vertical curve stays stuck near **~3.5k** on one host.
+**Moving preprocessing into the outer loop.** Dataloaders typically hand raw
+samples to the training loop, which applies tokenization and preprocessing
+per-step. There's no technical reason for this division — it's mostly convention,
+since ML researchers want control over what happens to their data before it
+reaches the model. But preprocessing is embarrassingly parallel, and doing it on
+large prefetch batches rather than per-sample exploits the sub-linear scaling of
+vectorized operations: the per-cell cost of gene ranking and tokenization in
+Polars drops by roughly 3x when processing 1024 cells at once versus 32. Moving
+these operations into the outer loop, at prefetch batch granularity, is a
+straightforward win. ([Post 1](https://slaf-project.github.io/slaf/blog/blazing-fast-dataloaders/))
 
-| Producer nodes | Aggregate throughput (cells/sec) |
-| --- | ---: |
-| 1 | 1,012 |
-| 4 | 8,575 |
-| 16 | 29,526 |
-| 32 | 30,581 |
+**Randomization without pre-shuffling.** Most teams avoid the complexity of
+on-the-fly shuffling by creating pre-shuffled, training-specific copies of their
+datasets and staging them to cluster-attached storage. This is expensive in
+storage terms and inflexible: each new training configuration requires a new
+copy. The alternative — randomizing during streaming without a throughput penalty
+— lacks a general-purpose solution. SLAF's Mixture of Scanners solves this for
+Lance-backed data by randomly assigning which fragments each scanner reads at
+each iteration, then applying a block-level shuffle within the prefetch batch.
+The pipeline reaches 88–90% of theoretical maximum entropy at 97% of sequential
+throughput. The dataset stays untouched in object storage; randomization happens
+in the delivery mechanism. ([Post 2](https://slaf-project.github.io/slaf/blog/blazing-fast-dataloaders-2/))
 
-The benchmark harnesses are **good enough** for the argument we care about here: the **shape**—flattening on one machine versus a **much higher** aggregate when many clients read in parallel from object storage—not publication-grade coupling of every tuning knob.
-
-The practical lesson: **scale ingest the same way the cloud scales storage: as many readers as you need**, not only a bigger single-node prefetcher. If GPUs keep getting faster and atlases keep growing, the durable move is **distributed dataloading** with its own fleet, so **distributed I/O concurrency** matches the **ceiling object storage can offer**, which is far above what one node’s worth of S3 client parallelism tends to realize.
-
-> 💡 **Figure (placeholder).** Two curves: vertical throughput flattening (low thousands) versus horizontal **aggregate** throughput climbing toward **~30k cells/sec**. Mark where multi-reader ingestion crosses the single-node plateau.
-
----
-
-## The new default: training streams from object storage
-
-None of this is unique to genomics. Over the last few years, “**stream training data from object storage**” crossed from brave to **boring-in-a-good-way** for ML training in the cloud. Once you accept that default, two engineering questions move from the appendix to chapter one: **what pattern of reads** you impose on storage, and **which client** you use to issue those reads.
-
-Amazon’s machine-learning team made the read-pattern argument crisply in [_Applying data loading best practices for ML training with Amazon S3 clients_](https://aws.amazon.com/blogs/machine-learning/applying-data-loading-best-practices-for-ml-training-with-amazon-s3-clients/) (December 2025). The core observation is familiar to anyone who has profiled S3: each `GET` pays a largely **size-independent time-to-first-byte (TTFB)**—connection setup, round trips, and service-side work add overhead before bytes flow. If **every training sample is its own object**, you spend your life in TTFB; workers wait on latency, not on bandwidth. That is a **latency-bound** regime. Their remedy is structural: **fewer, larger shards** (they highlight roughly **100 MB–1 GB** as a happy band in their CV benchmark), **sequential reads inside a shard**, and enough **parallelism and prefetch** to keep the pipe full. They also emphasize **high-quality clients** built on the AWS CRT—**Mountpoint for S3** and the **S3 Connector for PyTorch**—plus **caching** when epochs repeat (Mountpoint’s cache, long metadata TTL) so you stop re-paying network tolls for the same bytes.
-
-Important caveat they echo: **sharding alone does not guarantee sequential access**. If your format encourages random jumps inside a large object—think Parquet-style seeks or HDF5-style hyperslabs—you can erase the benefit of a big shard. The dataloader and the on-disk layout have to tell the **same story**.
-
-Tigris ran the same **shape** of benchmark against **S3-compatible** storage and wrote it up in [_Benchmarking ML Training Throughput on Tigris Object Storage_](https://www.tigrisdata.com/blog/training-object-storage/) (March 2026). Qualitatively, the pictures match AWS: **random, one-object-per-image** workloads need **many** dataloader workers before the GPU saturates; **tar-sharded sequential** workloads saturate with **fewer** workers because TTFB is amortized across many samples inside one stream. Their extension is **Tigris Acceleration Gateway (TAG)**: an **S3-compatible cache** on the training instance. Epoch one warms NVMe; later epochs look like local reads to the trainer. For **multi-epoch** jobs, that is a big deal—you stop treating “epoch two” as a full replay of the same remote read pattern.
-
-The punch line in both posts is not the ViT numbers themselves; it is the **entitlement** exercise. Strip the model down to a no-op forward pass and measure how fast the pipeline can feed samples. The answer is **orders of magnitude** higher than a GPU-bound training step when the stack is configured sanely. That headroom is “useless” only if you insist on **colocating** preprocessing with the GPU. The moment you **decouple** producers and consumers, that slack becomes **breathing room**—for jitter, for stragglers, for bigger batches later.
-
-!!! info "Same physics, different samples"
-
-    Single-cell transcriptomics is not JPEG classification, but the object-storage physics is the same: TTFB, sequential versus random, shard sizing, worker counts, and whether repeated epochs re-hit the network. SLAF’s twist is semantic: a **cell** is not one file. It is **many sparse `(cell, gene, value)` rows** in Lance, and those rows can **span fragment boundaries**. Distributed producers therefore need a coordination story: otherwise two honest workers each hold half a cell and neither can ship a training example.
-
-> 💡 **Figure (placeholder).** Side-by-side: “many tiny objects + random GETs” versus “larger shards + sequential scan + optional local cache.” Label latency-bound versus bandwidth-bound regions conceptually.
-
----
-
-## Queues, pub/sub, and splitting CPU from GPU
-
-So why not just turn `num_workers` to eleven and buy a bigger NIC?
-
-Because the **outer loop** (read, rank genes, tokenize, shuffle) and the **inner loop** (forward, backward, optimizer) are not the same job. The outer loop is **CPU-, bandwidth-, and network-bound**; it likes **cheap horizontal scale** and does not need a GPU. The inner loop is **GPU-bound**; it likes **quiet CPUs**, steady batches, and minimal stalls. When both run on one host, they **steal** from each other in ways that profiling summaries understate: you pay context switches, cache pollution, and the opportunity cost of cores that could either prefetch or drive CUDA host-side work.
-
-The standard distributed-systems move is a **queue** as the narrow waist—pub/sub intuition without requiring you to name a particular broker. **Producers** push prepared samples; **consumers** pop and train. Decoupling **throughput** from **latency**: if the network hiccups, depth in the queue buys time; if the GPU experiment steps up batch size, you drain faster without rewriting preprocessing code for efficiency.
-
-Two papers anchor that story.
-
-**GoldMiner** (Alibaba and collaborators, **SIGMOD 2023**) attacks the moment when **faster GPUs make CPU preprocessing the bottleneck**. Training is inherently multi-stage: features are transformed, embeddings are gathered, bytes are decoded—**before** the kernel launch you care about. GoldMiner **splits** the preprocessing graph from GPU training and **elastically scales** the preprocessing side (including automatic identification of stateless operators and scheduler-aware scaling). The useful mental model for us: **the long pole is not always `loss.backward()`**; sometimes it is everything that has to happen **before** the tensor hits the device—and that stage deserves its **own** fleet.
-
-**TensorSocket** ([arXiv:2409.18749](https://arxiv.org/abs/2409.18749), _TensorSocket: Shared Data Loading for Deep Learning Training_) is a complementary snapshot. A **TensorProducer** wraps a dataloader and serves batches over **ZeroMQ** to multiple **TensorConsumers**. Collocated experiments such as hyperparameter search, architecture search, and anything that launches **many** training processes against the **same** dataset stop **replaying** identical I/O and CPU transforms in every process. It is a concrete example of the pattern we care about: **socket-mediated handoff**, explicit producer/consumer roles, and **amortized** data work across consumers.
-
-Both papers are about **separating concerns** so you can scale the side that hurts.
-
-### Who waits? Three regimes
-
-The queue helps in every regime, but the **knob you turn** changes:
-
-| Regime | Examples | Who waits? | What the queue buys |
-| ------ | ---------- | ---------- | ------------------- |
-| **Long GPU step, short data step** | Large transformer at modest batch with heavy matmuls; optimized attention; simple decode | GPU rarely starves; pipeline has **slack** | Hides **jitter** from remote storage; safe to run **fewer** CPU workers per GPU; matches the “entitlement” headroom AWS and Tigris measure |
-| **Short GPU step, long data step** | Tiny models, large microbatches of cheap ops, or **expensive** per-sample CPU (video, audio, multimodal fusion); **single-cell** with ranking + tokenization + sparse assembly from S3 | GPU **starves** without help | Scale **producers** (more CPU nodes, optional local cache) until the queue stays ahead; GoldMiner’s outer-loop story |
-| **Both long** | Huge model **and** brutal preprocessing | Everything hurts | Still worth splitting: **independent failure domains**, no GIL/NUMA fights on the GPU box, elastic CPU pool |
-
-In [post 1](https://slaf-project.github.io/slaf/blog/blazing-fast-dataloaders/) and [post 2](https://slaf-project.github.io/slaf/blog/blazing-fast-dataloaders-2/), I talked through the optimization of the **outer loop** for our domain. Mixture of Scanners (MoS) for shuffle quality at scan speed, vectorized tokenization for per-cell cost. **Cloud** pushes that optimized outer loop into a **network ceiling** on one machine. The fix we ship is to **replicate** the outer loop: **stateless CPU workers** running the same MoS pipeline against S3-backed Lance tables, a **shared queue** in front of training, and a **thin GPU consumer** that only knows how to batch and `to(device)`.
-
-> 💡 **Figure (placeholder).** CPU fleet → queue (+ dict) → GPUs. Label independent scaling knobs; annotate producer-bound versus consumer-bound with arrows.
+**Distributing ingestion independently of training.** With the first three
+patterns in place, SLAF's dataloader reaches 28,000 cells/sec from local disk.
+What happens when the data lives in object storage? How do we build an ingestion
+architecture that scales horizontally without changing the training code? That is
+the subject of this post.
 
 ---
 
-## SLAF’s shape of the problem: `DistributedSLAFDataLoader`
+## The case for object-storage-native training
 
-**`DistributedSLAFDataLoader`** ([`slaf/ml/distributed.py`](https://github.com/slaf-project/slaf/blob/main/slaf/ml/distributed.py)) is that idea with SLAF-specific bones:
+Keeping training data in object storage and streaming it to ephemeral compute is
+becoming the default for serious ML infrastructure, not a workaround. Two recent
+benchmarks make the argument concretely.
 
-1. **CPU worker fleet** — Modal containers, each stateless, each running the **full** MoS pipeline: contiguous Lance reads from object storage, Polars windowing, block shuffle, vectorized tokenization.
-2. **`modal.Queue` + `modal.Dict`** — the narrow waist. The queue is a distributed FIFO of **ready samples**. The dict exists for a genomics-specific reason: **cells that straddle Lance fragments** need cross-worker assembly (next section).
-3. **GPU consumer** — a small PyTorch-facing iterator: pull `batch_size` samples, stack, move to device. **No** Lance, **no** Polars, **no** SQL in the training image.
+[In December 2025](https://aws.amazon.com/blogs/machine-learning/applying-data-loading-best-practices-for-ml-training-with-amazon-s3-clients/),
+AWS published results from benchmarking ML training throughput directly from S3
+using the S3 Connector for PyTorch and Mountpoint for S3. Their core finding:
+the bottleneck in object storage workloads is per-request latency,
+not bandwidth. Each S3 GET request incurs a time-to-first-byte overhead that is
+largely independent of object size — connection setup, round trips, and
+service-side processing all accumulate before any bytes transfer. Datasets stored
+as many small objects (one file per sample) are latency-bound: workers spend most
+of their time blocked on that overhead rather than transferring data. Their
+practical recommendation is to consolidate data into larger shards in the 100 MB
+to 1 GB range, read them sequentially, and use high-performance clients built on
+the AWS CRT. With that stack, a single GPU can be kept fully saturated from S3.
 
-The **object storage** discussion above explains **why** sequential, well-sharded reads matter; **queue decoupling** here explains **why** the GPU container stays dumb; the implementation details below explain **how** we survive sparse COO reality on a distributed fleet.
+Tigris extended the same benchmark against S3-compatible storage
+[in March 2026](https://www.tigrisdata.com/blog/training-object-storage/),
+with one addition: the Tigris Acceleration Gateway (TAG), a local NVMe-backed
+caching layer running on the training instance. Their entitlement measurement —
+throughput with the GPU replaced by a no-op to measure the raw pipeline ceiling —
+showed the data pipeline capable of delivering samples at 46x the rate a GPU can
+consume them when correctly configured, rising to ~200x with TAG's warm cache.
+Their multi-epoch results showed warm-cache epochs completing 5.7x faster,
+cutting the number of dataloader workers needed to saturate a GPU from 16 to 4.
 
----
-
-## Implementation: `modal.Queue`, `modal.Dict`, and the boundary problem
-
-### One compressed sample per queue item
-
-Modal queues cap individual items at **1 MiB**. A tokenized cell (`max_genes=2048`, gene ids + values + mask at int64 widths) is on the order of **tens to low hundreds of KB** uncompressed—fine, but not spacious. We **compress** each sample before `put` and **decompress** on the consumer.
-
-**How this differs from a typical PyTorch `DataLoader`:** In the common pattern, **worker processes** pull **raw** examples (or indices), apply `collate_fn`, and hand the training loop **one batch tensor dict per step**—the batch is the natural unit between workers and the main process. Here, **remote CPU workers** finish the **full** SLAF path (read, rank, tokenize, shuffle participation) and enqueue **one fully processed sample per queue item**. The process on the GPU host **collects `batch_size` queue entries** and stacks them into a batch itself. So the handoff granularity is **sample-at-a-time on the queue**, not **batch-at-a-time from a worker**. That costs a bit more **host-side assembly** work per step, but buys **finer queue depth control**, clearer **backpressure** (you reason about how many cells are buffered, not how many batches), and **per-sample** fault isolation—a single bad cell does not force you to discard an entire prefetched batch.
-
-### `modal.Dict` for cross-partition boundary cells
-
-SLAF stores expression as **COO** triples: `(cell_integer_id, gene_integer_id, value)`. Lance stores them in **fragments**—contiguous row runs on disk. A **single cell** can spill across **two fragments**: some of its nonzero rows land at the tail of fragment *K*, the rest at the head of fragment *K + 1*.
-
-On one node, the prefetcher simply reads across the seam. With **distributed** workers, fragment *K* and fragment *K + 1* might be read by **different** containers. Neither container alone sees a complete cell.
-
-We use **`modal.Dict`** as a small, explicit coordination store. When a worker finishes a fragment but a cell’s records **continue** in the next fragment, it stores the **partial cell** keyed by `cell_integer_id`. When the worker that owns the next fragment starts, it **looks up** partials, completes them, enqueues finished samples, and **deletes** the dict entry.
-
-This problem barely exists in “one file = one image” CV pipelines, or indeed other datasets where one record = one training sample. It is **intrinsic** to sparse single-cell layouts if you want contiguous columnar scans without materializing per-cell files.
-
-### Fault tolerance via Modal
-
-CPU workers crash. Networks flap. We deliberately **delegate** worker restarts and retries to Modal’s container model. The **queue** and **dict** are platform-managed; they survive individual container failures within a run, betting that **operational** fault tolerance belongs in the orchestrator, not in bespoke dataloader recovery code inside every training script.
-
-> 💡 **Figure (placeholder).** Sequence diagram: read fragment → dict check / merge partial cell → compress → `Queue.put` → consumer `get` × batch_size → decompress → batch → `to(device)` → step.
-
----
-
-## Deploying on Modal
-
-The whole apparatus is **three Modal concepts** in one app—no separate Redis cluster, no hand-rolled broker.
-
-**CPU workers** are `@modal.function(cpu=N)` with tunable concurrency. Stateless workers mean **any** rank can be fed by **any** container; scaling from a handful to **dozens** of workers is mostly a parameter change.
-
-**`modal.Queue` and `modal.Dict`** are named app objects visible to both CPU and GPU functions. Same credentials, same region, no connection string sprawl.
-
-**GPU workers** are `@modal.function(gpu="H100")` (or whatever you choose) running ordinary PyTorch **DDP**. The training code sees an iterator; it does not import SLAF’s dataframe stack.
-
-Economically, this is the shape you want: **CPU hours are cheap relative to H100 hours**. If prefetch ever threatens to starve the GPU, you add CPU containers until the queue depth stabilizes—**long before** you consider paying for idle silicon.
-
-> 💡 **Figure (placeholder).** Modal diagram: CPU pool ($/hr) → queue + dict → H100 container ($/hr). Show two independent scaling sliders.
+SLAF's data loader is different from loading JPEG images in one important way:
+a single cell is not a single record-linked file. It is many sparse `(cell_id, gene_id, value)`
+triples stored as consecutive rows in a Lance table. Those rows can straddle
+fragment boundaries. Distributed ingestion requires handling that case explicitly.
+The access pattern principles, though — sequential reads inside shards, enough
+read parallelism, amortized per-request overhead — apply directly.
 
 ---
 
-## `fast-scgpt`: the proof (infrastructure only)
+## From object storage to GPUs via horizontally scaled dataloaders
 
-[`fast-scgpt`](https://github.com/slaf-project/fast-scgpt) is a reference harness that wires **all four** dataloader layers together: thread prefetch, vectorized transforms, Mixture of Scanners, and **distributed** Modal ingestion. It trains a **scGPT-style** single-cell transformer on **Tahoe-100M** streamed from cloud storage, in three layouts:
+Running the Mixture of Scanners pipeline on Tahoe-100M (train split, raw mode,
+batch size 64) stored in a Tigris bucket on a single Modal node shows a familiar pattern.
 
-- **Single GPU** — sanity-check that the dataloader is not the bottleneck at small scale.
-- **Multi-GPU DDP** — eight H100s on one node; the classical sampler gives way to a **queue consumer**.
-- **Multi-node DDP** — Modal clustered runs (e.g. 16× GPU across two nodes); every rank drains the **same** logical queue while CPU workers scale **orthogonally** (see repo for `--multinode`; treat as beta per Modal).
+```
+Throughput (cells/sec), single Modal node
+─────────────────────────────────────────────────────────────────
+4 vCPUs                  ████████████████████ 2,169
+8 vCPUs                  ██████████████████████████████████ 3,572
+16 vCPUs                 ██████████████████████████████ 3,126
+32 vCPUs                 █████████████████████████████████ 3,459
+─────────────────────────────────────────────────────────────────
+                         0      900   1,800  2,700  3,600
+```
 
-The repo’s **Benchmarks** section reports end-to-end Modal runs; the rows below are copied from that README for the **`scgpt`** preset (**~51.1M trainable parameters**), **Tahoe-100M**, **`max_genes=512`**, **128 cells per GPU per step** (effective global batch **1024** on 8 GPUs), **`--data-source s3`**, **Flash Attention 4**, **`--sparse-gene-head`**, **`--no-use-compile`**, and **two CPU prefetch workers** on the distributed run. Step time on 8 GPUs is the **median** of per-step **max over ranks** (slowest rank sets the barrier); global **cells/s** is **global batch ÷ that step time**.
+Throughput roughly doubles from 4 to 8 vCPUs and then levels off near 3,500
+cells/sec. 16 and 32 vCPUs perform no better than 8. This is not a compute
+ceiling: 32 vCPUs have plenty of capacity to run the Polars windowing and
+tokenization pipeline faster. The constraint is the network path from the node
+to the bucket: one machine, one connection pool, one point through which all
+S3 reads flow regardless of how many threads are issuing them.
 
-| Config | Median step latency (ms) | Global cells/sec | Dataloader wait (ms) | Training efficiency |
-| ------ | ----------------- | ---------------- | -------------------- | ------------------- |
-| Single GPU (1× **H200**, `modal_train.py`) | **323** | **~396** | **~0** (`train_step` **`dl`** chunk in README profile) | MFU **~23.7%**; peak VRAM **~68 GB** |
-| Multi-GPU (8× **H100**, `modal_train_distributed.py`) | **56** | **~18.3k** | not split out on this run† | MFU **~17.3%**; peak VRAM **~71.7 GB / GPU** |
+This is where the traditional GPU training cluster model creates an awkward
+constraint. Training hardware is sold as bundled nodes: a certain number of GPUs
+paired with a fixed allocation of CPUs, RAM, and network capacity. That bundle
+was sized for local-storage training, where the CPU had to keep pace with fast
+NVMe. In cloud-native training from object storage, the CPU ceiling that actually
+matters is the aggregate read parallelism across the network to the bucket — and
+that has nothing to do with how many vCPUs a GPU node happens to include.
 
-†On the single-GPU trace, time blocked on `next(batch)` is reported as **~0 ms** once warm. The 8-GPU README table does not break out the same **`dl`** field; steady-state **56 ms** steps are the joint result of compute, collectives, and feeding the global batch.
+Horizontal scaling addresses this differently. Each additional worker is its own
+client issuing its own S3 requests from its own container. Adding workers doesn't
+add more threads to the same network path; it adds independent paths. The
+aggregate throughput ceiling is set by what the object store can serve, which is
+far higher than any single node can generate.
 
-**Multi-node:** the README documents the `modal run … --multinode` command line but does not publish a second throughput table yet—when it does, this post can add a third row.
+```
+Aggregate throughput (cells/sec), producer fleet
+─────────────────────────────────────────────────────────────────
+1 producer node          █ 1,012
+4 producer nodes         █████████ 8,575
+16 producer nodes        ███████████████████████████████ 29,526
+32 producer nodes        ████████████████████████████████ 30,581
+─────────────────────────────────────────────────────────────────
+                         0     8k    16k    24k    32k
+```
 
-At multi-node scale, variance across CPU workers should disappear into **queue depth** instead of showing up as idle GPU time.
+At 16 horizontally scaled workers, aggregate throughput reaches roughly 8x what a single optimized
+node delivers from cloud storage.
 
-Beyond dataloading, `fast-scgpt` defaults to **Flash Attention 4** in the documented benchmarks (FA3 and compile toggles exist in the scripts). Other choices differ from published scGPT—treat them as **starting points**, not as peer-reviewed improvements to the architecture.
-
-> 💡 **Figure (placeholder).** Profiler strip for multi-node: dataloader wait hugging zero.
+Horizontal scaling for data loading is not without precedent. Alibaba's
+[GoldMiner, SIGMOD 2023](https://dl.acm.org/doi/10.1145/3589773)
+identifies the point at which faster GPUs push preprocessing into
+the critical path, and demonstrates that elastically scaling the preprocessing
+fleet independently of the training fleet is the correct structural response.
+[TensorSocket, ArXiv 2025](https://arxiv.org/abs/2409.18749) makes a related
+point for multi-experiment workloads: a single producer serving batches over a socket
+to multiple consumers eliminates the redundant reads that would otherwise occur
+when each training process replays the same I/O independently. Ray Data's
+[Streaming Batch Model, ArXiv 2025](https://arxiv.org/abs/2501.12407) arrives at
+the same CPU/GPU decoupling from the angle of heterogeneous cluster scheduling.
+Each of these systems arrives at the same structural conclusion: the preprocessing
+fleet and the training fleet should scale on separate axes, coordinated by a queue.
 
 ---
 
-## What this unlocks: economics of scale
+## Architecture: `DistributedSLAFDataLoader`
 
-**Apples to apples:** in [this reply on scGPT pretraining cost](https://github.com/bowang-lab/scGPT/issues/5#issuecomment-1551327337), the authors describe a reference setup on the order of **10.3 M cells × six epochs**—about **62 M cell presentations** through the training loop (same cell revisited across epochs, but **62 M optimizer steps worth of “a batch was just drawn from the atlas”** at that scale). That is the regime people meant when they asked how long pretraining takes.
+`DistributedSLAFDataLoader` is the realization of these ideas in SLAF.
+The key design insight is that the outer loop and the inner loop have entirely
+different resource profiles, and forcing them onto the same machine makes both
+worse.
 
-They also point to **roughly three to four days on four A100s** for that job—a wall-clock world that assumes **staged data**, **cluster babysitting**, and **multi-day** GPU reservations.
+The outer loop — reading from object storage, ranking genes, tokenizing,
+shuffling — is CPU-bound, memory-bandwidth-bound, and network I/O-bound. It
+benefits from cheap horizontal scale and has no use for a GPU.
 
-**Same cell budget, 2026 stack:** the [`fast-scgpt` README](https://github.com/slaf-project/fast-scgpt) benchmark on **8× H100** reports **~18.3k cells/s** **global** training throughput in steady state (forward + backward + optimizer + NCCL—not dataloader-only). If you push **62 million** such presentations through at that rate, **62 × 10⁶ / 18 300 ≈ 3 390 s**—about **56 minutes** of **GPU-wall** time in the idealized steady state (Modal startup, queue ramp, compile warmup, checkpointing, and eval still add real minutes).
+The inner loop — forward pass, backward pass, optimizer step, gradient
+communication — is GPU-bound. It benefits from a steady supply of ready batches
+and should spend as little time as possible waiting.
 
-**Sticker math:** **8 GPUs** × (**~3 390 s** / **3 600 s/h**) ≈ **7.5** billed GPU-hours if every device is busy for that wall. At **\$2.50 / H100 / hour**, that is **~\$19** in GPU line items—**under twenty bucks**, with **CPU prefetch workers and egress** still rounding noise next to eight H100s. And you never **mirrored the whole atlas onto cluster storage**: Tahoe-100M stays in **object storage**; the dataloader meets you there.
+Separating them behind a queue allows each to scale independently. CPU workers
+produce tokenized samples into a distributed FIFO; GPU workers consume and train.
+Adding CPU workers doesn't touch the training code. Changing batch size doesn't
+touch the ingestion workers. The two fleets evolve independently.
 
-So the headline is not “cheaper than one burrito” at this exact cell count—it is **under an hour and under twenty dollars on paper** for the **same order of magnitude of training traffic** the original issue discussed, versus **half a week on four A100s** in 2023. Different silicon, different stack, different dollars-per-hour—but the **magnitude** of the lifestyle change is the point.
+`DistributedSLAFDataLoader` implements this with three components.
 
-### What becomes possible
+### CPU worker fleet
 
-The shift is **access**: a lean team can iterate on **pretraining-scale** runs without a data platform org, without **cloning the atlas to every cluster’s local filesystem**, and without the **multi-day** turnaround that made “try six epochs on 10 M cells” a calendar event. When the next hundred-million-cell drop lands, you dial **CPU producers** and **GPU trainers** independently; SLAF stays **authoritative in object storage**; the training fleet stays **ephemeral**.
+Each worker is a stateless function running the complete Mixture of Scanners
+pipeline against object storage: select a random Lance fragment, read a
+contiguous block, apply Polars window functions for gene ranking, block-shuffle
+within the prefetch batch, and tokenize. Workers have no shared state and no
+awareness of each other. Any worker can contribute samples to any GPU rank.
+Scaling the fleet means spawning more of the same function; the coordination
+logic doesn't change.
 
-> 💡 **Figure (placeholder).** Side-by-side: 2023 timeline (4× A100, **~3–4 days**, [per comment](https://github.com/bowang-lab/scGPT/issues/5#issuecomment-1551327337)) vs. **8× H100** stack (**~1 h** wall, **~\$19** GPU at \$2.50/h in the napkin above, stream from bucket).
+### `modal.Queue` and `modal.Dict`
+
+A named distributed FIFO queue sits between producers and consumers. Each queue
+item is one fully processed, compressed sample. The GPU consumer reads
+`batch_size` items per step and assembles the batch locally.
+
+Compression is necessary: a tokenized cell at `max_genes=2048` occupies tens to
+low hundreds of kilobytes uncompressed, and the queue caps individual items at
+1 MiB. Compressing before enqueue and decompressing after keeps items well within
+that limit.
+
+A shared dictionary handles a problem that arises specifically from SLAF's
+columnar layout. A single cell spans many rows — its expression values are stored
+as `(cell_id, gene_id, value)` triples across consecutive Lance records. Those
+records can straddle fragment boundaries, meaning two different workers may each
+hold part of the same cell. Neither can produce a complete training sample alone.
+
+When a worker finishes reading a fragment and finds an incomplete cell at the
+boundary, it writes the partial record to the dictionary keyed by cell ID. The
+next worker, reading the adjacent fragment, checks for pending partials,
+completes the cell, and enqueues it. The dictionary entry is deleted. Every cell
+is enqueued exactly once. This coordination problem is invisible in pipelines
+where one file equals one sample, but it's structural in sparse columnar formats
+where a sample spans many rows.
+
+The queue and dictionary together solve the two hard problems of distributed
+ingestion for SLAF data: transport and boundary assembly.
+
+### GPU consumer
+
+The training process sees a thin iterator: pull `batch_size` items from the
+queue, decompress, stack, move to device. The training container has no
+dependency on Lance, Polars, or SLAF's dataframe stack. It knows how to pop
+items from a queue.
 
 ---
 
-## Appendix: why not Ray Data?
+## Deployment
 
-Ray Data is a serious system; its [streaming batch paper (arXiv:2501.12407)](https://arxiv.org/abs/2501.12407) is a good read if you want another angle on **heterogeneous** CPU/GPU pipelines. We evaluated it carefully. Three **specific** mismatches pushed us toward a custom path:
+The full pipeline runs as a single Modal app.
 
-### 1. Training-time shuffle is local, not global
+CPU workers are `@modal.function(cpu=N)` with configurable concurrency. Because
+they're stateless, scaling from a few workers to dozens is a parameter change.
+Modal handles container restarts and retries, so worker-level fault tolerance is
+delegated to the orchestrator rather than implemented inside the dataloader code.
 
-For streaming training, the practical knob is often `local_shuffle_buffer_size`—a **bounded** window shuffle. Ray’s own docs are clear that this is **not** a global shuffle. MoS delivers **88–90%** of theoretical maximum entropy on our distance tests at **97%** of sequential throughput; achieving that requires **sub-file** control MoS relies on that we did not find exposed through `read_lance()` in Ray Data.
+The queue and dictionary are named app objects visible to every function in the
+app — same credentials, same region. They're scoped to the run and cleaned up
+when it completes.
 
-### 2. No fine-grained partition control for MoS
+GPU training workers are `@modal.function(gpu="H100")` running standard PyTorch
+DDP. They contain training code only.
 
-Ray Data’s Lance integration schedules partition ranges centrally. MoS needs to say: “scanner *i* starts at row **1,247,822** and reads **819,200** contiguous rows **this** iteration.” Without that API, you get file-level randomness (fast, low entropy) or a full `random_shuffle` (high entropy, heavy materialization, poor pipelining).
-
-### 3. The cross-partition boundary problem
-
-Ray Data does not give a first-class primitive for **logical records split across physical fragments**. SLAF’s COO layout needs **stateful** coordination between workers—exactly the niche `modal.Dict` fills. Alternatives imply **pre-localizing** cells to fragments (violating store-once, query-in-place) or **custom actors** bolted beside Ray Data.
+The cost structure follows from the separation. CPU workers run on commodity
+compute at a fraction of H100 rates. H100 time is spent on training steps, not
+on data movement. If the queue depth runs low, you add CPU workers. If you need
+more gradient throughput, you add GPU workers. Each fleet has its own cost
+knob.
 
 ---
 
-The distributed stack lives in [`slaf/ml/distributed.py`](https://github.com/slaf-project/slaf/blob/main/slaf/ml/distributed.py) (Modal app + `DistributedSLAFDataLoader`) and the framework-agnostic pieces under [`slaf/distributed/`](https://github.com/slaf-project/slaf/tree/main/slaf/distributed). The runnable harness is [`fast-scgpt`](https://github.com/slaf-project/fast-scgpt).
+## Results: `fast-scgpt` on Tahoe-100M
+
+[`fast-scgpt`](https://github.com/slaf-project/fast-scgpt) is a reference
+implementation in Modal and trains a scGPT-style transformer on Tahoe-100M,
+streamed from object storage or [Hugging Face](https://huggingface.co/datasets/slaf-project/Tahoe-100M).
+Model weights and downstream evaluation are not part of this release, stay tuned.
+
+| Config | Median step latency | Global cells/sec | Dataloader wait | MFU |
+|---|---|---|---|---|
+| 1x H200 (`modal_train.py`) | 323 ms | ~396 | ~0 ms | ~23.7% |
+| 8x H100 DDP (`modal_train_distributed.py`) | 56 ms | ~18,300 | ~0 ms | ~17.3% |
+
+In single-GPU setting, we use `SLAFDataLoader`.
+Both data loading and training share the same node. Median step latency is 323 ms, and time
+blocked on `next(batch)` is approximately 0 ms once the pipeline is warm. The
+dataloader has been removed from the critical path even when CPU and GPU share
+the same node. That's a consequence of posts 1 and 2: thread-based prefetch with
+vectorized outer loop tokenization and Mixture of Scanners keeps the queue full
+faster than the GPU can drain it.
+
+The 8x H100 result, based on `SLAFDistributedDataLoader` tells a different story.
+Median step latency drops to 56 ms per GPU (worst case across 8 GPUs per step)
+with no change to training code!
+
+The more important difference between these two configurations is what the CPU
+is doing during the training step. On the single H200, the CPU is running the
+full SLAF ingestion pipeline on the same host as the GPU, so **CPU cores, host
+DRAM bandwidth, and the PCIe link to the device** are shared between
+preprocessing and staging batches for the accelerator. On the 8x H100
+configuration, each GPU container's CPU has one job: pop items from the queue, decompress
+and call `.to(device)`. The ingestion work happens entirely on the CPU worker
+fleet, on separate machines. That single-responsibility separation is why the
+per-GPU step latency is lower and it's the concrete payoff of the architectural decoupling.
+
+At a global batch size of 1,024 cells (128 cells x 8 GPUs) and 56 ms per step,
+*training* throughput, not just dataloading throughput is
+roughly 18,300 cells/sec including forward pass, backward pass, optimizer step,
+and **NCCL gradient synchronization** (in standard DDP this is mostly an
+**all-reduce** of gradients across ranks).
+
+---
+
+## The economics: pretraining for under $20
+
+To put these numbers in context, consider the reference point from the original
+scGPT pretraining discussion. In a [2023 GitHub thread](https://github.com/bowang-lab/scGPT/issues/5)
+on pretraining cost, the authors described training on roughly 10.3M cells across six epochs — about 62M
+cell presentations through the training loop — taking approximately three to four
+days on four A100s, with data staged to cluster-attached storage.
+
+Running 62M cell presentations through the 8x H100 configuration at 18,300
+cells/sec:
+
+62,000,000 / 18,300 ≈ 3,390 seconds — about 56 minutes of GPU wall time in
+steady state.
+
+Billed GPU time: 8 GPUs × (3,390s / 3,600 s/hr) ≈ 7.5 GPU-hours. At $2.50 per
+H100 per hour, that's roughly **$19 in GPU line items**. CPU prefetch workers
+round to noise next to eight H100s. Separately, the object store bill for
+repeated streaming matters: [Tigris does not charge egress](https://www.tigrisdata.com/pricing)
+(data transfer out is free on Standard and several other tiers at time of writing),
+so iterative training and many short experiments do not accumulate a large
+egress line item next to GPU time the way they often do on hyperscaler object
+storage.
+
+The comparison isn't exact — different silicon, different year, different
+dollars-per-GPU-hour. The A100s that took four days in 2023 are not H100s in
+2026. But the order-of-magnitude
+shift in both wall-clock time and cost is real, and it comes from three sources:
+better hardware, a storage format that's streamable from object store,
+and a dataloader that doesn't make the hardware wait.
+
+Of the three, the hardware contribution is well-understood. The dataloader
+contribution is less appreciated. An H100 sitting idle at 0% GPU utilization
+while waiting for the next batch costs exactly the same per hour as one running
+at 100% GPU utilization. The goal of everything in this series has been to make the latter
+the steady state.
+
+What changes when a training run costs $19 instead of several thousand: teams
+can treat pretraining as iterative rather than monolithic. The question of
+whether six epochs generalizes better than three becomes an afternoon experiment.
+Fine-tuning feels like working with scikit-learn in a notebook.
+A new architecture variant doesn't require committing to a multi-day cluster
+reservation. When a new atlas drop arrives, the data source pointer changes;
+nothing is staged or copied. The Atlas stays in object storage; the ingestion
+fleet meets it there.
+
+---
+
+## Getting started
+
+The full training harness is [`fast-scgpt`](https://github.com/slaf-project/fast-scgpt).
+Point it at the Tahoe-100M SLAF dataset on HuggingFace via `hf://datasets/slaf-project/Tahoe-100M`
+and it streams directly without staging.
+
+The queue abstraction separating producers from consumers is not specific to
+single-cell data. The same pattern — stateless CPU workers, a managed queue,
+a thin GPU consumer — applies to any training workload where the outer loop
+can be made stateless and the inner loop doesn't need to know where its batches
+came from.
+
+---
+
+## Appendix: Why not build on Ray Data?
+
+*For readers who want to understand the specific evaluation.*
+
+Ray Data is a well-engineered system backed by solid research in its streaming
+batch paper (arXiv 2501.12407). Three specific mismatches led us toward a custom
+solution.
+
+**Training-time shuffle is local, not global.** The practical option in Ray Data
+during streaming training is `local_shuffle_buffer_size` — a bounded window
+shuffle that operates without network transfer. Ray's own documentation is clear
+that this is not a global shuffle. The Mixture of Scanners achieves 88–90% of
+theoretical maximum entropy at streaming speed, without materializing the dataset.
+Reproducing that required sub-fragment control over read assignment that
+`read_lance()` doesn't expose.
+
+**No fine-grained partition control.** Mixture of Scanners requires each scanner
+to start at a randomly selected row offset within a Lance fragment and read a
+contiguous block from there. Ray Data's scheduler manages partition assignment
+centrally for load balancing; it doesn't provide an API for directing specific
+scanners to specific byte ranges within a file.
+
+**No first-class solution for cross-partition records.** SLAF's COO layout means
+a single cell can straddle two fragments. Ray Data's partition model treats
+partitions as independent units; assembling records split across partition
+boundaries requires custom actor logic alongside the Ray Data pipeline. The
+`modal.Dict`-based scratchpad handles this in roughly ten lines and cleans up
+after itself.
+
+Ray Data is solving a harder and more general problem — arbitrary heterogeneous
+pipelines across arbitrary cluster topologies. The tradeoffs that make it
+general are the precise places where SLAF's layout required something more
+specific.
