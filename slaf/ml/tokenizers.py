@@ -6,6 +6,7 @@ import numpy as np
 import torch
 
 from slaf.core.slaf import SLAFArray
+from slaf.ml.aggregators import GeneformerWindow, ScGPTWindow, Window
 
 TORCH_AVAILABLE = True
 try:
@@ -18,7 +19,7 @@ class TokenizerType(str, Enum):
     """Tokenizer types"""
 
     GENEFORMER = "geneformer"
-    SCPGPT = "scgpt"
+    SCGPT = "scgpt"
 
 
 class SLAFTokenizer(ABC):
@@ -63,6 +64,8 @@ class SLAFTokenizer(ABC):
         """
         self.slaf_array = slaf_array
         self.vocab_size = vocab_size
+
+        self.window = self.create_window()
 
         # Build vocabulary and special tokens
         self._build_gene_vocabulary()
@@ -224,6 +227,17 @@ class SLAFTokenizer(ABC):
             # Fallback for testing - direct mapping with offset
             return gene_ids_array + 4  # Simple offset like original test
 
+    @property
+    @abstractmethod
+    def max_genes(self) -> int:
+        """Max genes (context length) to use for constructing cell sentence."""
+
+    @abstractmethod
+    def create_window(self) -> Window:
+        """
+        Create a window function based on the tokenizer type.
+        """
+
     def get_vocab_info(self) -> dict[str, Any]:
         """
         Get vocabulary information for debugging and analysis.
@@ -249,9 +263,14 @@ class SLAFTokenizer(ABC):
         self,
         gene_sequences: list[list[int] | list[tuple[int, float]]],
         expr_sequences: list[list[float]] | None = None,
-        max_genes: int = 0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        pass
+        """
+        Tokenize gene expression sequences into model-ready tensors.
+
+        This method converts gene and expression sequences into tokenized tensors
+        suitable for machine learning models. It supports both GeneFormer and scGPT
+        tokenization strategies with optimized vectorized operations.
+        """
 
     @abstractmethod
     def decode_tokens(self, tokens: list[int]) -> dict[str, Any]:
@@ -346,11 +365,18 @@ class ScGPTTokenizer(SLAFTokenizer):
         self.n_expression_bins = n_expression_bins
         super().__init__(slaf_array=slaf_array, vocab_size=vocab_size)
 
+    @property
+    def max_genes(self) -> int:
+        """Max genes (context length) to use for constructing cell sentence."""
+        return 1024
+
+    def create_window(self) -> Window:
+        return ScGPTWindow()
+
     def tokenize(
         self,
         gene_sequences: list[list[int] | list[tuple[int, float]]],
         expr_sequences: list[list[float]] | None = None,
-        max_genes: int = 1024,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Tokenize gene expression sequences into model-ready tensors.
@@ -362,7 +388,6 @@ class ScGPTTokenizer(SLAFTokenizer):
         Args:
             gene_sequences: List of gene ID sequences for each cell
             expr_sequences: List of expression value sequences for each cell (required for scGPT)
-            max_genes: Maximum number of genes per cell (defaults based on tokenizer type)
 
         Returns:
             tuple: (input_ids, attention_mask) tensors
@@ -384,7 +409,7 @@ class ScGPTTokenizer(SLAFTokenizer):
             raise ValueError("Gene sequences cannot be empty")
 
         # For scGPT: CLS + (gene,expr)*n + SEP = 2*n + 2
-        max_sequence_length = 2 * max_genes + 2  # Total sequence length
+        max_sequence_length = 2 * self.max_genes + 2  # Total sequence length
 
         # For scGPT, gene_sequences now contains struct pairs [(gene, expr), ...]
         # so we don't need separate expr_sequences validation
@@ -614,11 +639,18 @@ class GeneformerTokenizer(SLAFTokenizer):
         Vocabulary size: 50000
     """
 
+    @property
+    def max_genes(self) -> int:
+        """Max genes (context length) to use for constructing cell sentence."""
+        return 2048
+
+    def create_window(self) -> Window:
+        return GeneformerWindow()
+
     def tokenize(
         self,
         gene_sequences: list[list[int] | list[tuple[int, float]]],
         expr_sequences: list[list[float]] | None = None,
-        max_genes: int = 2048,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         pass
         """
@@ -631,7 +663,6 @@ class GeneformerTokenizer(SLAFTokenizer):
         Args:
             gene_sequences: List of gene ID sequences for each cell
             expr_sequences: List of expression value sequences for each cell (required for scGPT)
-            max_genes: Maximum number of genes per cell (defaults based on tokenizer type)
 
         Returns:
             tuple: (input_ids, attention_mask) tensors
@@ -652,7 +683,7 @@ class GeneformerTokenizer(SLAFTokenizer):
             raise ValueError("Gene sequences cannot be empty")
 
         # Always define max_sequence_length based on tokenizer type
-        max_sequence_length = max_genes  # For Geneformer, same as max_genes
+        max_sequence_length = self.max_genes  # For Geneformer, same as max_genes
 
         batch_size = len(gene_sequences)
 
@@ -688,10 +719,10 @@ class GeneformerTokenizer(SLAFTokenizer):
                 )  # type: ignore[assignment]
 
             # Pad/truncate to max_genes
-            tokens = tokens[:max_genes]  # type: ignore[assignment]
-            if len(tokens) < max_genes:
+            tokens = tokens[: self.max_genes]  # type: ignore[assignment]
+            if len(tokens) < self.max_genes:
                 padding = np.full(
-                    max_genes - len(tokens),
+                    self.max_genes - len(tokens),
                     self.special_tokens["PAD"],
                     dtype=np.int64,
                 )

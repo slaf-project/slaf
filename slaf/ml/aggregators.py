@@ -6,17 +6,9 @@ Each window function defines how to apply Polars window operations to raw COO da
 """
 
 from abc import ABC, abstractmethod
-from enum import Enum
-from typing import Any, Literal
+from typing import Any
 
 import polars as pl
-
-
-class WindowType(str, Enum):
-    """Window function types"""
-
-    SCPGPT = "scgpt"
-    GENEFORMER = "geneformer"
 
 
 class Window(ABC):
@@ -260,31 +252,3 @@ class SimpleWindow(Window):
         )
 
         return grouped
-
-
-# Factory function for creating window functions
-def create_window(window_type: WindowType | Literal["scgpt", "geneformer"]) -> Window:
-    """
-    Create a window function based on the specified type.
-
-    Args:
-        window_type: Type of window function to create
-
-    Returns:
-        Window function instance
-
-    Raises:
-        ValueError: If window_type is not supported
-    """
-    if isinstance(window_type, str):
-        try:
-            window_type = WindowType(window_type.lower())
-        except ValueError as err:
-            raise ValueError(f"Unsupported window type: {window_type}") from err
-
-    if window_type == WindowType.SCPGPT:
-        return ScGPTWindow()  # Now optimized with fast path
-    elif window_type == WindowType.GENEFORMER:
-        return GeneformerWindow()  # Use proper Geneformer window
-    else:
-        raise ValueError(f"Unsupported window type: {window_type}")
