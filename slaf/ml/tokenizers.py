@@ -292,7 +292,6 @@ class SLAFTokenizer(ABC):
             Genes: ['gene_100', 'gene_200']
             Expressions: [0.5, 0.6]
         """
-        pass
 
 
 class ScGPTTokenizer(SLAFTokenizer):
