@@ -92,48 +92,29 @@ def prefetch_worker(
     # - Out of the box: uses Window/Shuffle from slaf.distributed if no factory config
     # - No hardcoded dependencies on slaf.ml in slaf.distributed code
 
-    # Tokenizer is passed as a factory function name (will be created in ml/distributed.py).
-    # Built before window when use_tokenizer_window is set so tokenizer_instance.window exists.
     tokenizer_instance = None
     tokenizer_fn = None
     if processor_config.get("tokenizer_factory"):
-        # Dynamic import and factory call
         tokenizer_config = processor_config["tokenizer_factory"]
         tokenizer_module = importlib.import_module(tokenizer_config["module"])
         tokenizer_class = getattr(tokenizer_module, tokenizer_config["class"])
 
-        # SLAFTokenizer needs a slaf_array, so we need to recreate it from the data source path
-        # Extract slaf_path from data_source_config (assumes Lance path is under slaf_path/expression.lance)
         if data_source_config["type"] == "lance":
             lance_path = data_source_config["path"]
-            # Assume lance_path is like "path/to/slaf/expression.lance"
             slaf_path = lance_path.replace("/expression.lance", "")
 
-            # Recreate SLAFArray in worker
             from slaf.core.slaf import SLAFArray
 
             slaf_array = SLAFArray(slaf_path, load_metadata=False)
-
-            # Create tokenizer instance
             tokenizer_instance = tokenizer_class(
                 slaf_array=slaf_array, **tokenizer_config["kwargs"]
             )
 
-            # Create tokenizer function that works with grouped DataFrame
-            # The grouped DataFrame has gene_sequence and optionally expr_sequence columns
             def tokenize_grouped(
                 grouped_df: pl.DataFrame, schema: DataSchema
             ) -> dict[str, Any]:
-                """Tokenize grouped DataFrame with gene/value sequences.
-
-                For scGPT tokenizers, this enforces the dual-stream contract:
-                tokenized output must include aligned ``input_ids`` and ``values``.
-                """
-                # Extract gene sequences and expression sequences
+                """Tokenize grouped DataFrame with gene/value sequences."""
                 gene_sequences = grouped_df[schema.item_list_key].to_list()
-                is_scgpt_tokenizer = hasattr(tokenizer_instance, "n_expression_bins")
-
-                # Check if we have expression sequences (for scGPT)
                 if (
                     schema.value_list_key
                     and schema.value_list_key in grouped_df.columns
@@ -146,24 +127,7 @@ def prefetch_worker(
                     input_ids, attention_mask, values = tokenizer_instance.tokenize(
                         gene_sequences
                     )
-
-                if is_scgpt_tokenizer:
-                    if (
-                        not schema.value_list_key
-                        or schema.value_list_key not in grouped_df.columns
-                    ):
-                        raise ValueError(
-                            "scGPT distributed tokenization requires expression/value sequences; "
-                            f"missing grouped column '{schema.value_list_key}'."
-                        )
-                    if values is None:
-                        raise ValueError(
-                            "scGPT distributed tokenization requires dual-stream output; "
-                            "tokenizer returned values=None."
-                        )
-
-                # Return as dict (format expected by processor)
-                result = {
+                return {
                     "input_ids": input_ids,
                     "attention_mask": attention_mask,
                 }
@@ -193,21 +157,6 @@ def prefetch_worker(
     use_tokenizer_window = processor_config.get("use_tokenizer_window", False)
     if use_tokenizer_window and tokenizer_instance is not None:
         window = tokenizer_instance.window
-        apply_fn = getattr(window, "apply", None)
-        if apply_fn is None:
-            raise TypeError(
-                "tokenizer window must implement apply(df, schema, max_items, **kwargs)"
-            )
-        try:
-            params = inspect.signature(apply_fn).parameters
-        except (TypeError, ValueError):
-            params = None
-        if params is None or "schema" not in params or "max_items" not in params:
-            raise TypeError(
-                "tokenizer window must use the signature "
-                "apply(df, schema, max_items, **kwargs); "
-                "please upgrade slafdb in the worker image."
-            )
     elif processor_config.get("window_factory"):
         # Dynamic import based on config - module path comes from config, not hardcoded
         factory_config = processor_config["window_factory"]
