@@ -11,8 +11,6 @@ from slaf.ml.aggregators import (
     GeneformerWindow,
     ScGPTWindow,
     Window,
-    WindowType,
-    create_window,
 )
 
 
@@ -253,44 +251,3 @@ class TestGeneformerWindow:
 
         result = self.window.apply(empty_data, max_genes=10)
         assert len(result) == 0
-
-
-class TestCreateWindow:
-    """Test window factory function"""
-
-    def test_create_scgpt_window(self):
-        """Test creating ScGPT window"""
-        window = create_window("scgpt")
-        assert isinstance(window, ScGPTWindow)
-
-    def test_create_geneformer_window(self):
-        """Test creating Geneformer window"""
-        window = create_window("geneformer")
-        assert isinstance(window, GeneformerWindow)
-
-    def test_create_scgpt_window_enum(self):
-        """Test creating ScGPT window with enum"""
-        window = create_window(WindowType.SCPGPT)
-        assert isinstance(window, ScGPTWindow)
-
-    def test_create_geneformer_window_enum(self):
-        """Test creating Geneformer window with enum"""
-        window = create_window(WindowType.GENEFORMER)
-        assert isinstance(window, GeneformerWindow)
-
-    def test_create_unknown_window(self):
-        """Test creating unknown window type"""
-        with pytest.raises(ValueError, match="Unsupported window type"):
-            create_window("unknown")  # type: ignore
-
-    def test_create_case_insensitive(self):
-        """Test that window creation is case insensitive"""
-        window1 = create_window("SCGPT")  # type: ignore
-        window2 = create_window("scgpt")
-        assert isinstance(window1, ScGPTWindow)
-        assert isinstance(window2, ScGPTWindow)
-
-        window3 = create_window("GENEFORMER")  # type: ignore
-        window4 = create_window("geneformer")
-        assert isinstance(window3, GeneformerWindow)
-        assert isinstance(window4, GeneformerWindow)
