@@ -23,6 +23,7 @@ class TestSLAFDataLoader:
         assert isinstance(dataloader.tokenizer, GeneformerTokenizer)
         assert dataloader.batch_size == 32
         assert dataloader.max_genes == 2048
+        assert dataloader.tokenizer.max_genes == 2048
 
         # Check tokenizer initialization
         assert dataloader.tokenizer is not None
@@ -45,6 +46,7 @@ class TestSLAFDataLoader:
         assert isinstance(dataloader.tokenizer, ScGPTTokenizer)
         assert dataloader.batch_size == 16
         assert dataloader.max_genes == 1024
+        assert dataloader.tokenizer.max_genes == 1024
         assert dataloader.tokenizer.vocab_size == 1000
         assert dataloader.tokenizer.n_expression_bins == 5
 
@@ -72,7 +74,7 @@ class TestSLAFDataLoader:
 
             assert input_ids.shape[0] == attention_mask.shape[0]
             assert input_ids.shape[0] == cell_ids.shape[0]
-            assert input_ids.shape[1] == 2048  # Geneformer default
+            assert input_ids.shape[1] == 10  # matches max_genes
 
             # Check data types
             assert input_ids.dtype == torch.long
@@ -109,7 +111,7 @@ class TestSLAFDataLoader:
 
             assert input_ids.shape[0] == attention_mask.shape[0]
             assert input_ids.shape[0] == cell_ids.shape[0]
-            assert input_ids.shape[1] == 2050  # scGPT: 2*1024+2
+            assert input_ids.shape[1] == 22  # scGPT: 2 * max_genes + 2
 
             # Check data types
             assert input_ids.dtype == torch.long

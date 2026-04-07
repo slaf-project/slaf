@@ -43,6 +43,7 @@ class SLAFTokenizer(ABC):
         self,
         slaf_array: SLAFArray,
         vocab_size: int = 50000,
+        max_genes: int = 2048,
     ):
         """
         Initialize SLAFTokenizer with SLAF array and vocabulary settings.
@@ -53,17 +54,20 @@ class SLAFTokenizer(ABC):
                        Must be a valid SLAFArray with proper var DataFrame.
             vocab_size: Maximum size of gene vocabulary. Genes beyond this limit
                        are excluded from tokenization. Higher values use more memory.
-            n_expression_bins: Number of expression bins for scGPT tokenization.
-                             Higher values provide finer expression resolution.
-                             Range: 1-1000, default: 10.
+            max_genes: Max genes per cell for windowing and tokenization (sequence layout
+                       is tokenizer-specific). Should match training ``max_genes`` / model
+                       sequence length expectations.
 
         Raises:
-            ValueError: If vocab_size is invalid.
+            ValueError: If vocab_size or max_genes is invalid.
             RuntimeError: If SLAF array is not properly initialized.
             TypeError: If slaf_array is not a valid SLAFArray instance.
         """
         self.slaf_array = slaf_array
         self.vocab_size = vocab_size
+        if max_genes < 1:
+            raise ValueError(f"max_genes must be >= 1, got {max_genes}")
+        self.max_genes = max_genes
 
         self.window = self.create_window()
 
@@ -227,11 +231,6 @@ class SLAFTokenizer(ABC):
             # Fallback for testing - direct mapping with offset
             return gene_ids_array + 4  # Simple offset like original test
 
-    @property
-    @abstractmethod
-    def max_genes(self) -> int:
-        """Max genes (context length) to use for constructing cell sentence."""
-
     @abstractmethod
     def create_window(self) -> Window:
         """
@@ -256,6 +255,7 @@ class SLAFTokenizer(ABC):
             "vocab_size": self.vocab_size,
             "special_tokens": self.special_tokens,
             "gene_vocab_size": len(self.gene_vocab),
+            "max_genes": self.max_genes,
         }
 
     @abstractmethod
@@ -320,6 +320,7 @@ class ScGPTTokenizer(SLAFTokenizer):
         slaf_array: SLAFArray,
         vocab_size: int = 50000,
         n_expression_bins: int = 10,
+        max_genes: int = 1024,
     ):
         """
         Initialize ScGPTTokenizer with SLAF array and vocabulary settings.
@@ -333,6 +334,8 @@ class ScGPTTokenizer(SLAFTokenizer):
             n_expression_bins: Number of expression bins for scGPT tokenization.
                              Higher values provide finer expression resolution.
                              Range: 1-1000, default: 10.
+            max_genes: Maximum gene--expression pairs per cell. Sequence length is
+                       ``2 * max_genes + 2`` (CLS, pairs, SEP).
 
         Raises:
             ValueError: If vocab_size is invalid.
@@ -362,12 +365,9 @@ class ScGPTTokenizer(SLAFTokenizer):
         """
 
         self.n_expression_bins = n_expression_bins
-        super().__init__(slaf_array=slaf_array, vocab_size=vocab_size)
-
-    @property
-    def max_genes(self) -> int:
-        """Max genes (context length) to use for constructing cell sentence."""
-        return 1024
+        super().__init__(
+            slaf_array=slaf_array, vocab_size=vocab_size, max_genes=max_genes
+        )
 
     def create_window(self) -> Window:
         return ScGPTWindow()
@@ -638,10 +638,15 @@ class GeneformerTokenizer(SLAFTokenizer):
         Vocabulary size: 50000
     """
 
-    @property
-    def max_genes(self) -> int:
-        """Max genes (context length) to use for constructing cell sentence."""
-        return 2048
+    def __init__(
+        self,
+        slaf_array: SLAFArray,
+        vocab_size: int = 50000,
+        max_genes: int = 2048,
+    ):
+        super().__init__(
+            slaf_array=slaf_array, vocab_size=vocab_size, max_genes=max_genes
+        )
 
     def create_window(self) -> Window:
         return GeneformerWindow()
@@ -651,7 +656,6 @@ class GeneformerTokenizer(SLAFTokenizer):
         gene_sequences: list[list[int] | list[tuple[int, float]]],
         expr_sequences: list[list[float]] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        pass
         """
         Tokenize gene expression sequences into model-ready tensors.
 

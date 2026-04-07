@@ -459,16 +459,19 @@ class SLAFDataLoader:
                 self.tokenizer = GeneformerTokenizer(
                     slaf_array=slaf_array,
                     vocab_size=vocab_size,
+                    max_genes=max_genes,
                 )
             elif tokenizer_type == "scgpt":
                 self.tokenizer = ScGPTTokenizer(
                     slaf_array=slaf_array,
                     vocab_size=vocab_size,
                     n_expression_bins=n_expression_bins,
+                    max_genes=max_genes,
                 )
             else:
                 raise ValueError(
-                    f"tokenizer_type must be one of ['geneformer, 'scgpt']; {tokenizer_type=} is not supported."
+                    "tokenizer_type must be one of ['geneformer', 'scgpt']; "
+                    f"{tokenizer_type=} is not supported."
                 )
 
             # Get special tokens from tokenizer

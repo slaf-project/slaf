@@ -248,7 +248,10 @@ class DistributedSLAFDataLoader:
                 tokenizer_cls = GeneformerTokenizer
             else:
                 tokenizer_cls = ScGPTTokenizer
-            tokenizer_factory_kwargs = {"vocab_size": vocab_size}
+            tokenizer_factory_kwargs = {
+                "vocab_size": vocab_size,
+                "max_genes": max_genes,
+            }
             if tokenizer_type == "scgpt":
                 tokenizer_factory_kwargs["n_expression_bins"] = n_expression_bins
             self.tokenizer = tokenizer_cls(
