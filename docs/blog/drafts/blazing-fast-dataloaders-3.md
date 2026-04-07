@@ -1,14 +1,14 @@
-# Blazing Fast Dataloaders #3: Object storage and distributed ingestion
+# Blazing Fast Dataloaders #3: From object storage to distributed training
 
-## Distributed dataloading for single-cell foundation models
+## Train single-cell foundation models on a lunch break. Spend less than a doordash meal.
 
 _This is the third post in the Blazing Fast Dataloaders series. [Post 1](../blazing-fast-dataloaders.md) covered throughput: thread-based prefetch, vectorized outer loop, and contiguous reads. [Post 2](../blazing-fast-dataloaders-2.md) covered randomness: the Mixture of Scanners architecture for near-perfect shuffling at streaming speed. This post covers scale: training from object storage, when the bottleneck shifts to the network, and how we split CPU-side ingestion from GPU training with a queue-backed distributed dataloader._
 
 ---
 
-The first two posts describe a single-node pipeline that reaches roughly **28,207 cells per second** from **local disk**—enough to keep one H100 fed at scGPT-scale batch sizes. The stack is still useful as-is for workstations and staged data.
+The first two posts describe a single-node pipeline that reaches roughly **28,207 cells per second** from **local disk**, more than enough to keep one H100 fed at single-cell GPT (scGPT)-scale batch sizes. The stack is still useful as-is for workstations and staged data.
 
-Atlas-scale training in the cloud is different: the canonical copy of the data sits in **object storage**, and compute is **ephemeral**. Pointing the same Lance-backed pipeline at **S3** (or any similar endpoint) does not “break” the dataloader; throughput remains **respectable in absolute terms**, but the **bottleneck moves**. On a single node, adding cores and prefetch threads eventually stops helping because **egress bandwidth and request economics cap how much data can reach that box**, regardless of how efficiently the CPU would transform it afterward. In other words, once the link to storage is the limiter, vertical scaling on the training host is the wrong knob.
+Atlas-scale training in the cloud is different: the canonical copy of the data sits in **object storage**, and compute is **ephemeral**. Pointing the same pipeline at S3 (or any similar cloud storage backend) does not achieve the same throughput. On a single node, adding cores and prefetch threads eventually stops helping because egress bandwidth and request economics cap how much data can reach that box, regardless of how efficiently the CPU would transform it afterward. In other words, once the link to storage is the limiter, vertical scaling on the training host is the wrong knob.
 
 This post describes how we **separate concerns**—CPU workers that stream and preprocess in parallel, a narrow-waist queue, and GPU workers that mostly train—implemented today as **`DistributedSLAFDataLoader`** on Modal.
 
@@ -16,23 +16,21 @@ This post describes how we **separate concerns**—CPU workers that stream and p
 
 ## The story so far
 
-Posts 1 and 2 built a single-node dataloader that squeezes everything it can from one machine:
+In posts 1 and 2, we described the optimizations that led to a single-node dataloader that squeezes everything it can from one machine:
 
 - **Thread-based prefetch** uses GIL-releasing work in Lance, Arrow, and NumPy so prefetch threads overlap I/O and preprocessing without paying for multiprocessing copies.
-- The **vectorized outer loop** moves tokenization out of the per-step hot path and applies it across large prefetch batches, riding sub-linear Polars window-function costs (roughly **3× better per-cell efficiency** at 1024 cells versus 32 in our scaling tables).
-- **Mixture of Scanners (MoS)** keeps contiguous reads while approximating a global shuffle: random subsets of scanners read sequential runs from different offsets, then an in-memory block shuffle mixes deliveries—**88–90%** of theoretical maximum entropy at **97%** of sequential throughput.
+- The **vectorized outer loop** moves tokenization out of the per-step hot path and applies it across large prefetch batches, riding sub-linear scaling of Polars window-function costs (roughly **3× better per-cell efficiency** at 1024 cells versus 32 in our scaling tables).
+- **Mixture of Scanners (MoS)** streams contiguous reads while approximating a global shuffle: random subsets of scanners read sequential runs from different offsets, then an in-memory block shuffle mixes deliveries, reaching **88–90%** of theoretical maximum entropy at **97%** of sequential throughput.
 
-Those ideas share a hidden assumption: **the CPU that prefetches and the GPU that trains share one box**. They compete for the same cores, memory bandwidth, and NUMA domains. On a workstation with fast local disk, that competition is usually secondary to “can we read and transform fast enough?” In the cloud, with **Tahoe-100M on S3** and multi-GPU jobs, **network delivery** often joins (or replaces) that story as the hard ceiling on a single ingest host.
-
-> 💡 **Figure (placeholder).** Single-node architecture: prefetch threads and training loop on one host. Annotate shared CPU, memory bandwidth, and the moment the object-storage link becomes the bottleneck.
+Those ideas share a hidden assumption: **the CPU that prefetches and the GPU that trains share one box**. They compete for the same cores, memory bandwidth, and NUMA domains. On a workstation with fast local disk, that competition is usually secondary to “can we read and transform fast enough?” In the cloud, with a dataset as large as **Tahoe-100M on S3** and multi-GPU jobs, **network delivery** often joins (or replaces) that story as the hard ceiling on a single ingest host.
 
 ---
 
 ## The cloud storage wall
 
-The local-disk headline—**28k cells/sec**—is real, but it is not how atlas-scale training runs in production. Data lives in **object storage**; compute is **ephemeral**. Moving the Lance dataset behind S3 (or any similar endpoint) keeps the pipeline recognizable: you still stream, shuffle, and tokenize—but **peak single-node throughput drops** because bytes and metadata round-trips now cross the **network path to the bucket**, not a local NVMe link.
+When data lives in object storage and compute is ephemeral, we still stream, shuffle, and tokenize online, but peak single-node throughput drops because round-trips now cross the network path to the bucket.
 
-On our hardware, even with aggressive thread counts and core use, cloud-streamed throughput on **one** node tended to **plateau around ~2–3k cells/sec**. That is still a non-trivial rate, but it sits **below** the roughly **5–6k cells/sec** we target to saturate one H100 at scGPT-style settings. Pushing further on **that same node**—more prefetch threads, more parallelism in the transform stack—yielded **diminishing returns**: the pipe from object storage was doing what a pipe does. Whether the last mile on the box was dominated by Lance read threads or Polars time was secondary; **the link budget had become the gating factor**. At that point the interesting question is not “optimize another 10% on CPU” but **add another path for data to enter the cluster**—i.e. scale ingestion **horizontally**.
+Even with aggressive vertical scaling (XX vCPUs and threads), cloud-streamed throughput on **one** node tended to **plateau around ~2–3k cells/sec**. That is still a non-trivial rate, but it sits **below** the roughly **5–6k cells/sec** we target to saturate one H100 at scGPT-style settings. Pushing further on a single node yielded diminishing returns, opening a natural path to scaling data ingestion into the training cluster **horizontally**.
 
 The scaling story splits into two regimes:
 
@@ -161,21 +159,24 @@ Economically, this is the shape you want: **CPU hours are cheap relative to H100
 
 - **Single GPU** — sanity-check that the dataloader is not the bottleneck at small scale.
 - **Multi-GPU DDP** — eight H100s on one node; the classical sampler gives way to a **queue consumer**.
-- **Multi-node DDP** — **[N]** nodes × eight H100s; every rank drains the **same** logical queue while CPU workers scale **orthogonally**.
+- **Multi-node DDP** — Modal clustered runs (e.g. 16× GPU across two nodes); every rank drains the **same** logical queue while CPU workers scale **orthogonally** (see repo for `--multinode`; treat as beta per Modal).
 
-We are releasing it for free (under **MIT License**) as a reference **implementation**. On Tahoe-100M, this stack achieves the following step-time behavior (numbers to be filled after the final benchmark pass):
+The repo’s **Benchmarks** section reports end-to-end Modal runs; the rows below are copied from that README for the **`scgpt`** preset (**~51.1M trainable parameters**), **Tahoe-100M**, **`max_genes=512`**, **128 cells per GPU per step** (effective global batch **1024** on 8 GPUs), **`--data-source s3`**, **Flash Attention 4**, **`--sparse-gene-head`**, **`--no-use-compile`**, and **two CPU prefetch workers** on the distributed run. Step time on 8 GPUs is the **median** of per-step **max over ranks** (slowest rank sets the barrier); global **cells/s** is **global batch ÷ that step time**.
 
-| Config | Step latency (ms) | Cells/sec | Dataloader wait (ms) | GPU utilization (%) |
-| ------ | ----------------- | --------- | -------------------- | ------------------- |
-| Single GPU | [TBD] | [TBD] | [TBD] | [TBD] |
-| Multi-GPU (8× H100) | [TBD] | [TBD] | [TBD] | [TBD] |
-| Multi-node ([N]× H100) | [TBD] | [TBD] | [TBD] | [TBD] |
+| Config | Step latency (ms) | Global cells/sec | Dataloader wait (ms) | Training efficiency |
+| ------ | ----------------- | ---------------- | -------------------- | ------------------- |
+| Single GPU (1× **H200**, `modal_train.py`) | **323** (median) | **~396** | **~0** (`train_step` **`dl`** chunk in README profile) | MFU **~23.7%**; peak VRAM **~68 GB** |
+| Multi-GPU (8× **H100**, `modal_train_distributed.py`) | **56** (median) | **~18.3k** | not split out on this run† | MFU **~17.3%**; peak VRAM **~71.7 GB / GPU** |
 
-_Targets from internal scaffolding: ~300–400 ms per step, **> 2500** cells/sec aggregate where applicable, **sub-millisecond** dataloader wait, GPU utilization pinned to “as high as the model allows.”_
+†On the single-GPU trace, time blocked on `next(batch)` is reported as **~0 ms** once warm. The 8-GPU README table does not break out the same **`dl`** field; steady-state **56 ms** steps are the joint result of compute, collectives, and feeding the global batch.
+
+**Multi-node:** the README documents the `modal run … --multinode` command line but does not publish a second throughput table yet—when it does, this post can add a third row.
+
+We ship the repo under the **MIT License** as reference **infrastructure**, not as a new pretrained foundation checkpoint.
 
 At multi-node scale, variance across CPU workers should disappear into **queue depth** instead of showing up as idle GPU time.
 
-Beyond dataloading, `fast-scgpt` enables **Flash Attention 3** and several deviations from the original scGPT stack. Treat those as **starting points**, not as peer-reviewed improvements to the architecture.
+Beyond dataloading, `fast-scgpt` defaults to **Flash Attention 4** in the documented benchmarks (FA3 and compile toggles exist in the scripts). Other choices differ from published scGPT—treat them as **starting points**, not as peer-reviewed improvements to the architecture.
 
 > 💡 **Figure (placeholder).** Profiler strip for multi-node: dataloader wait hugging zero.
 
@@ -183,29 +184,21 @@ Beyond dataloading, `fast-scgpt` enables **Flash Attention 3** and several devia
 
 ## What this unlocks: economics of scale
 
-Engineering tables turn into biology timelines quickly once you multiply by **Chinchilla-style** token budgets—on the order of **~100-1000 tokens per parameter** for compute-optimal training based on a rough empirical survey of single-cell foundation models. For a scGPT-scale model (~**[M]** parameters), that implies ~**[C]** billion tokens. If one cell corresponds to roughly **[K]** tokens at your gene sequence settings, a Chinchilla-shaped run needs on the order of **[C/K]** million cells—**[fraction]** of a full Tahoe-100M epoch. Plug your realized **[X]** cells/sec and **[N]** GPUs into that arithmetic and you get a wall-clock **[T]** hours.
+**Apples to apples:** in [this reply on scGPT pretraining cost](https://github.com/bowang-lab/scGPT/issues/5#issuecomment-1551327337), the authors describe a reference setup on the order of **10.3 M cells × six epochs**—about **62 M cell presentations** through the training loop (same cell revisited across epochs, but **62 M optimizer steps worth of “a batch was just drawn from the atlas”** at that scale). That is the regime people meant when they asked how long pretraining takes.
 
-| Config | Cells/sec | Wall clock (Chinchilla-shaped run) |
-| ------ | --------- | ----------------------------------- |
-| Single GPU, local disk | 28,207 | [T1] hrs |
-| Single GPU, cloud (vertical limit) | ~2–3k | [T2] hrs |
-| Multi-node, distributed ([N] nodes) | [X]k | [T3] hrs |
+They also point to **roughly three to four days on four A100s** for that job—a wall-clock world that assumes **staged data**, **cluster babysitting**, and **multi-day** GPU reservations.
 
-_Fill T1–T3 once X and N are measured._
+**Same cell budget, 2026 stack:** the [`fast-scgpt` README](https://github.com/slaf-project/fast-scgpt) benchmark on **8× H100** reports **~18.3k cells/s** **global** training throughput in steady state (forward + backward + optimizer + NCCL—not dataloader-only). If you push **62 million** such presentations through at that rate, **62 × 10⁶ / 18 300 ≈ 3 390 s**—about **56 minutes** of **GPU-wall** time in the idealized steady state (Modal startup, queue ramp, compile warmup, checkpointing, and eval still add real minutes).
 
-### Dollars per run
+**Sticker math:** **8 GPUs** × (**~3 390 s** / **3 600 s/h**) ≈ **7.5** billed GPU-hours if every device is busy for that wall. At **\$2.50 / H100 / hour**, that is **~\$19** in GPU line items—**under twenty bucks**, with **CPU prefetch workers and egress** still rounding noise next to eight H100s. And you never **mirrored the whole atlas onto cluster scratch**: Tahoe-100M stays in **object storage**; the dataloader meets you there.
 
-At Modal’s **~$[P]/hr** ballpark per H100, a **[T3]**-hour job on **[N]** GPUs is **~$[GPU_cost]** before discounts. CPU workers add **~$[CPU_cost]**: typically small because CPU containers sit at a **[ratio]×** cheaper price band than the GPU tier.
-
-Total back-of-envelope for a Chinchilla-optimal pretraining-style run on the largest open atlas we ship against: **~$[total]** when you plug real pricing and duration.
+So the headline is not “cheaper than one burrito” at this exact cell count—it is **under an hour and under twenty dollars on paper** for the **same order of magnitude of training traffic** the original issue discussed, versus **half a week on four A100s** in 2023. Different silicon, different stack, different dollars-per-hour—but the **magnitude** of the lifestyle change is the point.
 
 ### What becomes possible
 
-Those numbers matter because they change **who** can run the experiment. A lean biotech team, a university lab, or an individual maintainer can aim at **atlas-scale pretraining** without standing up a data platform team, without petabyte-scale **local** staging, and without treating the dataset as anything other than **the SLAF tables already in object storage**.
+The shift is **access**: a lean team can iterate on **pretraining-scale** runs without a data platform org, without **cloning the atlas to every cluster’s local filesystem**, and without the **multi-day** turnaround that made “try six epochs on 10 M cells” a calendar event. When the next hundred-million-cell drop lands, you dial **CPU producers** and **GPU trainers** independently; SLAF stays **authoritative in object storage**; the training fleet stays **ephemeral**.
 
-When the next hundred-million- or billion-cell atlas lands, the response is not “rewrite the format.” It is **turn up more CPU workers** until the queue depth says stop. The data stays in SLAF on S3; the training fleet stays **ephemeral** and **proportional** to the question you are asking.
-
-> 💡 **Figure (placeholder).** Economics summary table: config, cells/sec, wall clock, GPU $, CPU $, total.
+> 💡 **Figure (placeholder).** Side-by-side: 2023 timeline (4× A100, **~3–4 days**, [per comment](https://github.com/bowang-lab/scGPT/issues/5#issuecomment-1551327337)) vs. **8× H100** stack (**~1 h** wall, **~\$19** GPU at \$2.50/h in the napkin above, stream from bucket).
 
 ---
 
