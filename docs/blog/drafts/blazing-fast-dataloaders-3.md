@@ -186,7 +186,7 @@ fleet and the training fleet should scale on separate axes, coordinated by a que
 
 ---
 
-## Architecture: `DistributedSLAFDataLoader`
+## `DistributedSLAFDataLoader`
 
 `DistributedSLAFDataLoader` is the realization of these ideas in SLAF.
 The key design insight is that the outer loop and the inner loop have entirely
@@ -370,6 +370,17 @@ fleet meets it there.
 
 ## Getting started
 
-The full training harness is [`fast-scgpt`](https://github.com/slaf-project/fast-scgpt).
-Point it at the Tahoe-100M SLAF dataset on HuggingFace via `hf://datasets/slaf-project/Tahoe-100M`
-and it streams directly without staging.
+If you want to **run the numbers yourself**, start from the reference Modal
+harness [`fast-scgpt`](https://github.com/slaf-project/fast-scgpt): clone the
+repo, follow the README for environment and `modal` setup, and launch training
+against [Tahoe-100M on Hugging Face](https://huggingface.co/datasets/slaf-project/Tahoe-100M)
+using the `hf://datasets/slaf-project/Tahoe-100M` URI so cells stream with no
+local staging step.
+
+If you are **building your own model**, install SLAF with ML extras
+(`pip install 'slafdb[ml]'`), open the dataset with `SLAFArray` and the same
+`hf://` path, and wire in `SLAFDataLoader` or `DistributedSLAFDataLoader` as in
+the harness. The [SLAF documentation](https://slaf-project.github.io/slaf/) has
+the API surface; reach out on
+GitHub issues for [SLAF](https://github.com/slaf-project/slaf/issues) or
+[`fast-scgpt`](https://github.com/slaf-project/fast-scgpt/issues) or [Discord](https://discord.com/invite/7Q95RVhURe).
