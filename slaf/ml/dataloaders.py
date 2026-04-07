@@ -413,7 +413,6 @@ class SLAFDataLoader:
             Error: n_scanners must be at least 1
         """
         self.slaf_array = slaf_array
-        self.tokenizer_type = tokenizer_type
         self.batch_size = batch_size
         self.max_genes = max_genes
         self.n_epochs = n_epochs
