@@ -90,71 +90,28 @@ def prefetch_worker(
     # - Out of the box: uses Window/Shuffle from slaf.distributed if no factory config
     # - No hardcoded dependencies on slaf.ml in slaf.distributed code
 
-    # Window: use factory if provided, otherwise use default
-    if processor_config.get("window_factory"):
-        # Dynamic import based on config - module path comes from config, not hardcoded
-        factory_config = processor_config["window_factory"]
-        window_module = __import__(
-            factory_config["module"], fromlist=[factory_config["function"]]
-        )
-        window_factory = getattr(window_module, factory_config["function"])
-        window = window_factory(
-            factory_config["type"], **factory_config.get("kwargs", {})
-        )
-    else:
-        # Use generic implementation (works out of the box)
-        window = Window()
-
-    # Shuffle: use factory if provided, otherwise use default
-    if processor_config.get("shuffle_factory"):
-        # Dynamic import based on config - module path comes from config, not hardcoded
-        factory_config = processor_config["shuffle_factory"]
-        shuffle_module = __import__(
-            factory_config["module"], fromlist=[factory_config["function"]]
-        )
-        shuffle_factory = getattr(shuffle_module, factory_config["function"])
-        shuffle = shuffle_factory(
-            factory_config["type"], **factory_config.get("kwargs", {})
-        )
-    else:
-        # Use generic implementation (works out of the box)
-        shuffle = Shuffle()
-
-    # Tokenizer is passed as a factory function name (will be created in ml/distributed.py)
+    tokenizer_instance = None
     tokenizer_fn = None
     if processor_config.get("tokenizer_factory"):
-        # Dynamic import and factory call
         tokenizer_config = processor_config["tokenizer_factory"]
         tokenizer_module = importlib.import_module(tokenizer_config["module"])
         tokenizer_class = getattr(tokenizer_module, tokenizer_config["class"])
 
-        # SLAFTokenizer needs a slaf_array, so we need to recreate it from the data source path
-        # Extract slaf_path from data_source_config (assumes Lance path is under slaf_path/expression.lance)
         if data_source_config["type"] == "lance":
             lance_path = data_source_config["path"]
-            # Assume lance_path is like "path/to/slaf/expression.lance"
             slaf_path = lance_path.replace("/expression.lance", "")
 
-            # Recreate SLAFArray in worker
             from slaf.core.slaf import SLAFArray
 
             slaf_array = SLAFArray(slaf_path, load_metadata=False)
-
-            # Create tokenizer instance
             tokenizer_instance = tokenizer_class(
                 slaf_array=slaf_array, **tokenizer_config["kwargs"]
             )
 
-            # Create tokenizer function that works with grouped DataFrame
-            # The grouped DataFrame has gene_sequence and optionally expr_sequence columns
             def tokenize_grouped(
                 grouped_df: pl.DataFrame, schema: DataSchema
             ) -> dict[str, Any]:
-                """Tokenize grouped DataFrame with gene sequences."""
-                # Extract gene sequences and expression sequences
                 gene_sequences = grouped_df[schema.item_list_key].to_list()
-
-                # Check if we have expression sequences (for scGPT)
                 if (
                     schema.value_list_key
                     and schema.value_list_key in grouped_df.columns
@@ -167,14 +124,39 @@ def prefetch_worker(
                     input_ids, attention_mask = tokenizer_instance.tokenize(
                         gene_sequences
                     )
-
-                # Return as dict (format expected by processor)
                 return {
                     "input_ids": input_ids,
                     "attention_mask": attention_mask,
                 }
 
             tokenizer_fn = tokenize_grouped
+
+    if processor_config.get("shuffle_factory"):
+        factory_config = processor_config["shuffle_factory"]
+        shuffle_module = __import__(
+            factory_config["module"], fromlist=[factory_config["function"]]
+        )
+        shuffle_factory = getattr(shuffle_module, factory_config["function"])
+        shuffle = shuffle_factory(
+            factory_config["type"], **factory_config.get("kwargs", {})
+        )
+    else:
+        shuffle = Shuffle()
+
+    use_tokenizer_window = processor_config.get("use_tokenizer_window", False)
+    if use_tokenizer_window and tokenizer_instance is not None:
+        window = tokenizer_instance.window
+    elif processor_config.get("window_factory"):
+        factory_config = processor_config["window_factory"]
+        window_module = __import__(
+            factory_config["module"], fromlist=[factory_config["function"]]
+        )
+        window_factory = getattr(window_module, factory_config["function"])
+        window = window_factory(
+            factory_config["type"], **factory_config.get("kwargs", {})
+        )
+    else:
+        window = Window()
 
     # Create processor with data schema
     schema = DataSchema(**processor_config["schema"])

@@ -62,7 +62,7 @@ class TestSLAFArray:
 
         # Test ML components lazy import
         start_time = time.time()
-        SLAFDataLoader, SLAFTokenizer, TokenizerType, create_shuffle, create_window = (
+        SLAFDataLoader, SLAFTokenizer, TokenizerType, create_shuffle = (
             get_ml_components()
         )
         ml_time = time.time() - start_time
@@ -72,7 +72,6 @@ class TestSLAFArray:
         assert SLAFTokenizer is not None
         assert TokenizerType is not None
         assert create_shuffle is not None
-        assert create_window is not None
         assert ml_time < 5.0  # Allow some time for heavy imports
 
     def test_async_metadata_loading(self, small_slaf):
