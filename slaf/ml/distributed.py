@@ -41,11 +41,36 @@ image = (
 _APP_NAME = "slaf-distributed-dataloader"
 
 
-def _modal_named_kwargs(environment_name: str | None) -> dict[str, str]:
-    """Optional Modal Environment for Queue/Dict namespacing (e.g. environment_name='main')."""
-    if environment_name:
-        return {"environment_name": environment_name}
-    return {}
+def _modal_queue_from_name(
+    name: str,
+    *,
+    create_if_missing: bool = True,
+    environment_name: str | None = None,
+) -> modal.Queue:
+    """Open a Modal Queue by name; optional Environment without ``**dict`` (mypy-safe vs Modal stubs)."""
+    if environment_name is not None:
+        return modal.Queue.from_name(
+            name,
+            create_if_missing=create_if_missing,
+            environment_name=environment_name,
+        )
+    return modal.Queue.from_name(name, create_if_missing=create_if_missing)
+
+
+def _modal_dict_from_name(
+    name: str,
+    *,
+    create_if_missing: bool = True,
+    environment_name: str | None = None,
+) -> modal.Dict:
+    """Open a Modal Dict by name; optional Environment without ``**dict`` (mypy-safe vs Modal stubs)."""
+    if environment_name is not None:
+        return modal.Dict.from_name(
+            name,
+            create_if_missing=create_if_missing,
+            environment_name=environment_name,
+        )
+    return modal.Dict.from_name(name, create_if_missing=create_if_missing)
 
 
 def create_app(
@@ -86,23 +111,32 @@ def create_app(
         """
         from slaf.distributed.worker import prefetch_worker
 
-        # Inline env kwargs — do not call module helpers here. ``serialized=True`` workers
+        # Inline Queue/Dict open — do not call module helpers here. ``serialized=True`` workers
         # unpickle against site-packages slaf; a PyPI lag behind your deploy machine would
-        # raise DeserializationError if this referenced e.g. ``_modal_named_kwargs``.
-        _q_kw: dict[str, str] = (
-            {"environment_name": modal_queue_environment}
-            if modal_queue_environment
-            else {}
-        )
-        queue = modal.Queue.from_name(queue_name, create_if_missing=True, **_q_kw)
+        # raise DeserializationError if this referenced new helpers on the training side only.
+        if modal_queue_environment is not None:
+            queue = modal.Queue.from_name(
+                queue_name,
+                create_if_missing=True,
+                environment_name=modal_queue_environment,
+            )
+        else:
+            queue = modal.Queue.from_name(queue_name, create_if_missing=True)
         partial_groups_kv = None
         if (
             processor_config.get("enable_cross_worker_boundary_merging", False)
             and partial_groups_kv_name
         ):
-            partial_groups_kv = modal.Dict.from_name(
-                partial_groups_kv_name, create_if_missing=True, **_q_kw
-            )
+            if modal_queue_environment is not None:
+                partial_groups_kv = modal.Dict.from_name(
+                    partial_groups_kv_name,
+                    create_if_missing=True,
+                    environment_name=modal_queue_environment,
+                )
+            else:
+                partial_groups_kv = modal.Dict.from_name(
+                    partial_groups_kv_name, create_if_missing=True
+                )
         return prefetch_worker(
             worker_id=worker_id,
             partition_indices=partition_indices,
@@ -303,8 +337,11 @@ class DistributedSLAFDataLoader:
         # Create queue and KV store (same name used for consumer and workers — see queue flow below)
         if queue_name is None:
             queue_name = f"slaf-dataloader-{id(slaf_array)}"
-        _env = _modal_named_kwargs(modal_queue_environment)
-        modal.Queue.from_name(queue_name, create_if_missing=True, **_env)
+        _modal_queue_from_name(
+            queue_name,
+            create_if_missing=True,
+            environment_name=modal_queue_environment,
+        )
 
         # Create KV store for cross-worker boundary merging
         # We'll create it after processor_config is defined, but the name is deterministic
@@ -348,7 +385,11 @@ class DistributedSLAFDataLoader:
 
         # Create the KV dict to ensure it exists before workers try to access it
         if processor_config.get("enable_cross_worker_boundary_merging", True):
-            modal.Dict.from_name(partial_groups_kv_name, create_if_missing=True, **_env)
+            _modal_dict_from_name(
+                partial_groups_kv_name,
+                create_if_missing=True,
+                environment_name=modal_queue_environment,
+            )
 
         if self.tokenizer is not None and tokenizer_cls is not None:
             processor_config["tokenizer_factory"] = {
@@ -416,7 +457,11 @@ class DistributedSLAFDataLoader:
         # - Each worker does modal.Queue.from_name(queue_name, ...) and calls queue.put_many(...).
         # - We get the same queue by name here; DistributedDataLoader iterates via queue.get_many().
         # So the queue we pass into DistributedDataLoader is the same one workers write to.
-        modal_queue = modal.Queue.from_name(queue_name, create_if_missing=True, **_env)
+        modal_queue = _modal_queue_from_name(
+            queue_name,
+            create_if_missing=True,
+            environment_name=modal_queue_environment,
+        )
         # Workers compress items (zlib) to stay under Modal's 1 MiB/item limit; decompress on read
         consumer_queue = DecompressingQueueWrapper(modal_queue)
 
@@ -473,8 +518,11 @@ class DistributedSLAFDataLoader:
         """
         import time
 
-        _env = _modal_named_kwargs(self.modal_queue_environment)
-        queue = modal.Queue.from_name(self.queue_name, create_if_missing=True, **_env)
+        queue = _modal_queue_from_name(
+            self.queue_name,
+            create_if_missing=True,
+            environment_name=self.modal_queue_environment,
+        )
         for _ in range(int(timeout_seconds)):
             try:
                 size = queue.len()
