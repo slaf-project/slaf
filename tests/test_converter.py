@@ -2370,3 +2370,120 @@ class TestSLAFConverter:
         assert config["format_version"] == "0.5"
         assert "layers" not in config
         assert "layers" not in config["tables"]
+
+
+class TestSpatialH5ADConversion:
+    """Regression tests for spatial h5ad conversion.
+
+    These tests exercise the file-path-based conversion path
+    (_convert_h5ad backed mode) to ensure obsm/varm/uns survive
+    the backed-to-in-memory reconstruction.
+    """
+
+    def test_h5ad_file_conversion_preserves_obsm(
+        self, small_sample_adata, tmp_path
+    ):
+        """obsm must survive file-path conversion (non-chunked backed mode)."""
+        # Add spatial obsm to the fixture
+        n_cells = small_sample_adata.n_obs
+        small_sample_adata.obsm["spatial"] = np.random.rand(n_cells, 2).astype(
+            np.float32
+        )
+        small_sample_adata.obsm["X_umap"] = np.random.rand(n_cells, 2).astype(
+            np.float32
+        )
+
+        # Write to h5ad file
+        h5ad_path = tmp_path / "spatial.h5ad"
+        small_sample_adata.write(h5ad_path)
+
+        # Convert via file path (exercises _convert_h5ad backed mode)
+        output_path = tmp_path / "spatial.slaf"
+        converter = SLAFConverter(
+            chunked=False,
+            use_optimized_dtypes=False,
+            compact_after_write=False,
+        )
+        converter.convert(str(h5ad_path), str(output_path))
+
+        # Verify config tracks obsm keys
+        with open(output_path / "config.json") as f:
+            config = json.load(f)
+        assert "obsm" in config
+        assert set(config["obsm"]["available"]) == {"spatial", "X_umap"}
+        assert config["obsm"]["dimensions"]["spatial"] == 2
+
+        # Verify data is accessible and matches
+        from slaf.core.slaf import SLAFArray
+        from slaf.integrations.anndata import LazyAnnData
+
+        slaf = SLAFArray(str(output_path), load_metadata=False)
+        adata = LazyAnnData(slaf)
+        assert "spatial" in adata.obsm
+        np.testing.assert_array_almost_equal(
+            adata.obsm["spatial"],
+            small_sample_adata.obsm["spatial"],
+            decimal=5,
+        )
+
+    def test_h5ad_file_conversion_preserves_varm(
+        self, small_sample_adata, tmp_path
+    ):
+        """varm must survive file-path conversion (non-chunked backed mode)."""
+        n_genes = small_sample_adata.n_vars
+        small_sample_adata.varm["PCs"] = np.random.rand(n_genes, 10).astype(
+            np.float32
+        )
+
+        h5ad_path = tmp_path / "varm.h5ad"
+        small_sample_adata.write(h5ad_path)
+
+        output_path = tmp_path / "varm.slaf"
+        converter = SLAFConverter(
+            chunked=False,
+            use_optimized_dtypes=False,
+            compact_after_write=False,
+        )
+        converter.convert(str(h5ad_path), str(output_path))
+
+        with open(output_path / "config.json") as f:
+            config = json.load(f)
+        assert "varm" in config
+        assert "PCs" in config["varm"]["available"]
+        assert config["varm"]["dimensions"]["PCs"] == 10
+
+    def test_h5ad_file_conversion_preserves_uns_spatial(
+        self, small_sample_adata, tmp_path
+    ):
+        """uns with nested numpy arrays must survive JSON serialization."""
+        small_sample_adata.uns["spatial"] = {
+            "library_id": {
+                "scalefactors": {
+                    "tissue_hires_scalef": 0.17,
+                    "spot_diameter_fullres": 89.5,
+                },
+                "metadata": {"chemistry": "Visium"},
+            }
+        }
+
+        h5ad_path = tmp_path / "uns_spatial.h5ad"
+        small_sample_adata.write(h5ad_path)
+
+        output_path = tmp_path / "uns_spatial.slaf"
+        converter = SLAFConverter(
+            chunked=False,
+            use_optimized_dtypes=False,
+            compact_after_write=False,
+        )
+        converter.convert(str(h5ad_path), str(output_path))
+
+        # Verify uns.json exists and contains spatial data
+        uns_path = output_path / "uns.json"
+        assert uns_path.exists()
+        with open(uns_path) as f:
+            uns_data = json.load(f)
+        assert "spatial" in uns_data
+        assert uns_data["spatial"]["library_id"]["scalefactors"][
+            "tissue_hires_scalef"
+        ] == pytest.approx(0.17)
+        assert uns_data["spatial"]["library_id"]["metadata"]["chemistry"] == "Visium"
