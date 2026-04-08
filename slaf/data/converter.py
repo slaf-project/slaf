@@ -527,10 +527,18 @@ class SLAFConverter:
                 obs=adata_backed.obs.copy(),
                 var=adata_backed.var.copy(),
                 uns=adata_backed.uns.copy() if hasattr(adata_backed, "uns") else {},
-                obsm=dict(adata_backed.obsm) if hasattr(adata_backed, "obsm") and adata_backed.obsm else None,
-                varm=dict(adata_backed.varm) if hasattr(adata_backed, "varm") and adata_backed.varm else None,
-                obsp=dict(adata_backed.obsp) if hasattr(adata_backed, "obsp") and adata_backed.obsp else None,
-                varp=dict(adata_backed.varp) if hasattr(adata_backed, "varp") and adata_backed.varp else None,
+                obsm=dict(adata_backed.obsm)
+                if hasattr(adata_backed, "obsm") and adata_backed.obsm
+                else None,
+                varm=dict(adata_backed.varm)
+                if hasattr(adata_backed, "varm") and adata_backed.varm
+                else None,
+                obsp=dict(adata_backed.obsp)
+                if hasattr(adata_backed, "obsp") and adata_backed.obsp
+                else None,
+                varp=dict(adata_backed.varp)
+                if hasattr(adata_backed, "varp") and adata_backed.varp
+                else None,
             )
 
             # Close the backed file
@@ -596,10 +604,18 @@ class SLAFConverter:
                 obs=adata_backed.obs.copy(),
                 var=adata_backed.var.copy(),
                 uns=adata_backed.uns.copy() if hasattr(adata_backed, "uns") else {},
-                obsm=dict(adata_backed.obsm) if hasattr(adata_backed, "obsm") and adata_backed.obsm else None,
-                varm=dict(adata_backed.varm) if hasattr(adata_backed, "varm") and adata_backed.varm else None,
-                obsp=dict(adata_backed.obsp) if hasattr(adata_backed, "obsp") and adata_backed.obsp else None,
-                varp=dict(adata_backed.varp) if hasattr(adata_backed, "varp") and adata_backed.varp else None,
+                obsm=dict(adata_backed.obsm)
+                if hasattr(adata_backed, "obsm") and adata_backed.obsm
+                else None,
+                varm=dict(adata_backed.varm)
+                if hasattr(adata_backed, "varm") and adata_backed.varm
+                else None,
+                obsp=dict(adata_backed.obsp)
+                if hasattr(adata_backed, "obsp") and adata_backed.obsp
+                else None,
+                varp=dict(adata_backed.varp)
+                if hasattr(adata_backed, "varp") and adata_backed.varp
+                else None,
             )
 
             # Close the backed file if it exists

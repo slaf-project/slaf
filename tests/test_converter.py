@@ -2380,9 +2380,7 @@ class TestSpatialH5ADConversion:
     the backed-to-in-memory reconstruction.
     """
 
-    def test_h5ad_file_conversion_preserves_obsm(
-        self, small_sample_adata, tmp_path
-    ):
+    def test_h5ad_file_conversion_preserves_obsm(self, small_sample_adata, tmp_path):
         """obsm must survive file-path conversion (non-chunked backed mode)."""
         # Add spatial obsm to the fixture
         n_cells = small_sample_adata.n_obs
@@ -2426,14 +2424,10 @@ class TestSpatialH5ADConversion:
             decimal=5,
         )
 
-    def test_h5ad_file_conversion_preserves_varm(
-        self, small_sample_adata, tmp_path
-    ):
+    def test_h5ad_file_conversion_preserves_varm(self, small_sample_adata, tmp_path):
         """varm must survive file-path conversion (non-chunked backed mode)."""
         n_genes = small_sample_adata.n_vars
-        small_sample_adata.varm["PCs"] = np.random.rand(n_genes, 10).astype(
-            np.float32
-        )
+        small_sample_adata.varm["PCs"] = np.random.rand(n_genes, 10).astype(np.float32)
 
         h5ad_path = tmp_path / "varm.h5ad"
         small_sample_adata.write(h5ad_path)

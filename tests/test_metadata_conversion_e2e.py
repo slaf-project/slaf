@@ -487,9 +487,7 @@ def test_spatial_uns_round_trip(anndata_with_spatial_metadata):
         assert adata.uns["spatial"]["library_id"]["scalefactors"][
             "tissue_hires_scalef"
         ] == pytest.approx(0.17)
-        assert (
-            adata.uns["spatial"]["library_id"]["metadata"]["chemistry"] == "Visium"
-        )
+        assert adata.uns["spatial"]["library_id"]["metadata"]["chemistry"] == "Visium"
 
 
 def test_spatial_h5ad_file_round_trip(anndata_with_spatial_metadata):
