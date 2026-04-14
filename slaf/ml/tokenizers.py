@@ -451,32 +451,32 @@ class ScGPTTokenizer(SLAFTokenizer):
                 gene_ids = np.full(
                     sequence_length, self.special_tokens["PAD"], dtype=np.int64
                 )
-                values = np.full(
+                value_tokens = np.full(
                     sequence_length, self.special_tokens["PAD"], dtype=np.int64
                 )
                 gene_ids[0] = self.special_tokens["CLS"]
                 gene_ids[1 : 1 + n_pairs] = gene_tokens
                 gene_ids[1 + n_pairs] = self.special_tokens["SEP"]
-                values[1 : 1 + n_pairs] = expr_tokens
+                value_tokens[1 : 1 + n_pairs] = expr_tokens
             else:
                 gene_ids = np.array(
                     [self.special_tokens["CLS"], self.special_tokens["SEP"]],
                     dtype=np.int64,
                 )
-                values = np.array(
+                value_tokens = np.array(
                     [self.special_tokens["PAD"], self.special_tokens["PAD"]],
                     dtype=np.int64,
                 )
 
             length = min(len(gene_ids), max_sequence_length)
             gene_token_array[i, :length] = gene_ids[:length]
-            value_array[i, :length] = values[:length]
+            value_array[i, :length] = value_tokens[:length]
 
         input_ids = torch.from_numpy(gene_token_array)
-        values = torch.from_numpy(value_array)
+        values_tensor = torch.from_numpy(value_array)
         attention_mask = input_ids != self.special_tokens["PAD"]
 
-        return input_ids, attention_mask, values
+        return input_ids, attention_mask, values_tensor
 
     def get_vocab_info(self) -> dict[str, Any]:
         """
