@@ -277,6 +277,7 @@ class TokenizedPrefetchBatch:
     input_ids: torch.Tensor  # Tokenized sequences
     attention_mask: torch.Tensor  # Attention masks
     cell_integer_ids: list[int]  # Corresponding cell integer IDs
+    values: torch.Tensor | None = None  # scGPT aligned expression/value stream
     partial_cell_data: dict | None = (
         None  # Store partial cell data for boundary handling
     )
@@ -1041,7 +1042,7 @@ class PrefetchBatchProcessor:
                     if self.tokenizer is None:
                         raise RuntimeError("Tokenizer is required for tokenized mode")
 
-                    input_ids, attention_mask = self.tokenizer.tokenize(
+                    input_ids, attention_mask, values = self.tokenizer.tokenize(
                         gene_sequences=grouped["gene_sequence"].to_list(),
                         expr_sequences=(
                             grouped["expr_sequence"].to_list()
@@ -1083,6 +1084,7 @@ class PrefetchBatchProcessor:
                         batch_id=self.batch_id - 1,
                         input_ids=input_ids,
                         attention_mask=attention_mask,
+                        values=values,
                         cell_integer_ids=cell_ids_ordered,
                         partial_cell_data=self.partial_cell_data.copy(),
                         tokenize_time=tokenize_time,
@@ -1823,6 +1825,19 @@ class SLAFIterableDataset(IterableDataset):
                 # Tokenized mode: process pre-tokenized sequences
                 input_ids = data.input_ids
                 attention_mask = data.attention_mask
+                values = data.values
+
+                if values is not None:
+                    if values.shape != input_ids.shape:
+                        raise ValueError(
+                            "scGPT dual-stream contract violated: values and input_ids must "
+                            f"have identical shapes, got {tuple(values.shape)} vs {tuple(input_ids.shape)}"
+                        )
+                    if values.shape != attention_mask.shape:
+                        raise ValueError(
+                            "scGPT dual-stream contract violated: values and attention_mask must "
+                            f"have identical shapes, got {tuple(values.shape)} vs {tuple(attention_mask.shape)}"
+                        )
 
                 # Process all cells in this data chunk
                 for batch_start in range(0, num_cells, self.batch_size):
@@ -1831,6 +1846,9 @@ class SLAFIterableDataset(IterableDataset):
                     # Extract batch data
                     batch_input_ids = input_ids[batch_start:batch_end]
                     batch_attention_mask = attention_mask[batch_start:batch_end]
+                    batch_values = (
+                        values[batch_start:batch_end] if values is not None else None
+                    )
                     batch_cell_ids = cell_integer_ids[batch_start:batch_end]
 
                     # Convert cell IDs to tensor (pre-allocated)
@@ -1877,6 +1895,8 @@ class SLAFIterableDataset(IterableDataset):
                         "attention_mask": batch_attention_mask,
                         "cell_ids": cell_ids_tensor,
                     }
+                    if batch_values is not None:
+                        batch_dict["values"] = batch_values
 
                     # Add epoch information if using multiple epochs
                     if self.n_epochs > 1:

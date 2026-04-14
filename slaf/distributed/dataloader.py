@@ -379,12 +379,17 @@ class DistributedDataLoader:
                     # Type: ignore because we know these will be filled with tensors
                     input_ids_list: list[Any] = [None] * batch_size
                     attention_mask_list: list[Any] = [None] * batch_size
+                    values_list: list[Any] | None = (
+                        [None] * batch_size if "values" in samples[0] else None
+                    )
                     cell_ids_list = [0] * batch_size
 
                     # Single pass: extract all data
                     for i, s in enumerate(samples):
                         input_ids_list[i] = s["input_ids"]
                         attention_mask_list[i] = s["attention_mask"]
+                        if values_list is not None:
+                            values_list[i] = s.get("values")
                         cell_ids_list[i] = s.get("group_key", 0)
 
                     # Stack tensors in single operations (very fast)
@@ -392,13 +397,26 @@ class DistributedDataLoader:
                     input_ids = torch.stack(input_ids_list)  # type: ignore[arg-type]
                     attention_mask = torch.stack(attention_mask_list)  # type: ignore[arg-type]
                     cell_ids = torch.tensor(cell_ids_list, dtype=torch.long)
+                    if values_list is not None:
+                        values = torch.stack(values_list)  # type: ignore[arg-type]
+                        if values.shape != input_ids.shape:
+                            raise ValueError(
+                                "Distributed scGPT dual-stream contract violated: values and "
+                                f"input_ids shapes differ ({tuple(values.shape)} vs {tuple(input_ids.shape)})"
+                            )
+                        if values.shape != attention_mask.shape:
+                            raise ValueError(
+                                "Distributed scGPT dual-stream contract violated: values and "
+                                f"attention_mask shapes differ ({tuple(values.shape)} vs {tuple(attention_mask.shape)})"
+                            )
 
                     # Extract other keys only if they exist (use Polars for efficiency)
                     first_sample = samples[0]
                     extra_keys = [
                         key
                         for key in first_sample.keys()
-                        if key not in ["input_ids", "attention_mask", "group_key"]
+                        if key
+                        not in ["input_ids", "attention_mask", "group_key", "values"]
                     ]
                     if extra_keys:
                         # Use Polars DataFrame for efficient column extraction
@@ -411,12 +429,15 @@ class DistributedDataLoader:
                     else:
                         extra_data = {}
 
-                    yield {
+                    batch = {
                         "input_ids": input_ids,
                         "attention_mask": attention_mask,
                         "cell_ids": cell_ids,  # Matches SLAFDataLoader format
                         **extra_data,
                     }
+                    if values_list is not None:
+                        batch["values"] = values
+                    yield batch
                 except ImportError:
                     # PyTorch not available - fall back to lists
                     yield {

@@ -117,6 +117,55 @@ class TestDistributedDataLoader:
             # Should be tensors
             assert hasattr(batches[0]["input_ids"], "shape")
 
+    def test_dataloader_return_tensors_true_with_values(self):
+        """Test scGPT-style values passthrough in tensor mode."""
+        try:
+            import torch
+        except ImportError:
+            pytest.skip("PyTorch not available")
+
+        samples = [
+            {
+                "input_ids": torch.tensor([1, 11, 2, 0]),
+                "attention_mask": torch.tensor([1, 1, 1, 0], dtype=torch.bool),
+                "values": torch.tensor([0, 1005, 0, 0]),
+                "group_key": i,
+            }
+            for i in range(4)
+        ]
+        queue = MockQueue(samples)
+        dataloader = DistributedDataLoader(
+            queue, batch_size=2, prefetch_factor=0, return_tensors=True
+        )
+
+        batches = list(dataloader)
+        assert len(batches) > 0
+        assert "values" in batches[0]
+        assert batches[0]["values"].shape == batches[0]["input_ids"].shape
+
+    def test_dataloader_values_shape_mismatch_raises(self):
+        """Mismatched values/input shapes should fail fast."""
+        try:
+            import torch
+        except ImportError:
+            pytest.skip("PyTorch not available")
+
+        samples = [
+            {
+                "input_ids": torch.tensor([1, 11, 2, 0]),
+                "attention_mask": torch.tensor([1, 1, 1, 0], dtype=torch.bool),
+                "values": torch.tensor([0, 1005, 0]),  # one shorter
+                "group_key": 0,
+            }
+        ]
+        queue = MockQueue(samples)
+        dataloader = DistributedDataLoader(
+            queue, batch_size=1, prefetch_factor=0, return_tensors=True
+        )
+
+        with pytest.raises(ValueError, match="dual-stream contract violated"):
+            list(dataloader)
+
     def test_dataloader_return_tensors_false(self):
         """Test return_tensors=False (Python lists)."""
         samples = [

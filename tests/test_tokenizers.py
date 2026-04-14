@@ -64,7 +64,7 @@ class TestSLAFTokenizer:
 
         # Test gene sequence tokenization
         gene_sequences = [[0, 1, 2], [1, 2, 0]]
-        input_ids, attention_mask = tokenizer.tokenize(gene_sequences)
+        input_ids, attention_mask, values = tokenizer.tokenize(gene_sequences)
 
         # Check output shapes
         assert input_ids.shape == (2, 2048)  # Geneformer default
@@ -73,6 +73,7 @@ class TestSLAFTokenizer:
         # Check that tokens are properly converted
         assert input_ids.dtype == torch.long
         assert attention_mask.dtype == torch.bool
+        assert values is None
 
         # Check Geneformer format: [CLS] gene1 gene2 gene3 ... [SEP]
         assert input_ids[0, 0] == 1  # CLS token
@@ -98,23 +99,34 @@ class TestSLAFTokenizer:
         gene_sequences = [[0, 1, 2], [1, 2, 0]]
         expr_sequences = [[0.5, 0.8, 0.2], [0.9, 0.1, 0.7]]
 
-        input_ids, attention_mask = tokenizer.tokenize(gene_sequences, expr_sequences)
+        input_ids, attention_mask, values = tokenizer.tokenize(
+            gene_sequences, expr_sequences
+        )
 
         # Check shapes
-        assert input_ids.shape == (2, 2050)  # scGPT: 2*1024+2
-        assert attention_mask.shape == (2, 2050)
+        assert input_ids.shape == (2, 1026)  # scGPT dual stream: max_genes+2
+        assert attention_mask.shape == (2, 1026)
+        assert values is not None
+        assert values.shape == (2, 1026)
 
         # Check that tokens are properly converted
         assert input_ids.dtype == torch.long
         assert attention_mask.dtype == torch.bool
 
-        # Check scGPT format: [CLS] gene1 expr1 gene2 expr2 ... [SEP]
+        # Check scGPT dual stream format: gene_ids has [CLS] gene1 ... [SEP]
         assert input_ids[0, 0] == 1  # CLS token
         assert input_ids[0, 1] >= 0  # First gene token (should be valid gene token)
-        # Expression tokens should be >= vocab_size (1000) for positive expressions
-        # or == 0 (PAD) for zero/negative expressions
-        assert input_ids[0, 2] >= 0  # Expression token (can be PAD or binned)
+        # Expression values live in separate aligned values tensor
+        assert values[0, 0] == 0  # CLS-aligned value position is PAD
+        assert values[0, 1] >= 0  # First expression token/bin
         assert attention_mask[0, 0]  # CLS token is valid
+
+        # Dual-stream alignment invariants (canonical scGPT contract)
+        assert values.shape == input_ids.shape
+        cls_positions = input_ids == tokenizer.special_tokens["CLS"]
+        sep_positions = input_ids == tokenizer.special_tokens["SEP"]
+        assert torch.all(values[cls_positions] == tokenizer.special_tokens["PAD"])
+        assert torch.all(values[sep_positions] == tokenizer.special_tokens["PAD"])
 
     def test_scgpt_tokenization_no_expression(self):
         """Test that scGPT tokenization works without expressions (empty sequences)."""
@@ -132,13 +144,14 @@ class TestSLAFTokenizer:
         # Test that it works with empty expression sequences
         gene_sequences = [[0, 1, 2], [1, 2, 0]]
 
-        input_ids, attention_mask = tokenizer.tokenize(
+        input_ids, attention_mask, values = tokenizer.tokenize(
             gene_sequences, expr_sequences=None
         )
 
         # Should work and produce valid output
-        assert input_ids.shape == (2, 2050)  # scGPT: 2*1024+2
-        assert attention_mask.shape == (2, 2050)
+        assert input_ids.shape == (2, 1026)  # scGPT dual stream: max_genes+2
+        assert attention_mask.shape == (2, 1026)
+        assert values is not None
 
     def test_tokenization_edge_cases(self):
         """Test edge cases for tokenization."""
@@ -159,13 +172,14 @@ class TestSLAFTokenizer:
 
         # Test sequences with empty gene lists
         gene_sequences = [[], [0, 1, 2]]
-        input_ids, attention_mask = tokenizer.tokenize(
+        input_ids, attention_mask, values = tokenizer.tokenize(
             gene_sequences, expr_sequences=None
         )
 
         # Should still work with empty gene lists
         assert input_ids.shape == (2, 2048)
         assert attention_mask.shape == (2, 2048)
+        assert values is None
 
     def test_expression_binning(self):
         """Test expression binning functionality."""
@@ -311,12 +325,13 @@ class TestSLAFTokenizerWithRealData:
 
         # Test tokenization with real gene sequences
         gene_sequences = [[0, 1, 2], [1, 2, 3]]
-        input_ids, attention_mask = tokenizer.tokenize(gene_sequences)
+        input_ids, attention_mask, values = tokenizer.tokenize(gene_sequences)
 
         assert input_ids.shape == (2, 2048)
         assert attention_mask.shape == (2, 2048)
         assert input_ids.dtype == torch.long
         assert attention_mask.dtype == torch.bool
+        assert values is None
 
     def test_scgpt_with_real_data(self, tiny_slaf):
         """Test scGPT tokenizer with real SLAF data."""
@@ -330,12 +345,15 @@ class TestSLAFTokenizerWithRealData:
         gene_sequences = [[0, 1, 2], [1, 2, 3]]
         expr_sequences = [[0.5, 0.8, 0.2], [0.9, 0.1, 0.7]]
 
-        input_ids, attention_mask = tokenizer.tokenize(gene_sequences, expr_sequences)
+        input_ids, attention_mask, values = tokenizer.tokenize(
+            gene_sequences, expr_sequences
+        )
 
-        assert input_ids.shape == (2, 2050)  # scGPT: 2*1024+2
-        assert attention_mask.shape == (2, 2050)
+        assert input_ids.shape == (2, 1026)  # scGPT dual stream: max_genes+2
+        assert attention_mask.shape == (2, 1026)
         assert input_ids.dtype == torch.long
         assert attention_mask.dtype == torch.bool
+        assert values is not None
 
     def test_gene_mapping_with_real_data(self, tiny_slaf):
         """Test gene ID mapping with real SLAF data."""
