@@ -65,7 +65,7 @@ class TestSLAFDataLoader:
             # Check batch structure
             assert "input_ids" in batch
             assert "attention_mask" in batch
-            assert "values" in batch
+            assert "values" not in batch
             assert "cell_ids" in batch
 
             # Check tensor shapes
