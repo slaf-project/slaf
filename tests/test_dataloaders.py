@@ -65,6 +65,7 @@ class TestSLAFDataLoader:
             # Check batch structure
             assert "input_ids" in batch
             assert "attention_mask" in batch
+            assert "values" not in batch
             assert "cell_ids" in batch
 
             # Check tensor shapes
@@ -107,11 +108,13 @@ class TestSLAFDataLoader:
             # Check tensor shapes
             input_ids = batch["input_ids"]
             attention_mask = batch["attention_mask"]
+            values = batch["values"]
             cell_ids = batch["cell_ids"]
 
             assert input_ids.shape[0] == attention_mask.shape[0]
             assert input_ids.shape[0] == cell_ids.shape[0]
-            assert input_ids.shape[1] == 22  # scGPT: 2 * max_genes + 2
+            assert input_ids.shape[1] == 12  # scGPT dual stream: max_genes + 2
+            assert values.shape == input_ids.shape
 
             # Check data types
             assert input_ids.dtype == torch.long

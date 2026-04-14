@@ -263,7 +263,7 @@ class SLAFTokenizer(ABC):
         self,
         gene_sequences: list[list[int] | list[tuple[int, float]]],
         expr_sequences: list[list[float]] | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         """
         Tokenize gene expression sequences into model-ready tensors.
 
@@ -376,7 +376,7 @@ class ScGPTTokenizer(SLAFTokenizer):
         self,
         gene_sequences: list[list[int] | list[tuple[int, float]]],
         expr_sequences: list[list[float]] | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         """
         Tokenize gene expression sequences into model-ready tensors.
 
@@ -407,95 +407,76 @@ class ScGPTTokenizer(SLAFTokenizer):
         if not gene_sequences:
             raise ValueError("Gene sequences cannot be empty")
 
-        # For scGPT: CLS + (gene,expr)*n + SEP = 2*n + 2
-        max_sequence_length = 2 * self.max_genes + 2  # Total sequence length
-
-        # For scGPT, gene_sequences now contains struct pairs [(gene, expr), ...]
-        # so we don't need separate expr_sequences validation
+        # Canonical scGPT contract: dual stream, aligned positions.
+        # gene_ids: [CLS] gene_1 ... gene_n [SEP] [PAD]...
+        # values:   [PAD] expr_1 ... expr_n [PAD] [PAD]...
+        max_sequence_length = self.max_genes + 2
 
         batch_size = len(gene_sequences)
 
         # Use fast numpy-based approach (same as original test)
         import numpy as np
 
-        # For scGPT: use max_sequence_length (2*max_genes+2)
-        array_width = max_sequence_length
-
-        token_array = np.full(
-            (batch_size, array_width), self.special_tokens["PAD"], dtype=np.int64
+        gene_token_array = np.full(
+            (batch_size, max_sequence_length),
+            self.special_tokens["PAD"],
+            dtype=np.int64,
+        )
+        value_array = np.full(
+            (batch_size, max_sequence_length),
+            self.special_tokens["PAD"],
+            dtype=np.int64,
         )
 
-        # scGPT format: [CLS] gene1 expr1 gene2 expr2 ... [SEP]
-        for i, (gene_sequence, expr_sequence) in enumerate(
-            zip(gene_sequences, expr_sequences or [], strict=False)
-        ):
-            # For scGPT, we now use separate gene_sequence and expr_sequence columns
-            if gene_sequence and len(gene_sequence) > 0:
-                # Fast path: separate gene_sequence and expr_sequence columns
-                genes = gene_sequence
-                exprs = expr_sequence if expr_sequence else []
+        for i, gene_sequence in enumerate(gene_sequences):
+            expr_sequence = expr_sequences[i] if expr_sequences is not None else []
+            genes = list(gene_sequence) if gene_sequence else []
+            exprs = list(expr_sequence) if expr_sequence else []
 
-                # Vectorized operations - use simple +4 for performance
-                gene_tokens = np.array(genes, dtype=np.int64) + 4
+            n_pairs = min(len(genes), len(exprs), self.max_genes)
 
-                # Handle expression tokens - don't bin if already binned by window function
-                if len(exprs) > 0 and isinstance(exprs[0], int | np.integer):
-                    # Already binned by window function - just convert to tokens
-                    expr_tokens = np.array(exprs, dtype=np.int64) + self.expr_bin_start
+            if n_pairs > 0:
+                gene_tokens = np.array(genes[:n_pairs], dtype=np.int64) + 4
+
+                if isinstance(exprs[0], int | np.integer):
+                    expr_tokens = (
+                        np.array(exprs[:n_pairs], dtype=np.int64) + self.expr_bin_start
+                    )
                 else:
-                    # Raw values - need to bin them
                     expr_tokens = self._expression_to_bin_vectorized(
-                        np.array(exprs, dtype=np.float32)
+                        np.array(exprs[:n_pairs], dtype=np.float32)
                     )
 
-                # Vectorized interleaving (much faster than Python loop)
-                if len(gene_tokens) > 0:
-                    # Pre-allocate full sequence: CLS + (gene,expr)*n + SEP
-                    sequence_length = 1 + 2 * len(gene_tokens) + 1
-                    tokens = np.full(
-                        sequence_length, self.special_tokens["PAD"], dtype=np.int64
-                    )
-
-                    # Set CLS token
-                    tokens[0] = self.special_tokens["CLS"]
-
-                    # Vectorized interleaving
-                    tokens[1::2][: len(gene_tokens)] = gene_tokens  # type: ignore[assignment]
-                    tokens[2::2][: len(expr_tokens)] = expr_tokens  # type: ignore[assignment]
-
-                    tokens[1 + 2 * len(gene_tokens)] = self.special_tokens["SEP"]
-                else:
-                    # Empty sequence case
-                    tokens = np.array(
-                        [self.special_tokens["CLS"], self.special_tokens["SEP"]],
-                        dtype=np.int64,
-                    )  # type: ignore[assignment]
+                sequence_length = n_pairs + 2
+                gene_ids = np.full(
+                    sequence_length, self.special_tokens["PAD"], dtype=np.int64
+                )
+                value_tokens = np.full(
+                    sequence_length, self.special_tokens["PAD"], dtype=np.int64
+                )
+                gene_ids[0] = self.special_tokens["CLS"]
+                gene_ids[1 : 1 + n_pairs] = gene_tokens
+                gene_ids[1 + n_pairs] = self.special_tokens["SEP"]
+                value_tokens[1 : 1 + n_pairs] = expr_tokens
             else:
-                # Empty sequence case
-                tokens = np.array(
+                gene_ids = np.array(
                     [self.special_tokens["CLS"], self.special_tokens["SEP"]],
                     dtype=np.int64,
-                )  # type: ignore[assignment]
-
-            target_length = max_sequence_length
-
-            tokens = tokens[:target_length]  # type: ignore[assignment]
-            if len(tokens) < target_length:
-                padding = np.full(
-                    target_length - len(tokens),
-                    self.special_tokens["PAD"],
+                )
+                value_tokens = np.array(
+                    [self.special_tokens["PAD"], self.special_tokens["PAD"]],
                     dtype=np.int64,
                 )
-                tokens = np.concatenate([tokens, padding])  # type: ignore[assignment]
 
-            # Fill array
-            token_array[i, :] = tokens  # type: ignore[assignment]
+            length = min(len(gene_ids), max_sequence_length)
+            gene_token_array[i, :length] = gene_ids[:length]
+            value_array[i, :length] = value_tokens[:length]
 
-        # Convert to tensors in one operation
-        input_ids = torch.from_numpy(token_array)
+        input_ids = torch.from_numpy(gene_token_array)
+        values_tensor = torch.from_numpy(value_array)
         attention_mask = input_ids != self.special_tokens["PAD"]
 
-        return input_ids, attention_mask
+        return input_ids, attention_mask, values_tensor
 
     def get_vocab_info(self) -> dict[str, Any]:
         """
@@ -655,7 +636,7 @@ class GeneformerTokenizer(SLAFTokenizer):
         self,
         gene_sequences: list[list[int] | list[tuple[int, float]]],
         expr_sequences: list[list[float]] | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         """
         Tokenize gene expression sequences into model-ready tensors.
 
@@ -738,7 +719,7 @@ class GeneformerTokenizer(SLAFTokenizer):
         input_ids = torch.from_numpy(token_array)
         attention_mask = input_ids != self.special_tokens["PAD"]
 
-        return input_ids, attention_mask
+        return input_ids, attention_mask, None
 
     def decode_tokens(self, tokens: list[int]) -> dict[str, Any]:
         """

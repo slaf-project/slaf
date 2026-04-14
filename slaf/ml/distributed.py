@@ -360,7 +360,8 @@ class DistributedSLAFDataLoader:
             value_key="value",  # Values are expression
             group_key_out="cell_integer_id",  # Output keeps same group key
             item_list_key="gene_sequence",  # Aggregated gene list
-            value_list_key="expr_sequence",  # Aggregated expression list (for scGPT)
+            # Aggregated expression/value list used by scGPT dual-stream tokenization
+            value_list_key="expr_sequence",
         )
 
         processor_config = {

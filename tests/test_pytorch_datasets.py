@@ -350,24 +350,47 @@ class TestSLAFIterableDataset:
             # Check batch structure
             assert "input_ids" in batch
             assert "attention_mask" in batch
+            assert "values" in batch
             assert "cell_ids" in batch
 
             # Check tensor types
             assert isinstance(batch["input_ids"], torch.Tensor)
             assert isinstance(batch["attention_mask"], torch.Tensor)
+            assert isinstance(batch["values"], torch.Tensor)
             assert isinstance(batch["cell_ids"], torch.Tensor)
 
             # Check shapes
             batch_size = batch["input_ids"].shape[0]
             seq_length = batch["input_ids"].shape[1]
             assert batch_size <= 8
-            assert seq_length == 2050  # scGPT: 2*1024+2
+            assert seq_length == 1026  # scGPT dual stream: max_genes+2
+            assert batch["values"].shape == batch["input_ids"].shape
 
             batch_count += 1
             if batch_count >= 3:  # Test first 3 batches
                 break
 
         assert batch_count > 0
+
+    def test_scgpt_values_alignment_contract(self, tiny_slaf):
+        """scGPT batches must keep aligned dual streams."""
+        tokenizer = ScGPTTokenizer(tiny_slaf, max_genes=16)
+        dataset = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=tokenizer,
+            batch_size=8,
+        )
+
+        batch = next(iter(dataset))
+        input_ids = batch["input_ids"]
+        values = batch["values"]
+
+        assert values.shape == input_ids.shape
+        cls_positions = input_ids == tokenizer.special_tokens["CLS"]
+        sep_positions = input_ids == tokenizer.special_tokens["SEP"]
+        pad_value = tokenizer.special_tokens["PAD"]
+        assert torch.all(values[cls_positions] == pad_value)
+        assert torch.all(values[sep_positions] == pad_value)
 
     def test_device_transfer(self, tiny_slaf):
         """Test device transfer functionality"""
