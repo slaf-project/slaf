@@ -294,11 +294,14 @@ class SLAFDataLoader:
 
             # Tokenization Configuration
             tokenizer_type: Tokenization strategy to use. Options: "geneformer", "scgpt".
-                          Geneformer uses ranked gene sequences, scGPT uses interleaved
-                          gene-expression pairs. Ignored when raw_mode=True.
+                          Geneformer uses ranked gene sequences. scGPT uses ranked genes
+                          with a parallel expression list (binned or raw), then
+                          ``ScGPTTokenizer`` builds aligned dual-stream ``input_ids`` and
+                          ``values`` tensors. Ignored when raw_mode=True.
             max_genes: Maximum number of genes to include in each cell's tokenization.
-                     For Geneformer: same as sequence length. For scGPT: number of
-                     gene-expression pairs (sequence length = 2*max_genes+2).
+                     For Geneformer: caps sequence length (CLS + genes + padding).
+                     For scGPT: top ``max_genes`` genes per cell; each stream has length
+                     ``max_genes + 2`` (CLS, genes, SEP) in the tokenizer.
             vocab_size: Size of the tokenizer vocabulary. Higher values allow more
                        genes but use more memory. Range: 1000-100000, default: 50000.
             n_expression_bins: Number of expression level bins for scGPT discretization.

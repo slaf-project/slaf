@@ -6,7 +6,7 @@ Tests focus on initialization and validation of the DataSchema class.
 
 import pytest
 
-from slaf.distributed.processor import DataSchema
+from slaf.core.tabular_schema import DataSchema
 
 
 class TestDataSchema:

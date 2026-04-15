@@ -7,6 +7,7 @@ This module tests the window function implementations for different tokenization
 import polars as pl
 import pytest
 
+from slaf.core.tabular_schema import DataSchema
 from slaf.ml.aggregators import (
     GeneformerWindow,
     ScGPTWindow,
@@ -29,6 +30,13 @@ class TestScGPTWindow:
     def setup_method(self):
         """Set up test data"""
         self.window = ScGPTWindow()
+        self.schema = DataSchema(
+            group_key="cell_integer_id",
+            item_key="gene_integer_id",
+            value_key="value",
+            item_list_key="gene_sequence",
+            value_list_key="expr_sequence",
+        )
 
         # Create test data with multiple cells and genes
         self.test_data = pl.DataFrame(
@@ -41,7 +49,7 @@ class TestScGPTWindow:
 
     def test_apply_basic(self):
         """Test basic window function application"""
-        result = self.window.apply(self.test_data, max_genes=2)
+        result = self.window.apply(self.test_data, self.schema, 2)
 
         # Check structure
         assert isinstance(result, pl.DataFrame)
@@ -58,7 +66,7 @@ class TestScGPTWindow:
 
     def test_apply_ranking(self):
         """Test that genes are ranked by expression value"""
-        result = self.window.apply(self.test_data, max_genes=3)
+        result = self.window.apply(self.test_data, self.schema, 3)
 
         # Cell 0: values [5.0, 3.0, 1.0] -> should be ranked [gene_10, gene_20, gene_30]
         cell_0_data = result.filter(pl.col("cell_integer_id") == 0)
@@ -75,7 +83,7 @@ class TestScGPTWindow:
 
     def test_apply_expression_binning(self):
         """Test that expression binning works correctly"""
-        result = self.window.apply(self.test_data, max_genes=3, n_expression_bins=5)
+        result = self.window.apply(self.test_data, self.schema, 3, n_expression_bins=5)
 
         cell_0_data = result.filter(pl.col("cell_integer_id") == 0)
         expr_seq = cell_0_data["expr_sequence"][0]
@@ -91,7 +99,7 @@ class TestScGPTWindow:
     def test_apply_raw_expressions(self):
         """Test that raw expression values can be returned"""
         result = self.window.apply(
-            self.test_data, max_genes=2, use_binned_expressions=False
+            self.test_data, self.schema, 2, use_binned_expressions=False
         )
 
         cell_0_data = result.filter(pl.col("cell_integer_id") == 0)
@@ -106,7 +114,7 @@ class TestScGPTWindow:
 
     def test_apply_custom_binning_parameters(self):
         """Test with custom expression binning parameters"""
-        result = self.window.apply(self.test_data, max_genes=2, n_expression_bins=3)
+        result = self.window.apply(self.test_data, self.schema, 2, n_expression_bins=3)
 
         cell_0_data = result.filter(pl.col("cell_integer_id") == 0)
         expr_seq = cell_0_data["expr_sequence"][0]
@@ -116,7 +124,7 @@ class TestScGPTWindow:
 
     def test_apply_max_genes_limit(self):
         """Test that max_genes limit is respected"""
-        result = self.window.apply(self.test_data, max_genes=1)
+        result = self.window.apply(self.test_data, self.schema, 1)
 
         # Each cell should have at most 1 gene
         for gene_seq in result["gene_sequence"]:
@@ -132,7 +140,7 @@ class TestScGPTWindow:
             }
         )
 
-        result = self.window.apply(empty_data, max_genes=10)
+        result = self.window.apply(empty_data, self.schema, 10)
         assert len(result) == 0
 
     def test_apply_single_cell(self):
@@ -145,7 +153,7 @@ class TestScGPTWindow:
             }
         )
 
-        result = self.window.apply(single_cell_data, max_genes=2)
+        result = self.window.apply(single_cell_data, self.schema, 2)
         assert len(result) == 1
 
         gene_seq = result["gene_sequence"][0]
@@ -167,7 +175,7 @@ class TestScGPTWindow:
 
         # Test with raw expressions
         result_raw = self.window.apply(
-            single_cell_data, max_genes=2, use_binned_expressions=False
+            single_cell_data, self.schema, 2, use_binned_expressions=False
         )
         expr_seq_raw = result_raw["expr_sequence"][0]
 
@@ -184,6 +192,13 @@ class TestGeneformerWindow:
     def setup_method(self):
         """Set up test data"""
         self.window = GeneformerWindow()
+        self.schema = DataSchema(
+            group_key="cell_integer_id",
+            item_key="gene_integer_id",
+            value_key="value",
+            item_list_key="gene_sequence",
+            value_list_key=None,
+        )
 
         # Create test data with multiple cells and genes
         self.test_data = pl.DataFrame(
@@ -196,7 +211,7 @@ class TestGeneformerWindow:
 
     def test_apply_basic(self):
         """Test basic window function application"""
-        result = self.window.apply(self.test_data, max_genes=2)
+        result = self.window.apply(self.test_data, self.schema, 2)
 
         # Check structure
         assert isinstance(result, pl.DataFrame)
@@ -212,7 +227,7 @@ class TestGeneformerWindow:
 
     def test_apply_ranking(self):
         """Test that genes are ranked by expression value"""
-        result = self.window.apply(self.test_data, max_genes=3)
+        result = self.window.apply(self.test_data, self.schema, 3)
 
         # Cell 0: values [5.0, 3.0, 1.0] -> should be ranked [gene_10, gene_20, gene_30]
         cell_0_data = result.filter(pl.col("cell_integer_id") == 0)
@@ -225,7 +240,7 @@ class TestGeneformerWindow:
 
     def test_apply_max_genes_limit(self):
         """Test that max_genes limit is respected"""
-        result = self.window.apply(self.test_data, max_genes=1)
+        result = self.window.apply(self.test_data, self.schema, 1)
 
         # Each cell should have at most 1 gene
         for gene_seq in result["gene_sequence"]:
@@ -233,7 +248,7 @@ class TestGeneformerWindow:
 
     def test_apply_with_percentile_filter(self):
         """Test with percentile filtering"""
-        result = self.window.apply(self.test_data, max_genes=3, min_percentile=50.0)
+        result = self.window.apply(self.test_data, self.schema, 3, min_percentile=50.0)
 
         # Should filter out genes below 50th percentile
         assert isinstance(result, pl.DataFrame)
@@ -249,5 +264,5 @@ class TestGeneformerWindow:
             }
         )
 
-        result = self.window.apply(empty_data, max_genes=10)
+        result = self.window.apply(empty_data, self.schema, 10)
         assert len(result) == 0

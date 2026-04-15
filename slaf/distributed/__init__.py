@@ -6,11 +6,12 @@ extracted to a separate repository in the future. It separates generic
 distributed coordination logic from SLAF-specific business logic.
 """
 
+from slaf.core.tabular_schema import DataSchema
 from slaf.distributed.boundary import GroupBoundaryHandler
 from slaf.distributed.coordinator import Coordinator
 from slaf.distributed.data_source import DataSource, LanceDataSource
 from slaf.distributed.dataloader import DistributedDataLoader
-from slaf.distributed.processor import BatchProcessor, DataSchema
+from slaf.distributed.processor import BatchProcessor
 from slaf.distributed.shuffle import Shuffle
 from slaf.distributed.window import Window
 

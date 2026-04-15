@@ -74,7 +74,8 @@ def prefetch_worker(
         raise ValueError(f"Unknown data source type: {data_source_config['type']}")
 
     # Import processor (generic)
-    from slaf.distributed.processor import BatchProcessor, DataSchema
+    from slaf.core.tabular_schema import DataSchema
+    from slaf.distributed.processor import BatchProcessor
     from slaf.distributed.shuffle import Shuffle
     from slaf.distributed.window import Window
 
@@ -288,7 +289,7 @@ def prefetch_worker(
                     if worker_id not in _first_read_done:
                         _first_read_done[worker_id] = True
                         logger.info(
-                            "[{worker_id}] First read completed: partition={partition_idx}, batch_rows={batch_rows}, total_chunk_rows={total_rows}",
+                            "[{worker_id}] First read completed: partition={partition_idx}, batch_rows={batch_rows}, total_chunk_rows={total_chunk_rows}",
                             worker_id=worker_id,
                             partition_idx=partition_idx,
                             batch_rows=len(batch_df),

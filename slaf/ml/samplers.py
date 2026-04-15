@@ -165,19 +165,19 @@ class StratifiedShuffle(Shuffle):
                 )
                 shuffled_groups.append(shuffled_group)
 
-        # Interleave groups to maintain balance
+        # Round-robin merge strata so batches stay mixed across cell types
         if not shuffled_groups:
             return [] if batch_size is not None else df
 
         max_rows = max(len(group) for group in shuffled_groups)
-        interleaved_rows = []
+        merged_rows = []
 
         for i in range(max_rows):
             for group in shuffled_groups:
                 if i < len(group):
-                    interleaved_rows.append(group.row(i, named=True))
+                    merged_rows.append(group.row(i, named=True))
 
-        result_df = pl.DataFrame(interleaved_rows)
+        result_df = pl.DataFrame(merged_rows)
 
         if batch_size is not None:
             # Chunked mode: partition by cell_integer_id and return list of DataFrames
@@ -187,7 +187,7 @@ class StratifiedShuffle(Shuffle):
                 for i in range(0, len(chunks), batch_size)
             ]
         else:
-            # Single DataFrame mode: return the interleaved DataFrame
+            # Single DataFrame mode: return the round-robin merged DataFrame
             return result_df
 
 

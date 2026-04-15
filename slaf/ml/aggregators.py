@@ -6,9 +6,12 @@ Each window function defines how to apply Polars window operations to raw COO da
 """
 
 from abc import ABC, abstractmethod
+from enum import Enum
 from typing import Any
 
 import polars as pl
+
+from slaf.core.tabular_schema import DataSchema
 
 
 class Window(ABC):
@@ -21,78 +24,83 @@ class Window(ABC):
 
     @abstractmethod
     def apply(
-        self, fragment_df: pl.DataFrame, max_genes: int, **kwargs: Any
+        self,
+        fragment_df: pl.DataFrame,
+        schema: DataSchema,
+        max_items: int,
+        **kwargs: Any,
     ) -> pl.DataFrame:
         """
         Apply window function to COO data from a PyArrow batch.
 
+        Matches ``WindowProtocol`` in ``slaf.distributed.processor`` (same contract as
+        ``slaf.distributed.window.Window``).
+
         Args:
-            fragment_df: Polars DataFrame containing COO data from a PyArrow batch
-            max_genes: Maximum number of genes to include per cell
-            **kwargs: Additional strategy-specific parameters
+            fragment_df: Polars DataFrame with ``schema.group_key``, ``schema.item_key``,
+                ``schema.value_key``.
+            schema: Column names for input and aggregated list outputs.
+            max_items: Maximum items per group after ranking/filtering.
+            **kwargs: Strategy-specific options (e.g. ``n_expression_bins``).
 
         Returns:
-            Processed DataFrame with window function results
+            Grouped DataFrame; list columns use ``schema.item_list_key`` and optionally
+            ``schema.value_list_key``.
         """
         raise NotImplementedError
 
 
 class ScGPTWindow(Window):
     """
-    scGPT window function: ROW_NUMBER() with expression values for binning.
+    scGPT window: rank genes by expression per cell, then aggregate to paired lists.
 
-    This window function ranks genes by expression within each cell and includes
-    expression values for scGPT's gene-expression interleaved format.
+    Output is two list columns (gene ids and expression bins or raw values)—the same
+    layout ``ScGPTTokenizer`` expects for its dual-stream ``input_ids`` / ``values``
+    tensors (aligned positions, not a single interleaved token sequence).
     """
 
     def apply(
-        self, fragment_df: pl.DataFrame, max_genes: int, **kwargs: Any
+        self,
+        fragment_df: pl.DataFrame,
+        schema: DataSchema,
+        max_items: int,
+        **kwargs: Any,
     ) -> pl.DataFrame:
         """
         Apply scGPT window function.
 
-        Args:
-            fragment_df: Polars DataFrame containing raw COO data from a PyArrow batch
-            max_genes: Maximum number of genes to include per cell
-            **kwargs: Additional parameters:
-                - n_expression_bins: Number of expression bins (default: 10)
-                - use_binned_expressions: Whether to return binned expression values (default: False)
-
-        Returns:
-            DataFrame with gene sequences and expression sequences (raw or binned) for scGPT format
+        **kwargs:
+            n_expression_bins: Number of expression bins (default: 10)
+            use_binned_expressions: Whether to return binned expression values (default: True)
         """
+        gk = schema.group_key
+        ik = schema.item_key
+        vk = schema.value_key
+        item_out = schema.item_list_key
+        value_out = schema.value_list_key or "expr_sequence"
+
         n_expression_bins = kwargs.get("n_expression_bins", 10)
         use_binned_expressions = kwargs.get(
             "use_binned_expressions", True
         )  # Default to True for scGPT
 
         if use_binned_expressions:
-            # Optimized version - single with_columns chain with early filtering
             grouped = (
-                fragment_df
-                # Early filter to reduce data volume for subsequent operations
-                .with_columns(
-                    pl.col("value")
+                fragment_df.with_columns(
+                    pl.col(vk)
                     .rank(method="dense", descending=True)
-                    .over("cell_integer_id")
+                    .over(gk)
                     .alias("gene_rank")
                 )
-                .filter(pl.col("gene_rank") <= max_genes)  # Filter early!
-                # Now compute everything else on the reduced dataset
+                .filter(pl.col("gene_rank") <= max_items)
+                .with_columns(pl.col(vk).log1p().alias("log_value"))
                 .with_columns(
-                    [
-                        # Log transform for binning
-                        pl.col("value").log1p().alias("log_value"),
-                    ]
-                )
-                .with_columns(
-                    # Expression binning based on actual log values
                     pl.when(pl.col("log_value") > 0)
                     .then(
                         (
                             pl.col("log_value")
                             * n_expression_bins
-                            / pl.col("log_value").max().over("cell_integer_id")
+                            / pl.col("log_value").max().over(gk)
                         )
                         .floor()
                         .clip(0, n_expression_bins - 1)
@@ -100,30 +108,28 @@ class ScGPTWindow(Window):
                     .otherwise(0)
                     .alias("expr_bin")
                 )
-                .group_by("cell_integer_id", maintain_order=True)
+                .group_by(gk, maintain_order=True)
                 .agg(
                     [
-                        pl.col("gene_integer_id").alias("gene_sequence"),
-                        pl.col("expr_bin").alias("expr_sequence"),
+                        pl.col(ik).alias(item_out),
+                        pl.col("expr_bin").alias(value_out),
                     ]
                 )
             )
         else:
-            # Fast path: simple ranking without expression binning (matches SimpleWindow)
             result = fragment_df.with_columns(
                 [
-                    pl.col("value")
+                    pl.col(vk)
                     .rank(method="dense", descending=True)
-                    .over("cell_integer_id")
+                    .over(gk)
                     .alias("gene_rank")
                 ]
-            ).filter(pl.col("gene_rank") <= max_genes)
+            ).filter(pl.col("gene_rank") <= max_items)
 
-            # Group by cell and create separate columns (maintain_order so cell order matches shuffled input)
-            grouped = result.group_by("cell_integer_id", maintain_order=True).agg(
+            grouped = result.group_by(gk, maintain_order=True).agg(
                 [
-                    pl.col("gene_integer_id").alias("gene_sequence"),
-                    pl.col("value").alias("expr_sequence"),
+                    pl.col(ik).alias(item_out),
+                    pl.col(vk).alias(value_out),
                 ]
             )
 
@@ -139,72 +145,70 @@ class GeneformerWindow(Window):
     """
 
     def apply(
-        self, fragment_df: pl.DataFrame, max_genes: int, **kwargs: Any
+        self,
+        fragment_df: pl.DataFrame,
+        schema: DataSchema,
+        max_items: int,
+        **kwargs: Any,
     ) -> pl.DataFrame:
         """
         Apply Geneformer window function.
 
-        Args:
-            fragment_df: Polars DataFrame containing raw COO data from a PyArrow batch
-            max_genes: Maximum number of genes to include per cell
-            **kwargs: Additional parameters:
-                - min_percentile: Optional percentile filter (0-100)
-
-        Returns:
-            DataFrame with ranked gene sequences for Geneformer format
+        **kwargs:
+            min_percentile: Optional percentile filter (0-100)
         """
+        gk = schema.group_key
+        ik = schema.item_key
+        vk = schema.value_key
+        item_out = schema.item_list_key
+
         min_percentile = kwargs.get("min_percentile", None)
 
         if min_percentile is not None:
-            # Optimized version - early filtering to reduce data volume
             grouped = (
-                fragment_df
-                # Compute both ranks in one pass
-                .with_columns(
+                fragment_df.with_columns(
                     [
-                        pl.col("value")
+                        pl.col(vk)
                         .rank(method="dense", descending=True)
-                        .over("cell_integer_id")
+                        .over(gk)
                         .alias("gene_rank"),
-                        pl.col("value")
+                        pl.col(vk)
                         .rank(method="dense", descending=False)
-                        .over("cell_integer_id")
+                        .over(gk)
                         .alias("percentile_rank"),
                     ]
                 )
-                # Early filter to reduce data volume for subsequent operations
                 .filter(
-                    (pl.col("gene_rank") <= max_genes)
+                    (pl.col("gene_rank") <= max_items)
                     & (
                         pl.col("percentile_rank")
                         >= min_percentile
-                        * pl.col("percentile_rank").max().over("cell_integer_id")
+                        * pl.col("percentile_rank").max().over(gk)
                         / 100
                     )
                 )
-                .group_by("cell_integer_id", maintain_order=True)
+                .group_by(gk, maintain_order=True)
                 .agg(
                     [
-                        pl.col("gene_integer_id").alias("gene_sequence"),
+                        pl.col(ik).alias(item_out),
                     ]
                 )
             )
         else:
-            # Standard ranking without percentile filtering
             grouped = (
                 fragment_df.with_columns(
                     [
-                        pl.col("value")
+                        pl.col(vk)
                         .rank(method="dense", descending=True)
-                        .over("cell_integer_id")
+                        .over(gk)
                         .alias("gene_rank")
                     ]
                 )
-                .filter(pl.col("gene_rank") <= max_genes)
-                .group_by("cell_integer_id", maintain_order=True)
+                .filter(pl.col("gene_rank") <= max_items)
+                .group_by(gk, maintain_order=True)
                 .agg(
                     [
-                        pl.col("gene_integer_id").alias("gene_sequence"),
+                        pl.col(ik).alias(item_out),
                     ]
                 )
             )
@@ -220,35 +224,54 @@ class SimpleWindow(Window):
     """
 
     def apply(
-        self, fragment_df: pl.DataFrame, max_genes: int, **kwargs: Any
+        self,
+        fragment_df: pl.DataFrame,
+        schema: DataSchema,
+        max_items: int,
+        **kwargs: Any,
     ) -> pl.DataFrame:
-        """
-        Apply simple window function for maximum performance.
+        """Rank by value, keep top ``max_items``, aggregate gene and raw value lists."""
+        gk = schema.group_key
+        ik = schema.item_key
+        vk = schema.value_key
+        item_out = schema.item_list_key
+        value_out = schema.value_list_key or "expr_sequence"
 
-        Args:
-            fragment_df: Polars DataFrame containing raw COO data
-            max_genes: Maximum number of genes to include per cell
-            **kwargs: Additional parameters (ignored for performance)
-
-        Returns:
-            DataFrame with gene sequences
-        """
-        # Simple ranking approach (exactly same as test file)
         result = fragment_df.with_columns(
             [
-                pl.col("value")
+                pl.col(vk)
                 .rank(method="dense", descending=True)
-                .over("cell_integer_id")
+                .over(gk)
                 .alias("gene_rank")
             ]
-        ).filter(pl.col("gene_rank") <= max_genes)
+        ).filter(pl.col("gene_rank") <= max_items)
 
-        # Group by cell and create gene sequences (maintain_order so cell order matches shuffled input)
-        grouped = result.group_by("cell_integer_id", maintain_order=True).agg(
+        grouped = result.group_by(gk, maintain_order=True).agg(
             [
-                pl.col("gene_integer_id").alias("gene_sequence"),
-                pl.col("value").alias("expr_sequence"),
+                pl.col(ik).alias(item_out),
+                pl.col(vk).alias(value_out),
             ]
         )
 
         return grouped
+
+
+class WindowType(str, Enum):
+    """Window implementation selector (mirrors tokenizer strategy names)."""
+
+    GENEFORMER = "geneformer"
+    SCPGPT = "scgpt"
+    SIMPLE = "simple"
+
+
+def create_window(window_type: WindowType | str) -> Window:
+    """Factory for ML window implementations."""
+    if isinstance(window_type, str):
+        window_type = WindowType(window_type.lower())
+    if window_type is WindowType.GENEFORMER:
+        return GeneformerWindow()
+    if window_type is WindowType.SCPGPT:
+        return ScGPTWindow()
+    if window_type is WindowType.SIMPLE:
+        return SimpleWindow()
+    raise ValueError(f"Unknown window type: {window_type!r}")

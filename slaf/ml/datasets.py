@@ -54,6 +54,7 @@ except ImportError:
     logger.warning("Polars not available. Fragment loading will be disabled.")
 
 from slaf.core.slaf import SLAFArray
+from slaf.core.tabular_schema import SLAF_LANCE_COO_SCHEMA
 from slaf.ml.samplers import Shuffle
 from slaf.ml.tokenizers import SLAFTokenizer
 
@@ -1030,7 +1031,8 @@ class PrefetchBatchProcessor:
                         raise RuntimeError("Tokenizer is required for tokenized mode")
 
                     grouped = tokenizer.window.apply(
-                        shuffled_df,  # type: ignore[arg-type]  # Use the shuffled DataFrame
+                        shuffled_df,
+                        SLAF_LANCE_COO_SCHEMA,
                         tokenizer.max_genes,
                         **window_params,
                     )

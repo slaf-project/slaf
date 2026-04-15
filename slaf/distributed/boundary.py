@@ -18,7 +18,7 @@ import polars as pl
 from loguru import logger
 
 if TYPE_CHECKING:
-    from slaf.distributed.processor import DataSchema
+    from slaf.core.tabular_schema import DataSchema
 
 
 class GroupBoundaryHandler:

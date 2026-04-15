@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import polars as pl
 
+from slaf.core.tabular_schema import DataSchema
+
 if TYPE_CHECKING:
     from slaf.distributed.boundary import GroupBoundaryHandler
 
@@ -25,60 +27,6 @@ def _copy_for_serialization(x: Any) -> Any:
     if isinstance(x, list):
         return list(x)
     return x
-
-
-class DataSchema:
-    """
-    Generic schema configuration for tabular data processing.
-
-    Describes the structure of input data and output aggregations.
-    The input data must be tabular with at least three columns:
-    - group_key: Column to group by
-    - item_key: Column for items within groups
-    - value_key: Column for values
-
-    Output columns after aggregation:
-    - group_key_out: Output group key (defaults to group_key if None)
-    - item_list_key: Aggregated list of items per group
-    - value_list_key: Optional aggregated list of values per group
-    """
-
-    # Input columns (required)
-    group_key: str
-    item_key: str
-    value_key: str
-
-    # Output columns (after window/aggregation)
-    group_key_out: str | None
-    item_list_key: str
-    value_list_key: str | None
-
-    def __init__(
-        self,
-        group_key: str,
-        item_key: str,
-        value_key: str,
-        group_key_out: str | None = None,
-        item_list_key: str = "item_list",
-        value_list_key: str | None = None,
-    ):
-        """
-        Initialize data schema.
-
-        Args:
-            group_key: Column to group by
-            item_key: Column for items within groups
-            value_key: Column for values
-            group_key_out: Output group key (defaults to group_key if None)
-            item_list_key: Aggregated list of items per group
-            value_list_key: Optional aggregated list of values per group
-        """
-        self.group_key = group_key
-        self.item_key = item_key
-        self.value_key = value_key
-        self.group_key_out = group_key_out
-        self.item_list_key = item_list_key
-        self.value_list_key = value_list_key
 
 
 class WindowProtocol(Protocol):

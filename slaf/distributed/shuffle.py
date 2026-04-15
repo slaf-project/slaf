@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 import polars as pl
 
 if TYPE_CHECKING:
-    from slaf.distributed.processor import DataSchema
+    from slaf.core.tabular_schema import DataSchema
 
 
 class Shuffle:
