@@ -1,4 +1,4 @@
-# Pretraining scGPT on Tahoe-100M for under $20 over a lunch break
+# Pretraining scGPT on Tahoe-100M for ~$10 over a lunch break
 
 ## How distributed dataloading changes the economics of single-cell foundation models
 
@@ -288,23 +288,32 @@ Model weights and downstream evaluation are not part of this release, stay tuned
 
 | Config | Median step latency | Global cells/sec | Dataloader wait | MFU |
 |---|---|---|---|---|
-| 1x H200 (`modal_train.py`) | 323 ms | ~396 | ~0 ms | ~23.7% |
-| 8x H100 DDP (`modal_train_distributed.py`) | 56 ms | ~18,300 | ~0 ms | ~17.3% |
+| 1x H100 (`modal_train.py`, `scgpt` ~51M params) | ~285 ms | ~840 | ~0 ms | ~37% |
+| 8x H100 DDP (`modal_train_distributed.py`, same model) | ~60 ms | ~31.9k | ~0 ms | ~32% |
+
+Numbers follow the current [`fast-scgpt` README](https://github.com/slaf-project/fast-scgpt):
+Flash Attention 4, **no** `torch.compile` (`--no-use-compile`), sparse gene head,
+**1024** max genes, **240** cells per step on 1× GPU and **240 per GPU** on 8×
+(effective global batch **1920**), Tahoe-100M from **S3** through the distributed
+dataloader with **two** CPU prefetch workers on the 8-GPU run. Median step time
+on 8 GPUs is a **max over ranks** per step (slowest GPU), then median across
+steps—see the README for MFU / `nvidia-smi` definitions.
 
 In single-GPU setting, we use `SLAFDataLoader`.
-Both data loading and training share the same node. Median step latency is 323 ms, and time
-blocked on `next(batch)` is approximately 0 ms once the pipeline is warm. The
+Both data loading and training share the same node. Median step latency is about **285 ms**, and time
+blocked on `next(batch)` is approximately **0 ms** in steady state (the README’s
+profiled breakdown labels that phase **`dl`**). The
 dataloader has been removed from the critical path even when CPU and GPU share
 the same node. That's a consequence of posts 1 and 2: thread-based prefetch with
 vectorized outer loop tokenization and Mixture of Scanners keeps the queue full
 faster than the GPU can drain it.
 
-The 8x H100 result, based on `SLAFDistributedDataLoader` tells a different story.
-Median step latency drops to 56 ms per GPU (worst case across 8 GPUs per step)
-with no change to training code!
+The 8x H100 result, based on `DistributedSLAFDataLoader`, tells a different story.
+Median step latency drops to about **60 ms** per step at the same per-GPU batch (**worst rank** per step, then median across steps)
+with no change to training code. At **240** cells per GPU the README still reports **sub-100 ms** steps.
 
 The more important difference between these two configurations is what the CPU
-is doing during the training step. On the single H200, the CPU is running the
+is doing during the training step. On the single H100, the CPU is running the
 full SLAF ingestion pipeline on the same host as the GPU, so **CPU cores, host
 DRAM bandwidth, and the PCIe link to the device** are shared between
 preprocessing and staging batches for the accelerator. On the 8x H100
@@ -313,15 +322,15 @@ and call `.to(device)`. The ingestion work happens entirely on the CPU worker
 fleet, on separate machines. That single-responsibility separation is why the
 per-GPU step latency is lower and it's the concrete payoff of the architectural decoupling.
 
-At a global batch size of 1,024 cells (128 cells x 8 GPUs) and 56 ms per step,
-*training* throughput, not just dataloading throughput is
-roughly 18,300 cells/sec including forward pass, backward pass, optimizer step,
+At a global batch size of **1,920** cells (240 × 8 GPUs) and **~60 ms** per step,
+*training* throughput—not just dataloading throughput—is
+roughly **31.9k cells/sec** including forward pass, backward pass, optimizer step,
 and **NCCL gradient synchronization** (in standard DDP this is mostly an
 **all-reduce** of gradients across ranks).
 
 ---
 
-## The economics: pretraining for under $20
+## The $10 pretraining run
 
 To put these numbers in context, consider the reference point from the original
 scGPT pretraining discussion. In a [2023 GitHub thread](https://github.com/bowang-lab/scGPT/issues/5)
@@ -329,14 +338,14 @@ on pretraining cost, the authors described training on roughly 10.3M cells acros
 cell presentations through the training loop — taking approximately three to four
 days on four A100s, with data staged to cluster-attached storage.
 
-Running 62M cell presentations through the 8x H100 configuration at 18,300
-cells/sec:
+Running 62M cell presentations through the 8x H100 configuration at **~31.9k**
+cells/sec (README steady-state global throughput):
 
-62,000,000 / 18,300 ≈ 3,390 seconds — about 56 minutes of GPU wall time in
+62,000,000 / 31,900 ≈ 1,940 seconds — about **32 minutes** of GPU wall time in
 steady state.
 
-Billed GPU time: 8 GPUs × (3,390s / 3,600 s/hr) ≈ 7.5 GPU-hours. At $2.50 per
-H100 per hour, that's roughly **$19 in GPU line items**. CPU prefetch workers
+Billed GPU time: 8 GPUs × (1,940s / 3,600 s/hr) ≈ **4.3 GPU-hours**. At $2.50 per
+H100 per hour, that's roughly **$11 in GPU line items**. CPU prefetch workers
 round to noise next to eight H100s. Separately, the object store bill for
 repeated streaming matters: [Tigris does not charge egress](https://www.tigrisdata.com/pricing)
 (data transfer out is free on Standard and several other tiers at time of writing),
@@ -357,7 +366,7 @@ while waiting for the next batch costs exactly the same per hour as one running
 at 100% GPU utilization. The goal of everything in this series has been to make the latter
 the steady state.
 
-What changes when a training run costs $19 instead of several thousand: teams
+What changes when a training run costs on the order of **$10** in GPU time instead of several thousand: teams
 can treat pretraining as iterative rather than monolithic. The question of
 whether six epochs generalizes better than three becomes an afternoon experiment.
 Fine-tuning feels like working with scikit-learn in a notebook.
