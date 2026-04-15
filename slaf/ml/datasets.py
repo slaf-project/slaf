@@ -1011,9 +1011,14 @@ class PrefetchBatchProcessor:
                     shuffle_start = time.time()
 
                     # Apply shuffling directly to the DataFrame (no chunking for tokenized mode)
-                    shuffled_df = self.shuffle.apply(
+                    shuffled_out = self.shuffle.apply(
                         complete_df,  # type: ignore
                         self.seed + self.batch_id + self.current_epoch * 10000,
+                    )
+                    shuffled_df: pl.DataFrame = (
+                        pl.concat(shuffled_out, how="vertical")
+                        if isinstance(shuffled_out, list)
+                        else shuffled_out
                     )
 
                     shuffle_time = time.time() - shuffle_start
