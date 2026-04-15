@@ -5,6 +5,7 @@ Generic worker implementation for distributed dataloading.
 
 import asyncio
 import importlib
+import inspect
 import pickle
 import queue as queue_module
 import random
@@ -192,6 +193,21 @@ def prefetch_worker(
     use_tokenizer_window = processor_config.get("use_tokenizer_window", False)
     if use_tokenizer_window and tokenizer_instance is not None:
         window = tokenizer_instance.window
+        apply_fn = getattr(window, "apply", None)
+        if apply_fn is None:
+            raise TypeError(
+                "tokenizer window must implement apply(df, schema, max_items, **kwargs)"
+            )
+        try:
+            params = inspect.signature(apply_fn).parameters
+        except (TypeError, ValueError):
+            params = None
+        if params is None or "schema" not in params or "max_items" not in params:
+            raise TypeError(
+                "tokenizer window must use the signature "
+                "apply(df, schema, max_items, **kwargs); "
+                "please upgrade slafdb in the worker image."
+            )
     elif processor_config.get("window_factory"):
         # Dynamic import based on config - module path comes from config, not hardcoded
         factory_config = processor_config["window_factory"]

@@ -22,40 +22,17 @@ from slaf.distributed.dataloader import DecompressingQueueWrapper, DistributedDa
 # Import SLAF-specific components (for type hints and adapters)
 from slaf.ml.tokenizers import GeneformerTokenizer, ScGPTTokenizer
 
-
-def _worker_slafdb_ml_package_spec() -> str:
-    """Dependency spec for Modal workers.
-
-    Prefer an exact pin to the ``slafdb`` version on the machine that runs
-    ``deploy_dataloader_app`` / ``modal deploy``, so workers always match the
-    training client (tokenizer/window/processor API).
-
-    If metadata is missing (e.g. some editable installs), fall back to a
-    compatible range; bump the floor when you require worker-only fixes from a
-    newer release.
-    """
-    try:
-        from importlib.metadata import version
-
-        return f"slafdb[ml]=={version('slafdb')}"
-    except Exception:
-        return "slafdb[ml]>=0.5.0,<0.6"
-
-
 # Configure Modal image for SLAF workers.
 # Cache bust must run *before* ``uv_pip_install`` so the install layer is not
 # reused when only the slafdb version/spec changes.
 _BUILD_TS = datetime.now().strftime("%Y%m%d-%H%M%S")
-_SLAFDB_ML = _worker_slafdb_ml_package_spec()
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("build-essential", "python3-dev", "git")
     .pip_install("uv")
-    .run_commands(
-        f"echo 'slaf-dataloader image: cache bust {_BUILD_TS}; slaf spec: {_SLAFDB_ML}'"
-    )
+    .run_commands(f"echo 'slaf-dataloader image: cache bust {_BUILD_TS}'")
     .uv_pip_install(
-        _SLAFDB_ML,
+        "slafdb[ml] @ git+https://github.com/slaf-project/slaf.git@main",
         "psutil>=6.0.0",  # prefetch memory stats in slaf.ml.datasets (not a core slaf dep)
         force_build=True,
     )
