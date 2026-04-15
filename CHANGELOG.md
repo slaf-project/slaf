@@ -1,52 +1,7 @@
 # Changelog
 
-## [0.5.0] - 2026-04-14
+## [0.5.1] - 2026-04-15
 
 ### Added
-- ce01185 fix mypy typing in scgpt tokenizer return path
-- b6b65f7 fix test expectation for geneformer values field
-- 0f8a26c align scgpt tokenization with canonical dual-stream contract
-- 7328217 chore: linting fix
-- 604e949 fix(ml): satisfy mypy for Modal Queue/Dict from_name
-- 99d7e8d Thread max_genes from dataloaders into tokenizers
-- 83322da chore: restore comments
-- 1fdb13f feat(ml): Modal queue environments, defer default app; add scaling benchmark
-- cfd7a0a clearer CTA
-- e0b4ac7 remove appendix on Ray data; distracting
-- 6315804 final draft
-- fe8caf3 distributed dataloader benchmarks
-- d3a72d8 Sync distributed counterparts.
-- 97a0a22 Remove `tokenizer_type`
-- 3196939 Fix up PyTorch Dataset tests.
-- e27cca0 Patch Window instantiation.
-- f1112de Remove obsolete tests.
-- 313921f Remove stray pass.
-- 5fd1637 Move around Window function and simplify parameter passing.
-- bfb7f6e Update typing issues.
-- 71dfb66 Separate out Geneformer and scGPT tokenizers.
-- 8bf868c WIP cost and runtime numbers
-- ebaa2e4 Enhance SLAFConverter to preserve obsm, varm, and uns during conversion; add regression tests for spatial metadata handling
-- 1dbb992 draft of distributed dataloader revisions
-- e563c9d draft of distributed dataloader + distributed training blog post
-- 83ed0e7 (chore) linting
-- dec032d (fix): CLI test should have tiledb layer name
-- 8d8bbb6 test: TileDB SOMA fixture and X layer coverage for chunked reader
-- 32737e9 fix(prefetch): flush non-MoS partial cells at iterator exhaustion
-- 315cd46 test: drop skipped non-MoS tiny_slaf parametrizations
-- 5641e35 test: remove optional heart_10k MoS integration module
-- 93bfca0 test(integration): derive n_cells from _cell_start_index in heart_10k check
-- 29441e8 test: make cell boundary reassembly regression CI-safe
-- a2ea73f fix(mos): emit remaining partial cells when generators exhaust
-- 5c5ec9b test(mos): reproduce lost final partial batch on exhaustion
-- c088c9a test: add dedicated SLAF fixture for boundary reassembly
-- 90a4f61 add LanceDB guest post draft
-- af222d8 Add configurable TileDB X layer name for conversion
-- af213a0 bump dataset version in tests
-- c2eacfa adds discord link and contribution guide
-- ea77e2e bump default lance version to 2.2 and default slaf version to 0.5
-- 4bb7a67 don't assume user has heart_10k downloaded
-- 6b231b8 vectorize cell boundary validation
-- 184f1a8 flush partial_cell_data after generators are exhausted
-- 3a37f18 replace 'hold back each generator's last cell' heuristic with ground-truth validation using _cell_start_index
-- 5f7e943 fix partial_cell_data accumulation in MoS mode
-- fdec8d6 make tests run faster
+- 912a043 (fix) mypy
+- b1970e4 fix(distributed): align ML windows with DataSchema; core tabular schema; Modal pin
