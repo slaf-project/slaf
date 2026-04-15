@@ -1,7 +1,6 @@
 # Changelog
 
-## [0.5.1] - 2026-04-15
+## [0.5.2] - 2026-04-15
 
 ### Added
-- 912a043 (fix) mypy
-- b1970e4 fix(distributed): align ML windows with DataSchema; core tabular schema; Modal pin
+- a0c6c39 fix(distributed): enforce window apply(df, schema, max_items) contract
