@@ -2,13 +2,29 @@ import polars as pl
 import pytest
 import torch
 
-from slaf.ml.dataloaders import (
-    GeneformerTokenizer,
-    ScGPTTokenizer,
-    SLAFDataLoader,
-    get_device_info,
-    get_optimal_device,
-)
+from slaf.ml.dataloaders import SLAFDataLoader, get_device_info, get_optimal_device
+from slaf.ml.tokenizers import GeneformerTokenizer, ScGPTTokenizer
+
+
+def build_dataloader(slaf_array, tokenizer_kind="geneformer", raw_mode=False, **kwargs):
+    tokenizer_kwargs = {}
+    for key in ("max_genes", "vocab_size", "n_expression_bins"):
+        if key in kwargs:
+            tokenizer_kwargs[key] = kwargs.pop(key)
+
+    if raw_mode:
+        return SLAFDataLoader(slaf_array, raw_mode=True, **kwargs)
+
+    if tokenizer_kind == "scgpt":
+        tokenizer = ScGPTTokenizer(slaf_array, **tokenizer_kwargs)
+    else:
+        tokenizer = GeneformerTokenizer(slaf_array, **tokenizer_kwargs)
+
+    return SLAFDataLoader(
+        slaf_array,
+        tokenizer=tokenizer,
+        **kwargs,
+    )
 
 
 class TestSLAFDataLoader:
@@ -16,7 +32,7 @@ class TestSLAFDataLoader:
 
     def test_dataloader_initialization(self, tiny_slaf):
         """Test SLAFDataLoader initialization with new architecture"""
-        dataloader = SLAFDataLoader(tiny_slaf)
+        dataloader = build_dataloader(tiny_slaf)
 
         # Check basic attributes
         assert dataloader.slaf_array is tiny_slaf
@@ -34,9 +50,9 @@ class TestSLAFDataLoader:
 
     def test_dataloader_initialization_custom_params(self, tiny_slaf):
         """Test SLAFDataLoader initialization with custom parameters"""
-        dataloader = SLAFDataLoader(
+        dataloader = build_dataloader(
             tiny_slaf,
-            tokenizer_type="scgpt",
+            tokenizer_kind="scgpt",
             batch_size=16,
             max_genes=1024,
             vocab_size=1000,
@@ -50,11 +66,18 @@ class TestSLAFDataLoader:
         assert dataloader.tokenizer.vocab_size == 1000
         assert dataloader.tokenizer.n_expression_bins == 5
 
+    def test_dataloader_initialization_with_default_loading_mode(self, tiny_slaf):
+        """Test SLAFDataLoader default loading mode."""
+        dataloader = build_dataloader(tiny_slaf)
+
+        assert dataloader._dataset.batch_processor.use_mixture_of_scanners is True
+        assert dataloader._dataset.batch_processor.by_fragment is True
+
     def test_geneformer_iteration(self, tiny_slaf):
         """Test dataloader iteration with Geneformer tokenizer"""
-        dataloader = SLAFDataLoader(
+        dataloader = build_dataloader(
             tiny_slaf,
-            tokenizer_type="geneformer",
+            tokenizer_kind="geneformer",
             batch_size=5,
             max_genes=10,
         )
@@ -90,9 +113,9 @@ class TestSLAFDataLoader:
 
     def test_scgpt_iteration(self, tiny_slaf):
         """Test dataloader iteration with scGPT tokenizer"""
-        dataloader = SLAFDataLoader(
+        dataloader = build_dataloader(
             tiny_slaf,
-            tokenizer_type="scgpt",
+            tokenizer_kind="scgpt",
             batch_size=5,
             max_genes=10,
         )
@@ -113,7 +136,7 @@ class TestSLAFDataLoader:
 
             assert input_ids.shape[0] == attention_mask.shape[0]
             assert input_ids.shape[0] == cell_ids.shape[0]
-            assert input_ids.shape[1] == 12  # scGPT dual stream: max_genes + 2
+            assert input_ids.shape[1] == 12  # scGPT: max_genes + 2
             assert values.shape == input_ids.shape
 
             # Check data types
@@ -129,7 +152,7 @@ class TestSLAFDataLoader:
 
     def test_consistent_batch_sizes(self, tiny_slaf):
         """Test that batches have consistent sizes"""
-        dataloader = SLAFDataLoader(tiny_slaf, batch_size=8)
+        dataloader = build_dataloader(tiny_slaf, batch_size=8)
 
         batch_sizes = []
         for batch in dataloader:
@@ -146,7 +169,7 @@ class TestSLAFDataLoader:
 
     def test_cell_id_mapping(self, tiny_slaf):
         """Test that cell IDs are properly mapped"""
-        dataloader = SLAFDataLoader(tiny_slaf, batch_size=5)
+        dataloader = build_dataloader(tiny_slaf, batch_size=5)
 
         for batch in dataloader:
             cell_ids = batch["cell_ids"]
@@ -162,7 +185,7 @@ class TestSLAFDataLoader:
 
     def test_tokenizer_integration(self, tiny_slaf):
         """Test that tokenizer is properly integrated"""
-        dataloader = SLAFDataLoader(tiny_slaf)
+        dataloader = build_dataloader(tiny_slaf)
 
         # Check that tokenizer has expected attributes
         assert hasattr(dataloader.tokenizer, "gene_vocab")
@@ -174,7 +197,7 @@ class TestSLAFDataLoader:
 
     def test_dataloader_cleanup(self, tiny_slaf):
         """Test dataloader cleanup functionality"""
-        dataloader = SLAFDataLoader(tiny_slaf)
+        dataloader = build_dataloader(tiny_slaf)
 
         # Test that cleanup methods exist and don't crash
         # The dataloader doesn't have a stop_streaming method
@@ -185,7 +208,7 @@ class TestSLAFDataLoader:
 
     def test_dataloader_device(self, tiny_slaf):
         """Test dataloader device handling"""
-        dataloader = SLAFDataLoader(tiny_slaf)
+        dataloader = build_dataloader(tiny_slaf)
 
         # Get a sample batch
         batch = next(iter(dataloader))
@@ -197,7 +220,7 @@ class TestSLAFDataLoader:
 
     def test_multi_epoch_initialization(self, tiny_slaf):
         """Test SLAFDataLoader initialization with multi-epoch support"""
-        dataloader = SLAFDataLoader(
+        dataloader = build_dataloader(
             tiny_slaf,
             n_epochs=5,  # Test multi-epoch initialization
         )
@@ -208,7 +231,7 @@ class TestSLAFDataLoader:
 
     def test_multi_epoch_iteration(self, tiny_slaf):
         """Test dataloader iteration with multiple epochs"""
-        dataloader = SLAFDataLoader(
+        dataloader = build_dataloader(
             tiny_slaf,
             batch_size=4,  # Small batch size for testing
             n_epochs=3,  # Test with 3 epochs
@@ -239,7 +262,7 @@ class TestSLAFDataLoader:
 
     def test_multi_epoch_epoch_progression(self, tiny_slaf):
         """Test that epochs progress correctly in multi-epoch mode"""
-        dataloader = SLAFDataLoader(
+        dataloader = build_dataloader(
             tiny_slaf,
             batch_size=2,  # Very small batch size
             n_epochs=4,  # Test with 4 epochs
@@ -272,7 +295,7 @@ class TestSLAFDataLoader:
 
     def test_single_epoch_default_behavior(self, tiny_slaf):
         """Test that single epoch (default) behavior is unchanged"""
-        dataloader = SLAFDataLoader(
+        dataloader = build_dataloader(
             tiny_slaf,
             batch_size=8,
             n_epochs=1,  # Single epoch (default)
@@ -296,9 +319,9 @@ class TestSLAFDataLoader:
     def test_multi_epoch_with_different_tokenizers(self, tiny_slaf):
         """Test multi-epoch functionality with different tokenizer types"""
         # Test with Geneformer - limit epochs and batches for speed
-        dataloader_geneformer = SLAFDataLoader(
+        dataloader_geneformer = build_dataloader(
             tiny_slaf,
-            tokenizer_type="geneformer",
+            tokenizer_kind="geneformer",
             batch_size=4,
             n_epochs=2,
         )
@@ -317,9 +340,9 @@ class TestSLAFDataLoader:
         )
 
         # Test with scGPT - limit epochs and batches for speed
-        dataloader_scgpt = SLAFDataLoader(
+        dataloader_scgpt = build_dataloader(
             tiny_slaf,
-            tokenizer_type="scgpt",
+            tokenizer_kind="scgpt",
             batch_size=4,
             n_epochs=2,
         )
@@ -339,7 +362,7 @@ class TestSLAFDataLoader:
 
     def test_multi_epoch_completion(self, tiny_slaf):
         """Test that dataloader correctly completes all epochs"""
-        dataloader = SLAFDataLoader(
+        dataloader = build_dataloader(
             tiny_slaf,
             batch_size=2,  # Small batch size to complete quickly
             n_epochs=3,  # Test with 3 epochs
@@ -366,7 +389,7 @@ class TestSLAFDataLoader:
 
     def test_multi_epoch_parameter_passing(self, tiny_slaf):
         """Test that n_epochs parameter is correctly passed through the hierarchy"""
-        dataloader = SLAFDataLoader(
+        dataloader = build_dataloader(
             tiny_slaf,
             n_epochs=7,  # Test with 7 epochs
         )
@@ -379,9 +402,9 @@ class TestSLAFDataLoader:
 
     def test_multi_epoch_with_custom_parameters(self, tiny_slaf):
         """Test multi-epoch functionality with custom parameters"""
-        dataloader = SLAFDataLoader(
+        dataloader = build_dataloader(
             tiny_slaf,
-            tokenizer_type="scgpt",
+            tokenizer_kind="scgpt",
             batch_size=6,
             max_genes=512,
             n_epochs=4,
@@ -479,7 +502,7 @@ class TestSLAFDataLoader:
 
     def test_dataloader_tokenized_mode_fragment(self, tiny_slaf):
         """Test dataloader in tokenized mode with fragment loading."""
-        dataloader = SLAFDataLoader(
+        dataloader = build_dataloader(
             tiny_slaf,
             batch_size=32,
             raw_mode=False,
@@ -501,7 +524,7 @@ class TestSLAFDataLoader:
 
     def test_dataloader_tokenized_mode_batch(self, tiny_slaf):
         """Test dataloader in tokenized mode with batch loading."""
-        dataloader = SLAFDataLoader(
+        dataloader = build_dataloader(
             tiny_slaf,
             batch_size=32,
             raw_mode=False,
@@ -523,12 +546,9 @@ class TestSLAFDataLoader:
 
     def test_dataloader_parameters_consistency(self, tiny_slaf):
         """Test that all parameters are properly passed through."""
-        dataloader = SLAFDataLoader(
+        dataloader = build_dataloader(
             tiny_slaf,
             batch_size=64,
-            max_genes=1024,
-            vocab_size=10000,
-            n_expression_bins=5,
             n_epochs=5,
             raw_mode=True,
             verbose=True,
@@ -538,7 +558,7 @@ class TestSLAFDataLoader:
         )
 
         assert dataloader.batch_size == 64
-        assert dataloader.max_genes == 1024
+        assert dataloader.max_genes == 0
         assert dataloader.n_epochs == 5
         assert dataloader.raw_mode is True
         assert dataloader.verbose is True
@@ -547,7 +567,7 @@ class TestSLAFDataLoader:
 
     def test_dataloader_length(self, tiny_slaf):
         """Test that dataloader length returns 0 for streaming datasets."""
-        dataloader = SLAFDataLoader(
+        dataloader = build_dataloader(
             tiny_slaf,
             batch_size=32,
             verbose=False,
@@ -557,8 +577,8 @@ class TestSLAFDataLoader:
 
     def test_mixture_of_scanners_initialization(self, tiny_slaf):
         """Test SLAFDataLoader initialization with Mixture of Scanners (MoS)"""
-        dataloader = SLAFDataLoader(
-            slaf_array=tiny_slaf,
+        dataloader = build_dataloader(
+            tiny_slaf,
             batch_size=32,
             use_mixture_of_scanners=True,
             n_scanners=8,
@@ -576,8 +596,8 @@ class TestSLAFDataLoader:
     def test_mixture_of_scanners_parameter_validation(self, tiny_slaf):
         """Test MoS parameter validation in SLAFDataLoader"""
         # Test valid parameters
-        dataloader = SLAFDataLoader(
-            slaf_array=tiny_slaf,
+        dataloader = build_dataloader(
+            tiny_slaf,
             batch_size=32,
             use_mixture_of_scanners=True,
             n_scanners=16,
@@ -588,7 +608,7 @@ class TestSLAFDataLoader:
         # Test invalid n_scanners (too low)
         with pytest.raises(ValueError, match="n_scanners must be at least 1"):
             SLAFDataLoader(
-                slaf_array=tiny_slaf,
+                tiny_slaf,
                 batch_size=32,
                 use_mixture_of_scanners=True,
                 n_scanners=0,
@@ -598,7 +618,7 @@ class TestSLAFDataLoader:
         # Test invalid n_scanners (too high)
         with pytest.raises(ValueError, match="n_scanners cannot exceed 100"):
             SLAFDataLoader(
-                slaf_array=tiny_slaf,
+                tiny_slaf,
                 batch_size=32,
                 use_mixture_of_scanners=True,
                 n_scanners=101,
@@ -610,7 +630,7 @@ class TestSLAFDataLoader:
             ValueError, match="prefetch_batch_size must be at least 1,000"
         ):
             SLAFDataLoader(
-                slaf_array=tiny_slaf,
+                tiny_slaf,
                 batch_size=32,
                 use_mixture_of_scanners=True,
                 n_scanners=16,
@@ -622,7 +642,7 @@ class TestSLAFDataLoader:
             ValueError, match="prefetch_batch_size cannot exceed 10,000,000"
         ):
             SLAFDataLoader(
-                slaf_array=tiny_slaf,
+                tiny_slaf,
                 batch_size=32,
                 use_mixture_of_scanners=True,
                 n_scanners=16,
@@ -631,8 +651,8 @@ class TestSLAFDataLoader:
 
     def test_mixture_of_scanners_iteration(self, tiny_slaf):
         """Test that MoS dataloader can iterate through batches"""
-        dataloader = SLAFDataLoader(
-            slaf_array=tiny_slaf,
+        dataloader = build_dataloader(
+            tiny_slaf,
             batch_size=8,
             use_mixture_of_scanners=True,
             n_scanners=4,
@@ -654,7 +674,7 @@ class TestSLAFDataLoader:
     def test_mixture_of_scanners_with_raw_mode(self, tiny_slaf):
         """Test MoS functionality with raw mode in SLAFDataLoader"""
         dataloader = SLAFDataLoader(
-            slaf_array=tiny_slaf,
+            tiny_slaf,
             batch_size=32,
             raw_mode=True,
             use_mixture_of_scanners=True,
@@ -678,8 +698,8 @@ class TestSLAFDataLoader:
 
     def test_mixture_of_scanners_with_tokenized_mode(self, tiny_slaf):
         """Test MoS functionality with tokenized mode in SLAFDataLoader"""
-        dataloader = SLAFDataLoader(
-            slaf_array=tiny_slaf,
+        dataloader = build_dataloader(
+            tiny_slaf,
             batch_size=32,
             raw_mode=False,
             use_mixture_of_scanners=True,
@@ -705,8 +725,8 @@ class TestSLAFDataLoader:
     def test_mixture_of_scanners_backward_compatibility(self, tiny_slaf):
         """Test that MoS is backward compatible (enabled by default) in SLAFDataLoader"""
         # Default behavior (MoS enabled)
-        dataloader_default = SLAFDataLoader(
-            slaf_array=tiny_slaf,
+        dataloader_default = build_dataloader(
+            tiny_slaf,
             batch_size=32,
         )
 
@@ -716,8 +736,8 @@ class TestSLAFDataLoader:
         )
 
         # Explicitly disable MoS
-        dataloader_disabled = SLAFDataLoader(
-            slaf_array=tiny_slaf,
+        dataloader_disabled = build_dataloader(
+            tiny_slaf,
             batch_size=32,
             use_mixture_of_scanners=False,
         )
@@ -730,8 +750,8 @@ class TestSLAFDataLoader:
 
     def test_mixture_of_scanners_parameter_passing(self, tiny_slaf):
         """Test that MoS parameters are correctly passed through the hierarchy"""
-        dataloader = SLAFDataLoader(
-            slaf_array=tiny_slaf,
+        dataloader = build_dataloader(
+            tiny_slaf,
             batch_size=32,
             use_mixture_of_scanners=True,
             n_scanners=12,
@@ -749,9 +769,9 @@ class TestSLAFDataLoader:
 
     def test_mixture_of_scanners_with_custom_parameters(self, tiny_slaf):
         """Test MoS functionality with custom parameters in SLAFDataLoader"""
-        dataloader = SLAFDataLoader(
-            slaf_array=tiny_slaf,
-            tokenizer_type="scgpt",
+        dataloader = build_dataloader(
+            tiny_slaf,
+            tokenizer_kind="scgpt",
             batch_size=16,
             use_mixture_of_scanners=True,
             n_scanners=6,
@@ -764,7 +784,7 @@ class TestSLAFDataLoader:
         assert dataloader.prefetch_batch_size == 1048576
         assert isinstance(dataloader.tokenizer, ScGPTTokenizer)
         assert dataloader.batch_size == 16
-        assert dataloader.max_genes == 2048
+        assert dataloader.max_genes == dataloader.tokenizer.max_genes
 
         # Test iteration
         batch_count = 0
@@ -780,8 +800,8 @@ class TestSLAFDataLoader:
 
     def test_mixture_of_scanners_multi_epoch(self, tiny_slaf):
         """Test MoS functionality with multi-epoch training"""
-        dataloader = SLAFDataLoader(
-            slaf_array=tiny_slaf,
+        dataloader = build_dataloader(
+            tiny_slaf,
             batch_size=8,
             n_epochs=3,
             use_mixture_of_scanners=True,
@@ -810,8 +830,8 @@ class TestSLAFDataLoader:
 
     def test_mixture_of_scanners_fragment_generators_creation(self, tiny_slaf):
         """Test that MoS creates fragment generators correctly"""
-        dataloader = SLAFDataLoader(
-            slaf_array=tiny_slaf,
+        dataloader = build_dataloader(
+            tiny_slaf,
             batch_size=32,
             use_mixture_of_scanners=True,
             n_scanners=4,
@@ -834,8 +854,8 @@ class TestSLAFDataLoader:
 
     def test_mixture_of_scanners_random_sampling_behavior(self, tiny_slaf):
         """Test that MoS uses random sampling from fragment generators"""
-        dataloader = SLAFDataLoader(
-            slaf_array=tiny_slaf,
+        dataloader = build_dataloader(
+            tiny_slaf,
             batch_size=8,
             use_mixture_of_scanners=True,
             n_scanners=2,  # Small number for testing
@@ -859,8 +879,8 @@ class TestSLAFDataLoader:
 
     def test_mixture_of_scanners_cell_boundary_handling(self, tiny_slaf):
         """Test that MoS handles cell boundaries correctly in SLAFDataLoader"""
-        dataloader = SLAFDataLoader(
-            slaf_array=tiny_slaf,
+        dataloader = build_dataloader(
+            tiny_slaf,
             batch_size=8,
             use_mixture_of_scanners=True,
             n_scanners=4,
@@ -919,7 +939,7 @@ class TestDeviceDetection:
     )
     def test_dataloader_device(self, tiny_slaf):
         """Test that dataloader uses the correct device"""
-        dataloader = SLAFDataLoader(tiny_slaf)
+        dataloader = build_dataloader(tiny_slaf)
 
         # Check that device is set
         if dataloader.device is not None:

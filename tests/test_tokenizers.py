@@ -14,16 +14,20 @@ from slaf.core.slaf import SLAFArray
 from slaf.ml.tokenizers import GeneformerTokenizer, ScGPTTokenizer
 
 
+def build_mock_slaf_array():
+    mock_slaf_array = Mock(spec=SLAFArray)
+    mock_var = Mock()
+    mock_var.index = pd.Index(["gene_0", "gene_1", "gene_2"])
+    mock_slaf_array.var = mock_var
+    return mock_slaf_array
+
+
 class TestSLAFTokenizer:
     """Test the new SLAFTokenizer interface."""
 
     def test_tokenizer_initialization(self):
         """Test SLAFTokenizer initialization with different tokenizer types."""
-        # Mock SLAFArray
-        mock_slaf_array = Mock(spec=SLAFArray)
-        mock_var = Mock()
-        mock_var.index = pd.Index(["gene_0", "gene_1", "gene_2"])
-        mock_slaf_array.var = mock_var
+        mock_slaf_array = build_mock_slaf_array()
 
         # Test Geneformer initialization
         tokenizer = GeneformerTokenizer(
@@ -51,11 +55,7 @@ class TestSLAFTokenizer:
 
     def test_geneformer_tokenization(self):
         """Test Geneformer tokenization."""
-        # Mock SLAFArray
-        mock_slaf_array = Mock(spec=SLAFArray)
-        mock_var = Mock()
-        mock_var.index = pd.Index(["gene_0", "gene_1", "gene_2"])
-        mock_slaf_array.var = mock_var
+        mock_slaf_array = build_mock_slaf_array()
 
         tokenizer = GeneformerTokenizer(
             slaf_array=mock_slaf_array,
@@ -83,11 +83,7 @@ class TestSLAFTokenizer:
 
     def test_scgpt_tokenization(self):
         """Test scGPT tokenization with expressions."""
-        # Mock SLAFArray
-        mock_slaf_array = Mock(spec=SLAFArray)
-        mock_var = Mock()
-        mock_var.index = pd.Index(["gene_0", "gene_1", "gene_2"])
-        mock_slaf_array.var = mock_var
+        mock_slaf_array = build_mock_slaf_array()
 
         tokenizer = ScGPTTokenizer(
             slaf_array=mock_slaf_array,
@@ -128,13 +124,48 @@ class TestSLAFTokenizer:
         assert torch.all(values[cls_positions] == tokenizer.special_tokens["PAD"])
         assert torch.all(values[sep_positions] == tokenizer.special_tokens["PAD"])
 
+    def test_scgpt_tokenize_grouped_uses_preencoded_tokens(self):
+        mock_slaf_array = build_mock_slaf_array()
+
+        tokenizer = ScGPTTokenizer(
+            slaf_array=mock_slaf_array,
+            vocab_size=1000,
+            n_expression_bins=10,
+        )
+
+        grouped_df = pd.DataFrame(
+            {
+                "gene_sequence": [[4, 5, 6]],
+                "expr_sequence": [[1001, 1005, 1009]],
+            }
+        )
+        grouped_df = __import__("polars").from_pandas(grouped_df)
+
+        input_ids, attention_mask, values = tokenizer.tokenize_grouped(grouped_df)
+
+        assert input_ids[0, 1] == 4
+        assert values is not None
+        assert values[0, 1] == 1001
+
+    def test_geneformer_tokenize_grouped_uses_preencoded_tokens(self):
+        mock_slaf_array = build_mock_slaf_array()
+
+        tokenizer = GeneformerTokenizer(
+            slaf_array=mock_slaf_array,
+            vocab_size=1000,
+        )
+
+        grouped_df = pd.DataFrame({"gene_sequence": [[4, 5, 6]]})
+        grouped_df = __import__("polars").from_pandas(grouped_df)
+
+        input_ids, attention_mask, values = tokenizer.tokenize_grouped(grouped_df)
+
+        assert input_ids[0, 1] == 4
+        assert values is None
+
     def test_scgpt_tokenization_no_expression(self):
         """Test that scGPT tokenization works without expressions (empty sequences)."""
-        # Mock SLAFArray
-        mock_slaf_array = Mock(spec=SLAFArray)
-        mock_var = Mock()
-        mock_var.index = pd.Index(["gene_0", "gene_1", "gene_2"])
-        mock_slaf_array.var = mock_var
+        mock_slaf_array = build_mock_slaf_array()
 
         tokenizer = ScGPTTokenizer(
             slaf_array=mock_slaf_array,
@@ -155,11 +186,7 @@ class TestSLAFTokenizer:
 
     def test_tokenization_edge_cases(self):
         """Test edge cases for tokenization."""
-        # Mock SLAFArray
-        mock_slaf_array = Mock(spec=SLAFArray)
-        mock_var = Mock()
-        mock_var.index = pd.Index(["gene_0", "gene_1", "gene_2"])
-        mock_slaf_array.var = mock_var
+        mock_slaf_array = build_mock_slaf_array()
 
         tokenizer = GeneformerTokenizer(
             slaf_array=mock_slaf_array,
@@ -184,10 +211,7 @@ class TestSLAFTokenizer:
     def test_expression_binning(self):
         """Test expression binning functionality."""
         # Mock SLAFArray
-        mock_slaf_array = Mock(spec=SLAFArray)
-        mock_var = Mock()
-        mock_var.index = pd.Index(["gene_0", "gene_1", "gene_2"])
-        mock_slaf_array.var = mock_var
+        mock_slaf_array = build_mock_slaf_array()
 
         tokenizer = ScGPTTokenizer(
             slaf_array=mock_slaf_array,
@@ -214,11 +238,7 @@ class TestSLAFTokenizer:
 
     def test_gene_id_mapping(self):
         """Test gene ID to token mapping."""
-        # Mock SLAFArray
-        mock_slaf_array = Mock(spec=SLAFArray)
-        mock_var = Mock()
-        mock_var.index = pd.Index(["gene_0", "gene_1", "gene_2"])
-        mock_slaf_array.var = mock_var
+        mock_slaf_array = build_mock_slaf_array()
 
         tokenizer = GeneformerTokenizer(
             slaf_array=mock_slaf_array,
@@ -246,11 +266,7 @@ class TestSLAFTokenizer:
 
     def test_vocabulary_info(self):
         """Test vocabulary information retrieval."""
-        # Mock SLAFArray
-        mock_slaf_array = Mock(spec=SLAFArray)
-        mock_var = Mock()
-        mock_var.index = pd.Index(["gene_0", "gene_1", "gene_2"])
-        mock_slaf_array.var = mock_var
+        mock_slaf_array = build_mock_slaf_array()
 
         tokenizer = GeneformerTokenizer(
             slaf_array=mock_slaf_array,
@@ -266,11 +282,7 @@ class TestSLAFTokenizer:
 
     def test_token_decoding(self):
         """Test token decoding functionality."""
-        # Mock SLAFArray
-        mock_slaf_array = Mock(spec=SLAFArray)
-        mock_var = Mock()
-        mock_var.index = pd.Index(["gene_0", "gene_1", "gene_2"])
-        mock_slaf_array.var = mock_var
+        mock_slaf_array = build_mock_slaf_array()
 
         tokenizer = ScGPTTokenizer(
             slaf_array=mock_slaf_array,
