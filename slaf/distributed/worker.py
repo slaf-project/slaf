@@ -5,7 +5,6 @@ Generic worker implementation for distributed dataloading.
 
 import asyncio
 import importlib
-import inspect
 import pickle
 import queue as queue_module
 import random
@@ -17,6 +16,7 @@ from typing import Any
 
 import polars as pl
 from loguru import logger
+from omegaconf import DictConfig, OmegaConf
 
 # Modal queue item size limit (1 MiB); we compress samples to stay under this
 # See https://modal.com/docs/guide/queues and https://modal.com/docs/reference/modal.Queue
@@ -26,8 +26,8 @@ MODAL_QUEUE_ITEM_SIZE_LIMIT_BYTES = 1024 * 1024
 def prefetch_worker(
     worker_id: str,
     partition_indices: list[int],
-    data_source_config: dict[str, Any],
-    processor_config: dict[str, Any],
+    data_source_config: DictConfig | dict[str, Any],
+    processor_config: DictConfig | dict[str, Any],
     queue: Any,  # Modal Queue or any queue-like object
     n_scanners: int = 8,
     prefetch_batch_count: int = 32,
@@ -56,23 +56,47 @@ def prefetch_worker(
     Returns:
         Dictionary with worker metrics
     """
+    if not isinstance(data_source_config, DictConfig):
+        data_source_config = OmegaConf.create(data_source_config)
+    if not isinstance(processor_config, DictConfig):
+        processor_config = OmegaConf.create(processor_config)
+
+    tokenizer_config = OmegaConf.select(processor_config, "tokenizer_config")
+    shuffle_factory_config = OmegaConf.select(processor_config, "shuffle_factory")
+    window_factory_config = OmegaConf.select(processor_config, "window_factory")
+    use_tokenizer_window = bool(
+        OmegaConf.select(processor_config, "use_tokenizer_window", default=False)
+    )
+    continuity_check = str(
+        OmegaConf.select(
+            processor_config,
+            "continuity_check",
+            default="sequential",
+        )
+    )
+    max_items = int(OmegaConf.select(processor_config, "max_items", default=1024))
+    seed_value = int(OmegaConf.select(processor_config, "seed", default=42))
+    window_kwargs = (
+        OmegaConf.select(processor_config, "window_kwargs", default={}) or {}
+    )
+
     # Import data source (generic)
     from slaf.distributed.data_source import LanceDataSource
 
-    if data_source_config["type"] == "lance":
+    if data_source_config.type == "lance":
         logger.info(
             "[{worker_id}] Creating LanceDataSource for: {path}",
             worker_id=worker_id,
-            path=data_source_config["path"],
+            path=data_source_config.path,
         )
-        data_source = LanceDataSource(data_source_config["path"])
+        data_source = LanceDataSource(data_source_config.path)
         logger.info(
             "[{worker_id}] DataSource created, partition count: {count}",
             worker_id=worker_id,
             count=data_source.get_partition_count(),
         )
     else:
-        raise ValueError(f"Unknown data source type: {data_source_config['type']}")
+        raise ValueError(f"Unknown data source type: {data_source_config.type}")
 
     # Import processor (generic)
     from slaf.core.tabular_schema import DataSchema
@@ -96,71 +120,39 @@ def prefetch_worker(
     # Built before window when use_tokenizer_window is set so tokenizer_instance.window exists.
     tokenizer_instance = None
     tokenizer_fn = None
-    if processor_config.get("tokenizer_factory"):
-        # Dynamic import and factory call
-        tokenizer_config = processor_config["tokenizer_factory"]
-        tokenizer_module = importlib.import_module(tokenizer_config["module"])
-        tokenizer_class = getattr(tokenizer_module, tokenizer_config["class"])
-
-        # SLAFTokenizer needs a slaf_array, so we need to recreate it from the data source path
-        # Extract slaf_path from data_source_config (assumes Lance path is under slaf_path/expression.lance)
-        if data_source_config["type"] == "lance":
-            lance_path = data_source_config["path"]
-            # Assume lance_path is like "path/to/slaf/expression.lance"
+    if tokenizer_config:
+        # Recreate dataset access in the worker so the tokenizer can be reconstructed locally.
+        if data_source_config.type == "lance":
+            lance_path = data_source_config.path
             slaf_path = lance_path.replace("/expression.lance", "")
 
-            # Recreate SLAFArray in worker
             from slaf.core.slaf import SLAFArray
+            from slaf.integrations.anndata import LazyAnnData
 
             slaf_array = SLAFArray(slaf_path, load_metadata=False)
+            adata = LazyAnnData(slaf_array)
 
-            # Create tokenizer instance
-            tokenizer_instance = tokenizer_class(
-                slaf_array=slaf_array, **tokenizer_config["kwargs"]
+            target = tokenizer_config.type
+            module_name, class_name = target.rsplit(".", 1)
+            tokenizer_module = importlib.import_module(module_name)
+            tokenizer_class = getattr(tokenizer_module, class_name)
+            tokenizer_kwargs = (
+                dict(tokenizer_config.args)
+                if "args" in tokenizer_config and tokenizer_config.args is not None
+                else {}
             )
+            tokenizer_instance = tokenizer_class(adata=adata, **tokenizer_kwargs)
 
             # Create tokenizer function that works with grouped DataFrame
             # The grouped DataFrame has gene_sequence and optionally expr_sequence columns
             def tokenize_grouped(
                 grouped_df: pl.DataFrame, schema: DataSchema
             ) -> dict[str, Any]:
-                """Tokenize grouped DataFrame with gene/value sequences.
-
-                For scGPT tokenizers, this enforces the dual-stream contract:
-                tokenized output must include aligned ``input_ids`` and ``values``.
-                """
-                # Extract gene sequences and expression sequences
-                gene_sequences = grouped_df[schema.item_list_key].to_list()
-                is_scgpt_tokenizer = hasattr(tokenizer_instance, "n_expression_bins")
-
-                # Check if we have expression sequences (for scGPT)
-                if (
-                    schema.value_list_key
-                    and schema.value_list_key in grouped_df.columns
-                ):
-                    expr_sequences = grouped_df[schema.value_list_key].to_list()
-                    input_ids, attention_mask, values = tokenizer_instance.tokenize(
-                        gene_sequences, expr_sequences
-                    )
-                else:
-                    input_ids, attention_mask, values = tokenizer_instance.tokenize(
-                        gene_sequences
-                    )
-
-                if is_scgpt_tokenizer:
-                    if (
-                        not schema.value_list_key
-                        or schema.value_list_key not in grouped_df.columns
-                    ):
-                        raise ValueError(
-                            "scGPT distributed tokenization requires expression/value sequences; "
-                            f"missing grouped column '{schema.value_list_key}'."
-                        )
-                    if values is None:
-                        raise ValueError(
-                            "scGPT distributed tokenization requires dual-stream output; "
-                            "tokenizer returned values=None."
-                        )
+                """Tokenize grouped DataFrame with tokenizer-owned grouping contract."""
+                input_ids, attention_mask, values = tokenizer_instance.tokenize_grouped(
+                    grouped_df,
+                    schema=schema,
+                )
 
                 # Return as dict (format expected by processor)
                 result = {
@@ -174,56 +166,46 @@ def prefetch_worker(
             tokenizer_fn = tokenize_grouped
 
     # Shuffle: use factory if provided, otherwise use default
-    if processor_config.get("shuffle_factory"):
+    if shuffle_factory_config:
         # Dynamic import based on config - module path comes from config, not hardcoded
-        factory_config = processor_config["shuffle_factory"]
+        factory_config = shuffle_factory_config
         shuffle_module = __import__(
-            factory_config["module"], fromlist=[factory_config["function"]]
+            factory_config.module, fromlist=[factory_config.function]
         )
-        shuffle_factory = getattr(shuffle_module, factory_config["function"])
-        shuffle = shuffle_factory(
-            factory_config["type"], **factory_config.get("kwargs", {})
+        shuffle_factory = getattr(shuffle_module, factory_config.function)
+        shuffle_kwargs = (
+            dict(factory_config.kwargs)
+            if "kwargs" in factory_config and factory_config.kwargs is not None
+            else {}
         )
+        shuffle = shuffle_factory(factory_config.type, **shuffle_kwargs)
     else:
         # Use generic implementation (works out of the box)
         shuffle = Shuffle()
 
     # Window: use tokenizer.window when use_tokenizer_window (aligns with ml tokenizers owning Window);
     # else factory if provided; otherwise generic Window (works out of the box).
-    use_tokenizer_window = processor_config.get("use_tokenizer_window", False)
     if use_tokenizer_window and tokenizer_instance is not None:
-        window = tokenizer_instance.window
-        apply_fn = getattr(window, "apply", None)
-        if apply_fn is None:
-            raise TypeError(
-                "tokenizer window must implement apply(df, schema, max_items, **kwargs)"
-            )
-        try:
-            params = inspect.signature(apply_fn).parameters
-        except (TypeError, ValueError):
-            params = None
-        if params is None or "schema" not in params or "max_items" not in params:
-            raise TypeError(
-                "tokenizer window must use the signature "
-                "apply(df, schema, max_items, **kwargs); "
-                "please upgrade slafdb in the worker image."
-            )
-    elif processor_config.get("window_factory"):
+        window = tokenizer_instance
+    elif window_factory_config:
         # Dynamic import based on config - module path comes from config, not hardcoded
-        factory_config = processor_config["window_factory"]
+        factory_config = window_factory_config
         window_module = __import__(
-            factory_config["module"], fromlist=[factory_config["function"]]
+            factory_config.module, fromlist=[factory_config.function]
         )
-        window_factory = getattr(window_module, factory_config["function"])
-        window = window_factory(
-            factory_config["type"], **factory_config.get("kwargs", {})
+        window_factory = getattr(window_module, factory_config.function)
+        window_factory_kwargs = (
+            dict(factory_config.kwargs)
+            if "kwargs" in factory_config and factory_config.kwargs is not None
+            else {}
         )
+        window = window_factory(factory_config.type, **window_factory_kwargs)
     else:
         # Use generic implementation (works out of the box)
         window = Window()
 
     # Create processor with data schema
-    schema = DataSchema(**processor_config["schema"])
+    schema = DataSchema(**OmegaConf.to_container(processor_config.schema, resolve=True))
 
     # Create boundary handler with KV store support
     # partial_groups_kv is passed as a parameter (created by caller)
@@ -231,7 +213,7 @@ def prefetch_worker(
 
     boundary_handler = GroupBoundaryHandler(
         schema=schema,
-        continuity_check=processor_config.get("continuity_check", "sequential"),
+        continuity_check=continuity_check,
         partial_groups_kv=partial_groups_kv,
     )
 
@@ -241,10 +223,10 @@ def prefetch_worker(
         shuffle=shuffle,
         tokenizer=tokenizer_fn,
         boundary_handler=boundary_handler,
-        max_items=processor_config.get("max_items", 1024),
-        seed=processor_config.get("seed", 42),
-        continuity_check=processor_config.get("continuity_check", "sequential"),
-        **processor_config.get("window_kwargs", {}),
+        max_items=max_items,
+        seed=seed_value,
+        continuity_check=continuity_check,
+        **dict(window_kwargs),
     )
 
     # Queue is passed as a parameter (created by caller)

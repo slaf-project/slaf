@@ -9,8 +9,12 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import polars as pl
+import pytest
 
 from slaf.distributed.data_source import DataSource
+
+pytest.importorskip("omegaconf")
+
 from slaf.distributed.worker import prefetch_worker
 
 

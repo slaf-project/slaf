@@ -1035,10 +1035,10 @@ class PrefetchBatchProcessor:
                     if tokenizer is None:
                         raise RuntimeError("Tokenizer is required for tokenized mode")
 
-                    grouped = tokenizer.window.apply(
+                    grouped = tokenizer.apply(
                         shuffled_df,
-                        SLAF_LANCE_COO_SCHEMA,
-                        tokenizer.max_genes,
+                        schema=SLAF_LANCE_COO_SCHEMA,
+                        max_items=tokenizer.max_genes,
                         **window_params,
                     )
                     window_time = time.time() - window_start
@@ -1049,13 +1049,9 @@ class PrefetchBatchProcessor:
                     if self.tokenizer is None:
                         raise RuntimeError("Tokenizer is required for tokenized mode")
 
-                    input_ids, attention_mask, values = self.tokenizer.tokenize(
-                        gene_sequences=grouped["gene_sequence"].to_list(),
-                        expr_sequences=(
-                            grouped["expr_sequence"].to_list()
-                            if "expr_sequence" in grouped.columns
-                            else None
-                        ),
+                    input_ids, attention_mask, values = self.tokenizer.tokenize_grouped(
+                        grouped,
+                        schema=SLAF_LANCE_COO_SCHEMA,
                     )
 
                     tokenize_time = time.time() - tokenize_start
