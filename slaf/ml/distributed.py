@@ -20,7 +20,7 @@ from slaf.distributed.data_source import LanceDataSource
 from slaf.distributed.dataloader import DecompressingQueueWrapper, DistributedDataLoader
 
 # Import SLAF-specific components (for type hints and adapters)
-from slaf.ml.tokenizers import GeneformerTokenizer, ScGPTTokenizer
+from slaf.ml.tokenizers import SLAFTokenizer
 
 # Configure Modal image for SLAF workers.
 # Cache bust must run *before* ``uv_pip_install`` so the install layer is not
@@ -208,12 +208,12 @@ class DistributedSLAFDataLoader:
     (raw_mode=True, wait for queue size >= 50, then iterate).
     """
 
-    tokenizer: GeneformerTokenizer | ScGPTTokenizer | None
+    tokenizer: SLAFTokenizer | None
 
     def __init__(
         self,
         slaf_array: SLAFArray,
-        tokenizer_type: str = "geneformer",
+        tokenizer: SLAFTokenizer | None = None,
         n_workers: int = 64,
         n_scanners: int = 16,
         cpu: float = 8,
@@ -221,9 +221,6 @@ class DistributedSLAFDataLoader:
         prefetch_batch_size: int = 16384,  # 16K rows per Lance batch (small default for testing; raise e.g. 262144 for prod)
         prefetch_batch_count: int = 32,
         batch_size: int = 32,
-        max_genes: int = 1024,
-        vocab_size: int = 50000,
-        n_expression_bins: int = 10,
         n_epochs: int = 1,
         raw_mode: bool = False,
         return_tensors: bool = True,
@@ -239,8 +236,8 @@ class DistributedSLAFDataLoader:
 
         Args:
             slaf_array: SLAFArray instance containing the data
-            tokenizer_type [PRODUCER]: Tokenization strategy ("geneformer", "scgpt", or "raw")
-                           If "raw", raw_mode is automatically enabled
+            tokenizer [PRODUCER]: Instantiated tokenizer for tokenized mode.
+                           Required unless raw_mode=True.
             n_workers: [PRODUCER] Number of Modal workers (producer-side parallelism)
             n_scanners: [PRODUCER] Number of scanners per worker (for Mixture of Scanners)
             cpu: [PRODUCER] CPU cores per worker; must match deploy_dataloader_app(cpu=...).
@@ -251,9 +248,6 @@ class DistributedSLAFDataLoader:
                                  Chunk size ≤ prefetch_batch_size * prefetch_batch_count rows per partition.
                                  Lower = less memory; higher = fewer process_batch calls.
             batch_size: [CONSUMER] Training batch size (number of samples per batch)
-            max_genes [PRODUCER]: Maximum genes per cell after window function
-            vocab_size [PRODUCER]: Vocabulary size for tokenizer
-            n_expression_bins: Number of expression bins for scGPT
             n_epochs [PRODUCER]: Number of epochs to process
             raw_mode [PRODUCER]: If True, return raw data without tokenization
             return_tensors: [CONSUMER] If True, return torch.Tensor objects (matches SLAFDataLoader).
@@ -275,7 +269,6 @@ class DistributedSLAFDataLoader:
         """
         self.slaf_array = slaf_array
         self.batch_size = batch_size
-        self.max_genes = max_genes
         self.n_epochs = n_epochs
         self.raw_mode = raw_mode
         self.return_tensors = return_tensors
@@ -289,40 +282,27 @@ class DistributedSLAFDataLoader:
         self.memory = memory
         self.seed = seed
 
-        tokenizer_type = tokenizer_type.lower()
-        if tokenizer_type not in {"geneformer", "scgpt", "raw"}:
-            raise ValueError(
-                f"Unsupported tokenizer_type: {tokenizer_type!r}; expected 'geneformer', 'scgpt', or 'raw'."
-            )
-
-        if tokenizer_type == "raw":
-            self.raw_mode = True
-
-        self.tokenizer_type = "raw" if self.raw_mode else tokenizer_type
-
         window_kwargs = dict(window_kwargs)
-        window_kwargs.setdefault("n_expression_bins", n_expression_bins)
         window_kwargs.setdefault("use_binned_expressions", True)
 
-        tokenizer_factory_kwargs: dict[str, Any] | None = None
-        tokenizer_cls: type[GeneformerTokenizer] | type[ScGPTTokenizer] | None = None
         if not self.raw_mode:
-            if tokenizer_type == "geneformer":
-                tokenizer_cls = GeneformerTokenizer
-            else:
-                tokenizer_cls = ScGPTTokenizer
-            tokenizer_factory_kwargs = {
-                "vocab_size": vocab_size,
-                "max_genes": max_genes,
-            }
-            if tokenizer_type == "scgpt":
-                tokenizer_factory_kwargs["n_expression_bins"] = n_expression_bins
-            self.tokenizer = tokenizer_cls(
-                slaf_array=slaf_array,
-                **tokenizer_factory_kwargs,
-            )
+            if tokenizer is None:
+                raise ValueError("tokenizer must be provided unless raw_mode=True.")
+            self.tokenizer = tokenizer
+            self.tokenizer_type = self.tokenizer.tokenizer_name
+            self.max_genes = self.tokenizer.max_genes
             self.special_tokens = self.tokenizer.special_tokens
+            window_kwargs.setdefault(
+                "n_expression_bins",
+                getattr(self.tokenizer, "n_expression_bins", 10),
+            )
+            tokenizer_factory_kwargs = self.tokenizer.get_factory_kwargs()
+            tokenizer_cls = type(self.tokenizer)
         else:
+            if tokenizer is not None:
+                raise ValueError("raw_mode=True is incompatible with tokenizer.")
+            self.tokenizer_type = "raw"
+            self.max_genes = 0
             tokenizer_factory_kwargs = None
             tokenizer_cls = None
             self.tokenizer = None
@@ -376,7 +356,7 @@ class DistributedSLAFDataLoader:
             },
             "window_factory": None,
             "shuffle_factory": None,
-            "max_items": max_genes,
+            "max_items": self.max_genes,
             "seed": seed,
             "n_epochs": n_epochs,
             "window_kwargs": window_kwargs,

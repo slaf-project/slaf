@@ -4,7 +4,7 @@ from loguru import logger
 
 from slaf.core.slaf import SLAFArray
 
-from .tokenizers import GeneformerTokenizer, ScGPTTokenizer, SLAFTokenizer
+from .tokenizers import SLAFTokenizer
 
 # Try to import torch, but make it optional
 try:
@@ -187,7 +187,8 @@ class SLAFDataLoader:
     Examples:
         >>> # Basic usage with default settings (MoS loading)
         >>> slaf_array = SLAFArray("path/to/data.slaf")
-        >>> dataloader = SLAFDataLoader(slaf_array)
+        >>> tokenizer = GeneformerTokenizer(slaf_array)
+        >>> dataloader = SLAFDataLoader(slaf_array, tokenizer=tokenizer)
         >>> for batch in dataloader:
         ...     print(f"Batch shape: {batch['input_ids'].shape}")
         ...     print(f"Cell IDs: {batch['cell_ids']}")
@@ -234,14 +235,14 @@ class SLAFDataLoader:
         Number of epochs: 5
 
         >>> # Custom configuration for training
+        >>> tokenizer = ScGPTTokenizer(slaf_array=slaf_array, max_genes=1024)
         >>> dataloader = SLAFDataLoader(
         ...     slaf_array=slaf_array,
-        ...     tokenizer_type="scgpt",
+        ...     tokenizer=tokenizer,
         ...     batch_size=64,
-        ...     max_genes=1024
         ... )
         >>> print(f"Tokenizer type: {dataloader.tokenizer_type}")
-        Tokenizer type: scgpt
+        Tokenizer type: ScGPTTokenizer
 
         >>> # Training loop example
         >>> for batch_idx, batch in enumerate(dataloader):
@@ -254,12 +255,12 @@ class SLAFDataLoader:
         >>> print("Training loop completed")
         Training loop completed
 
-        >>> # Error handling for invalid tokenizer type
+        >>> # Error handling for missing tokenizer
         >>> try:
-        ...     dataloader = SLAFDataLoader(slaf_array, tokenizer_type="invalid")
+        ...     dataloader = SLAFDataLoader(slaf_array)
         ... except ValueError as e:
         ...     print(f"Error: {e}")
-        Error: Unsupported tokenizer type: invalid
+        Error: tokenizer must be provided unless raw_mode=True.
     """
 
     device: Optional["torch.device"]  # type: ignore
@@ -268,11 +269,8 @@ class SLAFDataLoader:
     def __init__(
         self,
         slaf_array: SLAFArray,
-        tokenizer_type: str = "geneformer",
+        tokenizer: SLAFTokenizer | None = None,
         batch_size: int = 32,
-        max_genes: int = 2048,
-        vocab_size: int = 50000,
-        n_expression_bins: int = 10,
         n_epochs: int = 1,  # Add n_epochs parameter
         raw_mode: bool = False,  # Add raw_mode parameter
         verbose: bool = True,  # Add verbose parameter
@@ -293,20 +291,8 @@ class SLAFDataLoader:
                        Must be a valid SLAFArray with proper Lance dataset structure.
 
             # Tokenization Configuration
-            tokenizer_type: Tokenization strategy to use. Options: "geneformer", "scgpt".
-                          Geneformer uses ranked gene sequences. scGPT uses ranked genes
-                          with a parallel expression list (binned or raw), then
-                          ``ScGPTTokenizer`` builds aligned dual-stream ``input_ids`` and
-                          ``values`` tensors. Ignored when raw_mode=True.
-            max_genes: Maximum number of genes to include in each cell's tokenization.
-                     For Geneformer: caps sequence length (CLS + genes + padding).
-                     For scGPT: top ``max_genes`` genes per cell; each stream has length
-                     ``max_genes + 2`` (CLS, genes, SEP) in the tokenizer.
-            vocab_size: Size of the tokenizer vocabulary. Higher values allow more
-                       genes but use more memory. Range: 1000-100000, default: 50000.
-            n_expression_bins: Number of expression level bins for scGPT discretization.
-                             Higher values provide finer expression resolution.
-                             Range: 1-1000, default: 10.
+            tokenizer: Instantiated tokenizer used for tokenized mode.
+                      Required unless raw_mode=True.
 
             # Training Configuration
             batch_size: Number of cells per batch. Larger batches use more memory
@@ -352,7 +338,7 @@ class SLAFDataLoader:
                     Default: True.
 
         Raises:
-            ValueError: If tokenizer_type is not supported or parameters are invalid.
+            ValueError: If tokenizer is missing in tokenized mode or parameters are invalid.
             RuntimeError: If PyTorch is not available or datasets module is missing.
             TypeError: If slaf_array is not a valid SLAFArray instance.
             ImportError: If required dependencies are not available.
@@ -367,7 +353,8 @@ class SLAFDataLoader:
         Examples:
             >>> # Basic initialization (MoS is now default)
             >>> slaf_array = SLAFArray("path/to/data.slaf")
-            >>> dataloader = SLAFDataLoader(slaf_array)
+            >>> tokenizer = GeneformerTokenizer(slaf_array)
+            >>> dataloader = SLAFDataLoader(slaf_array, tokenizer=tokenizer)
             >>> print(f"Batch size: {dataloader.batch_size}")
             Batch size: 32
             >>> print(f"MoS enabled: {dataloader.use_mixture_of_scanners}")
@@ -417,7 +404,6 @@ class SLAFDataLoader:
         """
         self.slaf_array = slaf_array
         self.batch_size = batch_size
-        self.max_genes = max_genes
         self.n_epochs = n_epochs
         self.raw_mode = raw_mode  # Add raw_mode attribute
         self.verbose = verbose  # Add verbose attribute
@@ -458,31 +444,19 @@ class SLAFDataLoader:
         # Initialize tokenizer (only needed for non-raw mode)
 
         if not self.raw_mode:
-            if tokenizer_type == "geneformer":
-                self.tokenizer = GeneformerTokenizer(
-                    slaf_array=slaf_array,
-                    vocab_size=vocab_size,
-                    max_genes=max_genes,
-                )
-            elif tokenizer_type == "scgpt":
-                self.tokenizer = ScGPTTokenizer(
-                    slaf_array=slaf_array,
-                    vocab_size=vocab_size,
-                    n_expression_bins=n_expression_bins,
-                    max_genes=max_genes,
-                )
-            else:
-                raise ValueError(
-                    "tokenizer_type must be one of ['geneformer', 'scgpt']; "
-                    f"{tokenizer_type=} is not supported."
-                )
-
-            # Get special tokens from tokenizer
+            if tokenizer is None:
+                raise ValueError("tokenizer must be provided unless raw_mode=True.")
+            self.tokenizer = tokenizer
+            self.max_genes = self.tokenizer.max_genes
+            self.tokenizer_type = self.tokenizer.tokenizer_name
             self.special_tokens = self.tokenizer.special_tokens
         else:
-            # For raw mode, we don't need a tokenizer
+            if tokenizer is not None:
+                raise ValueError("raw_mode=True is incompatible with tokenizer.")
             self.tokenizer = None
             self.special_tokens = None
+            self.tokenizer_type = "raw"
+            self.max_genes = 0
 
         # Use IterableDataset
         self._dataset = SLAFIterableDataset(
@@ -534,13 +508,18 @@ class SLAFDataLoader:
             The training loop should handle device transfer as needed.
 
         Raises:
-            ValueError: If the tokenizer type is not supported.
+            ValueError: If tokenizer configuration is invalid.
             RuntimeError: If batch processing fails.
 
         Examples:
             >>> # Basic iteration (tokenized mode)
             >>> slaf_array = SLAFArray("path/to/data.slaf")
-            >>> dataloader = SLAFDataLoader(slaf_array, batch_size=16)
+            >>> tokenizer = GeneformerTokenizer(slaf_array)
+            >>> dataloader = SLAFDataLoader(
+            ...     slaf_array,
+            ...     tokenizer=tokenizer,
+            ...     batch_size=16,
+            ... )
             >>> for batch in dataloader:
             ...     print(f"Batch keys: {list(batch.keys())}")
             ...     print(f"Input shape: {batch['input_ids'].shape}")
@@ -591,9 +570,15 @@ class SLAFDataLoader:
             Processed batch 1
             Processed batch 2
 
-            >>> # Different tokenizer types
-            >>> dataloader_geneformer = SLAFDataLoader(slaf_array, tokenizer_type="geneformer")
-            >>> dataloader_scgpt = SLAFDataLoader(slaf_array, tokenizer_type="scgpt")
+            >>> # Different tokenizer instances
+            >>> dataloader_geneformer = SLAFDataLoader(
+            ...     slaf_array,
+            ...     tokenizer=GeneformerTokenizer(slaf_array),
+            ... )
+            >>> dataloader_scgpt = SLAFDataLoader(
+            ...     slaf_array,
+            ...     tokenizer=ScGPTTokenizer(slaf_array),
+            ... )
             >>>
             >>> # Compare batch shapes
             >>> for batch in dataloader_geneformer:

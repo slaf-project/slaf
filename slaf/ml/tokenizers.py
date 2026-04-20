@@ -3,9 +3,11 @@ from enum import Enum
 from typing import Any
 
 import numpy as np
+import polars as pl
 import torch
 
 from slaf.core.slaf import SLAFArray
+from slaf.core.tabular_schema import SLAF_LANCE_COO_SCHEMA, DataSchema
 from slaf.ml.aggregators import GeneformerWindow, ScGPTWindow, Window
 
 TORCH_AVAILABLE = True
@@ -74,6 +76,11 @@ class SLAFTokenizer(ABC):
         # Build vocabulary and special tokens
         self._build_gene_vocabulary()
         self._setup_special_tokens()
+
+    @property
+    def tokenizer_name(self) -> str:
+        """Stable tokenizer identifier for logging and worker reconstruction."""
+        return self.__class__.__name__
 
     def _build_gene_vocabulary(self):
         """Build gene vocabulary from SLAF var DataFrame or genes Lance table."""
@@ -236,6 +243,38 @@ class SLAFTokenizer(ABC):
         """
         Create a window function based on the tokenizer type.
         """
+
+    def apply(
+        self,
+        df: pl.DataFrame,
+        schema: DataSchema,
+        max_items: int,
+        **kwargs: Any,
+    ) -> pl.DataFrame:
+        """Group per-cell COO rows into tokenizer-ready sequences."""
+        return self.window.apply(df, schema=schema, max_items=max_items, **kwargs)
+
+    def tokenize_grouped(
+        self,
+        grouped_df: pl.DataFrame,
+        schema: DataSchema = SLAF_LANCE_COO_SCHEMA,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        """Tokenize grouped cell sequences emitted by ``apply``."""
+        return self.tokenize(
+            gene_sequences=grouped_df[schema.item_list_key].to_list(),
+            expr_sequences=(
+                grouped_df[schema.value_list_key].to_list()
+                if schema.value_list_key and schema.value_list_key in grouped_df.columns
+                else None
+            ),
+        )
+
+    def get_factory_kwargs(self) -> dict[str, Any]:
+        """Return constructor kwargs required to recreate this tokenizer."""
+        return {
+            "vocab_size": self.vocab_size,
+            "max_genes": self.max_genes,
+        }
 
     def get_vocab_info(self) -> dict[str, Any]:
         """
@@ -498,6 +537,11 @@ class ScGPTTokenizer(SLAFTokenizer):
             **vocab_info,
             "n_expression_bins": self.n_expression_bins,
         }
+
+    def get_factory_kwargs(self) -> dict[str, Any]:
+        factory_kwargs = super().get_factory_kwargs()
+        factory_kwargs["n_expression_bins"] = self.n_expression_bins
+        return factory_kwargs
 
     def _setup_special_tokens(self):
         """Setup special tokens for tokenization."""

@@ -5,7 +5,6 @@ Generic worker implementation for distributed dataloading.
 
 import asyncio
 import importlib
-import inspect
 import pickle
 import queue as queue_module
 import random
@@ -124,43 +123,11 @@ def prefetch_worker(
             def tokenize_grouped(
                 grouped_df: pl.DataFrame, schema: DataSchema
             ) -> dict[str, Any]:
-                """Tokenize grouped DataFrame with gene/value sequences.
-
-                For scGPT tokenizers, this enforces the dual-stream contract:
-                tokenized output must include aligned ``input_ids`` and ``values``.
-                """
-                # Extract gene sequences and expression sequences
-                gene_sequences = grouped_df[schema.item_list_key].to_list()
-                is_scgpt_tokenizer = hasattr(tokenizer_instance, "n_expression_bins")
-
-                # Check if we have expression sequences (for scGPT)
-                if (
-                    schema.value_list_key
-                    and schema.value_list_key in grouped_df.columns
-                ):
-                    expr_sequences = grouped_df[schema.value_list_key].to_list()
-                    input_ids, attention_mask, values = tokenizer_instance.tokenize(
-                        gene_sequences, expr_sequences
-                    )
-                else:
-                    input_ids, attention_mask, values = tokenizer_instance.tokenize(
-                        gene_sequences
-                    )
-
-                if is_scgpt_tokenizer:
-                    if (
-                        not schema.value_list_key
-                        or schema.value_list_key not in grouped_df.columns
-                    ):
-                        raise ValueError(
-                            "scGPT distributed tokenization requires expression/value sequences; "
-                            f"missing grouped column '{schema.value_list_key}'."
-                        )
-                    if values is None:
-                        raise ValueError(
-                            "scGPT distributed tokenization requires dual-stream output; "
-                            "tokenizer returned values=None."
-                        )
+                """Tokenize grouped DataFrame with tokenizer-owned grouping contract."""
+                input_ids, attention_mask, values = tokenizer_instance.tokenize_grouped(
+                    grouped_df,
+                    schema=schema,
+                )
 
                 # Return as dict (format expected by processor)
                 result = {
@@ -192,22 +159,7 @@ def prefetch_worker(
     # else factory if provided; otherwise generic Window (works out of the box).
     use_tokenizer_window = processor_config.get("use_tokenizer_window", False)
     if use_tokenizer_window and tokenizer_instance is not None:
-        window = tokenizer_instance.window
-        apply_fn = getattr(window, "apply", None)
-        if apply_fn is None:
-            raise TypeError(
-                "tokenizer window must implement apply(df, schema, max_items, **kwargs)"
-            )
-        try:
-            params = inspect.signature(apply_fn).parameters
-        except (TypeError, ValueError):
-            params = None
-        if params is None or "schema" not in params or "max_items" not in params:
-            raise TypeError(
-                "tokenizer window must use the signature "
-                "apply(df, schema, max_items, **kwargs); "
-                "please upgrade slafdb in the worker image."
-            )
+        window = tokenizer_instance
     elif processor_config.get("window_factory"):
         # Dynamic import based on config - module path comes from config, not hardcoded
         factory_config = processor_config["window_factory"]
