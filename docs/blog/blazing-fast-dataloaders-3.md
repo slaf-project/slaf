@@ -316,7 +316,7 @@ knobs instead of forcing both onto the same machine.
 
 ## Section 6: `fast-scgpt` on Tahoe-100M { #section-6 }
 
-[`fast-scgpt`](https://github.com/slaf-project/fast-scgpt) is a minimally-forkable
+[`fast-scgpt`](https://github.com/slaf-project/fast-scgpt) is a maximally-forkable
 library to train a scGPT-style transformer on Tahoe-100M on Modal,
 streamed from object storage or [Hugging Face](https://huggingface.co/datasets/slaf-project/Tahoe-100M).
 Model weights and downstream evaluation are not part of this release, stay tuned.
