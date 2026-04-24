@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 from typing import Any
 
 import lance
@@ -30,6 +31,32 @@ except ImportError:
 
 from .chunked_reader import create_chunked_reader
 from .utils import discover_input_files, validate_input_files
+
+
+def _check_output_filesystem(output_path: str) -> None:
+    """Raise RuntimeError early if the output path does not support atomic renames.
+
+    Lance requires atomic rename support. ExFAT, FAT32, and NTFS on macOS do not
+    support this, producing a cryptic ``LanceError(IO): Unable to rename file``.
+    """
+    parent = output_path
+    while parent and not os.path.exists(parent):
+        parent = os.path.dirname(parent)
+    parent = parent or "."
+
+    try:
+        fd, src = tempfile.mkstemp(dir=parent)
+        os.close(fd)
+        dst = src + ".rename_test"
+        os.rename(src, dst)
+        os.unlink(dst)
+    except OSError as exc:
+        raise RuntimeError(
+            f"Output path '{output_path}' is on a filesystem that does not support "
+            f"atomic renames (e.g. ExFAT, FAT32, NTFS on macOS). "
+            f"Please use a local POSIX-compatible path (e.g. APFS, HFS+, ext4), "
+            f"then copy the resulting .slaf directory to your destination if needed."
+        ) from exc
 
 
 class SLAFConverter:
@@ -442,6 +469,7 @@ class SLAFConverter:
             ...     print(f"Error: {e}")
             Error: Cannot detect format for: unknown_file.txt
         """
+        _check_output_filesystem(output_path)
         # Handle both single paths and lists of files
         if isinstance(input_path, list):
             # Direct list of files - use multi-file conversion

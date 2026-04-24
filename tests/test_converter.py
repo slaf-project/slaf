@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+from unittest.mock import patch
 
 import lance
 import numpy as np
@@ -2481,3 +2482,42 @@ class TestSpatialH5ADConversion:
             "tissue_hires_scalef"
         ] == pytest.approx(0.17)
         assert uns_data["spatial"]["library_id"]["metadata"]["chemistry"] == "Visium"
+
+
+class TestNonPosixFilesystemWarning:
+    """_check_output_filesystem raises a clear error on non-POSIX filesystems."""
+
+    def test_non_posix_rename_raises_runtime_error(self, small_sample_adata, tmp_path):
+        """convert() raises RuntimeError when os.rename fails (simulates ExFAT/NTFS)."""
+        h5ad_path = tmp_path / "data.h5ad"
+        small_sample_adata.write(h5ad_path)
+
+        with patch(
+            "slaf.data.converter.os.rename", side_effect=OSError("rename not supported")
+        ):
+            with pytest.raises(RuntimeError, match="atomic renames"):
+                converter = SLAFConverter(chunked=False, compact_after_write=False)
+                converter.convert(str(h5ad_path), str(tmp_path / "output.slaf"))
+
+    def test_posix_filesystem_does_not_raise(self, small_sample_adata, tmp_path):
+        """convert() proceeds normally on a POSIX-compatible filesystem (tmp_path is local APFS)."""
+        h5ad_path = tmp_path / "data.h5ad"
+        small_sample_adata.write(h5ad_path)
+        converter = SLAFConverter(
+            chunked=False,
+            use_optimized_dtypes=False,
+            compact_after_write=False,
+        )
+        converter.convert(str(h5ad_path), str(tmp_path / "output.slaf"))
+
+    def test_error_message_contains_suggested_workaround(
+        self, small_sample_adata, tmp_path
+    ):
+        """RuntimeError message tells the user to use a local POSIX path."""
+        h5ad_path = tmp_path / "data.h5ad"
+        small_sample_adata.write(h5ad_path)
+
+        with patch("slaf.data.converter.os.rename", side_effect=OSError):
+            with pytest.raises(RuntimeError, match="local"):
+                converter = SLAFConverter(chunked=False, compact_after_write=False)
+                converter.convert(str(h5ad_path), str(tmp_path / "output.slaf"))
