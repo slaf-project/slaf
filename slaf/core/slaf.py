@@ -231,6 +231,10 @@ class SLAFArray:
                 with smart_open(config_path, "r") as f:
                     f.read(1)  # Try to read 1 byte
                 return True
+            except ImportError:
+                # smart_open raises ImportError when cloud extras are missing (e.g. gs://
+                # without smart_open[gcs]); do not treat as missing dataset.
+                raise
             except Exception:
                 return False
         elif self._is_hf_path(path):
