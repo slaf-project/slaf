@@ -87,6 +87,8 @@ uv add slafdb
 
 **Note**: Package managers don't automatically choose between `polars` and `polars-lts-cpu` - you may need to specify the correct version for your platform.
 
+**Output filesystem:** `.slaf` must be written to a local POSIX path (APFS, ext4). ExFAT/FAT32 drives are not supported ([lancedb#1231](https://github.com/lancedb/lancedb/issues/1231)).
+
 ### Optional Dependencies
 
 Add specific features as needed:
