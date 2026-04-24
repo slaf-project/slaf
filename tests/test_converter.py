@@ -1,7 +1,7 @@
 import json
 import os
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import lance
 import numpy as np
@@ -315,6 +315,95 @@ class TestSLAFConverter:
 
         detected_format = detect_format(str(h5_file))
         assert detected_format == "10x_h5"
+
+    def test_10x_h5_schema_read_does_not_force_genome(self, tmp_path, monkeypatch):
+        """10x H5 schema extraction lets Scanpy choose the genome."""
+
+        import scanpy as sc
+        from scipy import sparse
+
+        from slaf.data.utils import _extract_10x_h5_schema
+
+        h5_file = Path(tmp_path) / "filtered_feature_bc_matrix.h5"
+        h5_file.write_text("mock h5 content")
+        adata = sc.AnnData(
+            X=sparse.csr_matrix([[1, 0], [0, 2]]),
+            obs=pd.DataFrame(index=["cell1", "cell2"]),
+            var=pd.DataFrame(index=["gene1", "gene2"]),
+        )
+
+        mock_read = MagicMock(return_value=adata)
+        monkeypatch.setattr(sc, "read_10x_h5", mock_read)
+
+        gene_ids, cell_columns, value_type = _extract_10x_h5_schema(str(h5_file))
+
+        mock_read.assert_called_once_with(str(h5_file))
+        assert "genome" not in mock_read.call_args.kwargs
+        assert gene_ids == {"gene1", "gene2"}
+        assert cell_columns == set()
+        assert value_type == "uint16"
+
+    def test_convert_10x_h5_does_not_force_genome(self, tmp_path, monkeypatch):
+        """10x H5 conversion lets Scanpy choose the genome."""
+
+        import scanpy as sc
+        from scipy import sparse
+
+        h5_file = Path(tmp_path) / "filtered_feature_bc_matrix.h5"
+        h5_file.write_text("mock h5 content")
+        adata = sc.AnnData(
+            X=sparse.csr_matrix([[1, 0], [0, 2]]),
+            obs=pd.DataFrame(index=["cell1", "cell2"]),
+            var=pd.DataFrame(index=["gene1", "gene2"]),
+        )
+        captured = {}
+
+        mock_read = MagicMock(return_value=adata)
+
+        def fake_convert_anndata(self, converted_adata, output_path):
+            captured["adata"] = converted_adata
+            captured["output_path"] = output_path
+
+        monkeypatch.setattr("slaf.data.converter.sc.read_10x_h5", mock_read)
+        monkeypatch.setattr(SLAFConverter, "_convert_anndata", fake_convert_anndata)
+
+        converter = SLAFConverter(chunked=False)
+        converter._convert_10x_h5(str(h5_file), str(tmp_path / "out.slaf"))
+
+        mock_read.assert_called_once_with(str(h5_file))
+        assert "genome" not in mock_read.call_args.kwargs
+        assert captured["adata"].shape == (2, 2)
+        assert captured["output_path"] == str(tmp_path / "out.slaf")
+
+    def test_extract_10x_h5_schema_method_does_not_force_genome(
+        self, tmp_path, monkeypatch
+    ):
+        """SLAFConverter._extract_10x_h5_schema lets Scanpy choose the genome."""
+
+        import scanpy as sc
+        from scipy import sparse
+
+        h5_file = Path(tmp_path) / "filtered_feature_bc_matrix.h5"
+        h5_file.write_text("mock h5 content")
+        adata = sc.AnnData(
+            X=sparse.csr_matrix([[1, 0], [0, 2]]),
+            obs=pd.DataFrame(index=["cell1", "cell2"]),
+            var=pd.DataFrame(index=["gene1", "gene2"]),
+        )
+
+        mock_read = MagicMock(return_value=adata)
+        monkeypatch.setattr("slaf.data.converter.sc.read_10x_h5", mock_read)
+
+        converter = SLAFConverter(chunked=False)
+        gene_ids, cell_columns, value_type = converter._extract_10x_h5_schema(
+            str(h5_file)
+        )
+
+        mock_read.assert_called_once_with(str(h5_file))
+        assert "genome" not in mock_read.call_args.kwargs
+        assert gene_ids == {"gene1", "gene2"}
+        assert cell_columns == set()
+        assert value_type == "uint16"
 
     def test_h5ad_format_detection(self, tmp_path):
         """Test auto-detection of h5ad format"""

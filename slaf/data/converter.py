@@ -614,7 +614,7 @@ class SLAFConverter:
         else:
             # Try to read as 10x H5 first, fall back to regular h5ad
             try:
-                adata_backed = sc.read_10x_h5(h5_path, genome="X")
+                adata_backed = sc.read_10x_h5(h5_path)
                 logger.info("Successfully read as 10x H5 format")
             except Exception:
                 # Fall back to reading as regular h5ad
@@ -1405,7 +1405,7 @@ class SLAFConverter:
 
         try:
             # Try to read as 10x H5 first
-            adata = sc.read_10x_h5(file_path, genome="X")
+            adata = sc.read_10x_h5(file_path)
         except Exception:
             # Fall back to regular h5ad
             adata = sc.read_h5ad(file_path, backed="r")
