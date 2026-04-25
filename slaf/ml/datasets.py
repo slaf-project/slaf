@@ -55,6 +55,7 @@ except ImportError:
 
 from slaf.core.slaf import SLAFArray
 from slaf.core.tabular_schema import SLAF_LANCE_COO_SCHEMA
+from slaf.ml.expression_preprocessor import ExpressionPreprocessor
 from slaf.ml.samplers import Shuffle
 from slaf.ml.tokenizers import SLAFTokenizer
 
@@ -328,6 +329,7 @@ class PrefetchBatchProcessor:
         n_scanners: int = 16,  # Add n_scanners parameter for MoS
         prefetch_batch_size: int = 4194304,  # Add prefetch_batch_size parameter for MoS
         parallelize_fragment_reads: bool = False,  # Parallelize fragment reads in MoS (cloud optimization)
+        expression_preprocessor: ExpressionPreprocessor | None = None,
     ):
         """Initialize the PrefetchBatchProcessor."""
         self.slaf_array = slaf_array
@@ -347,6 +349,7 @@ class PrefetchBatchProcessor:
         self.n_scanners = n_scanners
         self.prefetch_batch_size = prefetch_batch_size
         self.parallelize_fragment_reads = parallelize_fragment_reads
+        self.expression_preprocessor = expression_preprocessor
 
         # Validate MoS parameters
         if self.use_mixture_of_scanners:
@@ -1023,13 +1026,17 @@ class PrefetchBatchProcessor:
 
                     shuffle_time = time.time() - shuffle_start
                     window_start = time.time()
-                    window_params = {
+                    window_params: dict[str, Any] = {
                         "n_expression_bins": self.n_expression_bins,
                         "use_binned_expressions": self.use_binned_expressions,
                     }
                     window_params.update(
                         self.window_kwargs
                     )  # Add any additional kwargs
+                    if self.expression_preprocessor is not None:
+                        window_params["expression_preprocessor"] = (
+                            self.expression_preprocessor
+                        )
 
                     tokenizer = self.tokenizer
                     if tokenizer is None:
@@ -1539,6 +1546,7 @@ class SLAFIterableDataset(IterableDataset):
         prefetch_batch_size: int = 4194304,  # Add prefetch_batch_size parameter for MoS
         parallelize_fragment_reads: bool = False,  # Parallelize fragment reads in MoS (cloud optimization)
         prefetcher_ready_timeout: float = 10.0,  # Timeout for waiting for prefetcher to be ready
+        expression_preprocessor: ExpressionPreprocessor | None = None,
     ):
         super().__init__()
         self.slaf_array = slaf_array
@@ -1595,6 +1603,7 @@ class SLAFIterableDataset(IterableDataset):
             n_scanners=n_scanners,  # Pass MoS parameters
             prefetch_batch_size=prefetch_batch_size,  # Pass MoS parameters
             parallelize_fragment_reads=parallelize_fragment_reads,  # Pass parallelize_fragment_reads
+            expression_preprocessor=expression_preprocessor,
         )
         self.prefetcher = AsyncPrefetcher(
             batch_processor=self.batch_processor,
