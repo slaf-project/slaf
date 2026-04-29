@@ -360,7 +360,7 @@ def _extract_10x_h5_schema(file_path: str) -> tuple[set[str], set[str], str]:
 
         # Try 10x H5 first, fall back to regular h5ad
         try:
-            adata = sc.read_10x_h5(file_path, genome="X")
+            adata = sc.read_10x_h5(file_path)
         except Exception:
             adata = sc.read_h5ad(file_path, backed="r")
 
