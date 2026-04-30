@@ -265,6 +265,49 @@ class SLAFConverter:
             logger.warning(f"Could not load checkpoint: {e}")
             return None
 
+    def _load_existing_obsm_info(
+        self,
+        output_path: str,
+    ) -> dict[str, dict[str, Any]] | None:
+        config_path = f"{output_path}/config.json"
+        if not self._path_exists(config_path):
+            return None
+        try:
+            with self._open_file(config_path) as f:
+                config = json.load(f)
+        except Exception:
+            return None
+
+        obsm_config = config.get("obsm")
+        if not obsm_config:
+            return None
+
+        dimensions = obsm_config.get("dimensions", {})
+        storage = obsm_config.get("storage", {})
+        return {
+            key: {
+                "dimensions": int(dimensions[key]),
+                "storage": str(storage.get(key, "dense")),
+            }
+            for key in obsm_config.get("available", [])
+        }
+
+    def _load_existing_pairwise_keys(
+        self,
+        output_path: str,
+        table_name: str,
+        id_columns: tuple[str, str],
+    ) -> list[str] | None:
+        table_path = f"{output_path}/{table_name}.lance"
+        if not self._path_exists(table_path):
+            return None
+        dataset = lance.dataset(table_path)
+        return [
+            field.name
+            for field in dataset.schema
+            if field.name not in id_columns
+        ]
+
     def _load_checkpoint_smart(self, output_path: str) -> dict | None:
         """Load checkpoint with fragment-based resume logic to avoid duplication"""
         checkpoint = self._load_checkpoint(output_path)
@@ -692,6 +735,14 @@ class SLAFConverter:
         global_cell_offset = 0
         total_genes = 0
         total_cells = 0
+        combined_obsm_info: dict[str, dict[str, Any]] | None = (
+            self._load_existing_obsm_info(output_path)
+        )
+        combined_obsp_keys: list[str] | None = self._load_existing_pairwise_keys(
+            output_path,
+            "cellsxcells",
+            ("cell_integer_id_i", "cell_integer_id_j"),
+        )
 
         # Determine starting file and chunk from checkpoint
         start_file_idx = 0
@@ -794,11 +845,24 @@ class SLAFConverter:
                     obs_df["cell_start_index"] = self._compute_cell_start_indices(
                         reader, obs_df
                     )
+                    obs_df["total_counts"] = self._compute_total_counts(reader, obs_df)
+
+                    dense_obsm, current_obsm_info = self._get_chunked_dense_obsm(reader)
+                    combined_obsm_info = self._validate_matching_obsm_info(
+                        current_obsm_info,
+                        combined_obsm_info,
+                        file_path=file_path,
+                    )
 
                     # Convert metadata to Lance tables
                     cell_metadata_table = self._create_metadata_table(
                         obs_df, "cell_id", integer_mapping=None
                     )
+                    if dense_obsm:
+                        cell_metadata_table = self._attach_dense_obsm_to_metadata_table(
+                            cell_metadata_table,
+                            dense_obsm,
+                        )
                     gene_metadata_table = self._create_metadata_table(
                         var_df, "gene_id", integer_mapping=None
                     )
@@ -882,6 +946,34 @@ class SLAFConverter:
                             # Restore original value_type
                             reader.value_type = original_value_type
 
+                    if hasattr(reader, "adata") and hasattr(reader.adata, "obsp"):
+                        obsp_table, current_obsp_keys = self._build_pairwise_table(
+                            dict(reader.adata.obsp),
+                            obs_df["cell_integer_id"].to_numpy(dtype=np.uint32, copy=False),
+                            integer_dtype=np.uint32,
+                            arrow_integer_type=pa.uint32(),
+                        )
+                        if combined_obsp_keys is None:
+                            combined_obsp_keys = current_obsp_keys
+                        elif current_obsp_keys != combined_obsp_keys:
+                            raise ValueError(
+                                f"Inconsistent obsp schema in {file_path}. "
+                                f"Expected {combined_obsp_keys}, found {current_obsp_keys}."
+                            )
+                        if obsp_table is not None:
+                            cellsxcells_path = f"{output_path}/cellsxcells.lance"
+                            lance.write_dataset(
+                                obsp_table,
+                                cellsxcells_path,
+                                mode=(
+                                    "overwrite"
+                                    if not self._path_exists(cellsxcells_path)
+                                    else "append"
+                                ),
+                                enable_v2_manifest_paths=self.enable_v2_manifest,
+                                data_storage_version="2.2",
+                            )
+
                     # Track source file information
                     source_file_info.append(
                         {
@@ -943,6 +1035,8 @@ class SLAFConverter:
             None,
             None,
             layer_names=layer_names,  # Pass layer names if consistent
+            obsm_info=combined_obsm_info,
+            obsp_keys=combined_obsp_keys,
         )
 
         # Clear checkpoint after successful completion
@@ -1084,6 +1178,11 @@ class SLAFConverter:
                     obs_df["cell_start_index"] = self._compute_cell_start_indices(
                         reader, obs_df
                     )
+                    if "total_counts" in existing_columns:
+                        obs_df["total_counts"] = self._compute_total_counts(
+                            reader,
+                            obs_df,
+                        )
 
                     # Convert metadata to Lance tables
                     cell_metadata_table = self._create_metadata_table(
@@ -1459,6 +1558,8 @@ class SLAFConverter:
         obs_df["cell_start_index"] = self._compute_cell_start_indices_anndata(
             adata, obs_df
         )
+        logger.info("Precomputing total counts...")
+        obs_df["total_counts"] = self._compute_total_counts_anndata(adata, obs_df)
 
         cell_metadata_table = self._create_metadata_table(
             df=obs_df, entity_id_col="cell_id", integer_mapping=cell_id_mapping
@@ -1490,10 +1591,10 @@ class SLAFConverter:
             )
 
         # Convert obsm if it exists
-        obsm_keys = []
+        obsm_info: dict[str, dict[str, Any]] = {}
         if hasattr(adata, "obsm") and adata.obsm and len(adata.obsm) > 0:
             logger.info(f"Converting {len(adata.obsm)} obsm embeddings...")
-            obsm_keys = self._convert_obsm(
+            obsm_info = self._convert_obsm(
                 adata.obsm,
                 output_path,
                 adata.obs.index,
@@ -1547,7 +1648,7 @@ class SLAFConverter:
             output_path,
             adata.shape,
             layer_names=layer_names,
-            obsm_keys=obsm_keys,
+            obsm_info=obsm_info,
             varm_keys=varm_keys,
             obsp_keys=obsp_keys,
             varp_keys=varp_keys,
@@ -1557,6 +1658,14 @@ class SLAFConverter:
     def _convert_chunked(self, h5ad_path: str, output_path: str):
         """Convert h5ad file using chunked processing with checkpointing support"""
         logger.info(f"Processing in chunks of {self.chunk_size} cells...")
+        obsm_info: dict[str, dict[str, Any]] | None = self._load_existing_obsm_info(
+            output_path
+        )
+        obsp_keys: list[str] | None = self._load_existing_pairwise_keys(
+            output_path,
+            "cellsxcells",
+            ("cell_integer_id_i", "cell_integer_id_j"),
+        )
 
         # Check for existing checkpoint with smart resume logic
         checkpoint = self._load_checkpoint_smart(output_path)
@@ -1599,7 +1708,7 @@ class SLAFConverter:
             # Write metadata tables efficiently (without loading everything into memory)
             # Only write metadata if not resuming from checkpoint
             if not checkpoint or checkpoint.get("status") != "in_progress":
-                self._write_metadata_efficiently(reader, output_path)
+                obsm_info = self._write_metadata_efficiently(reader, output_path)
 
             # Check if layers exist before processing
             layer_names = []
@@ -1642,6 +1751,13 @@ class SLAFConverter:
                     # Restore original value_type
                     reader.value_type = original_value_type
 
+            if hasattr(reader, "adata") and hasattr(reader.adata, "obsp"):
+                obsp_keys = self._convert_obsp(
+                    dict(reader.adata.obsp),
+                    output_path,
+                    reader.obs_names,
+                )
+
             # Create indices (if enabled)
             if self.create_indices:
                 self._create_indices(output_path)
@@ -1652,12 +1768,20 @@ class SLAFConverter:
 
             # Save config and clear checkpoint (with layers metadata if layers were converted)
             self._save_config(
-                output_path, (reader.n_obs, reader.n_vars), layer_names=layer_names
+                output_path,
+                (reader.n_obs, reader.n_vars),
+                layer_names=layer_names,
+                obsm_info=obsm_info,
+                obsp_keys=obsp_keys,
             )
             self._clear_checkpoint(output_path)
             logger.info(f"Conversion complete! Saved to {output_path}")
 
-    def _write_metadata_efficiently(self, reader, output_path: str):
+    def _write_metadata_efficiently(
+        self,
+        reader,
+        output_path: str,
+    ) -> dict[str, dict[str, Any]]:
         """Write metadata tables efficiently while preserving all columns"""
         logger.info("Writing metadata tables...")
 
@@ -1683,6 +1807,9 @@ class SLAFConverter:
         # Precompute cell start indices for fast cell-based queries
         logger.info("Precomputing cell start indices...")
         obs_df["cell_start_index"] = self._compute_cell_start_indices(reader, obs_df)
+        logger.info("Precomputing total counts...")
+        obs_df["total_counts"] = self._compute_total_counts(reader, obs_df)
+        dense_obsm, obsm_info = self._get_chunked_dense_obsm(reader)
 
         # Convert to Lance tables
         cell_metadata_table = self._create_metadata_table(
@@ -1690,6 +1817,11 @@ class SLAFConverter:
             "cell_id",
             integer_mapping=None,  # Already added above
         )
+        if dense_obsm:
+            cell_metadata_table = self._attach_dense_obsm_to_metadata_table(
+                cell_metadata_table,
+                dense_obsm,
+            )
         gene_metadata_table = self._create_metadata_table(
             var_df,
             "gene_id",
@@ -1713,6 +1845,7 @@ class SLAFConverter:
         )
 
         logger.info("Metadata tables written!")
+        return obsm_info
 
     def _process_expression(self, reader, output_path: str, value_type="uint16"):
         """Process expression data in single-threaded mode with large chunks"""
@@ -3107,7 +3240,7 @@ class SLAFConverter:
         output_path: str,
         cell_ids: Any,
         cell_id_mapping: list[dict[str, Any]] | None = None,
-    ) -> list[str]:
+    ) -> dict[str, dict[str, Any]]:
         """
         Convert AnnData obsm to FixedSizeListArray columns in cells.lance.
 
@@ -3118,7 +3251,7 @@ class SLAFConverter:
             cell_id_mapping: Optional integer ID mapping for cells
 
         Returns:
-            List of obsm keys that were successfully converted
+            Mapping from obsm key to storage metadata.
         """
         import lance
         import numpy as np
@@ -3130,8 +3263,17 @@ class SLAFConverter:
         cells_path = f"{output_path}/cells.lance"
         cells_dataset = lance.dataset(cells_path)
 
-        obsm_keys = []
-        obsm_dimensions = {}
+        obsm_info: dict[str, dict[str, Any]] = {}
+        sparse_rows: list[pl.DataFrame] = []
+
+        if cell_id_mapping and self.use_integer_keys:
+            id_map = {item["cell_id"]: item["integer_id"] for item in cell_id_mapping}
+            integer_ids = np.array(
+                [id_map.get(str(cid), i) for i, cid in enumerate(cell_ids)],
+                dtype=np.uint32,
+            )
+        else:
+            integer_ids = np.arange(len(cell_ids), dtype=np.uint32)
 
         for key, embedding in obsm.items():
             logger.info(f"Converting obsm '{key}'...")
@@ -3144,23 +3286,30 @@ class SLAFConverter:
                 )
                 continue
 
-            # Convert to numpy array
+            if sparse.issparse(embedding):
+                sparse_embedding = embedding.tocsr().astype(np.float32)
+                n_dims = sparse_embedding.shape[1]
+                coo = sparse_embedding.tocoo()
+                if coo.nnz > 0:
+                    sparse_rows.append(
+                        pl.DataFrame(
+                            {
+                                "cell_integer_id": integer_ids[coo.row].astype(
+                                    np.uint32, copy=False
+                                ),
+                                "gene_integer_id": coo.col.astype(
+                                    np.uint32, copy=False
+                                ),
+                                "value": coo.data.astype(np.float32, copy=False),
+                                "obsm_key": np.full(coo.nnz, key, dtype=object),
+                            }
+                        )
+                    )
+                obsm_info[key] = {"dimensions": n_dims, "storage": "sparse"}
+                continue
+
             embedding = np.asarray(embedding)
             n_dims = embedding.shape[1] if len(embedding.shape) > 1 else 1
-
-            # Get cell integer IDs in order
-            if cell_id_mapping and self.use_integer_keys:
-                # Create mapping dict for fast lookup
-                # cell_id_mapping has keys: "cell_id" and "integer_id"
-                id_map = {
-                    item["cell_id"]: item["integer_id"] for item in cell_id_mapping
-                }
-                integer_ids = np.array(
-                    [id_map.get(str(cid), i) for i, cid in enumerate(cell_ids)],
-                    dtype=np.uint32,
-                )
-            else:
-                integer_ids = np.arange(len(cell_ids), dtype=np.uint32)
 
             # Create FixedSizeListArray from embedding
             value_dtype = pa.float32() if embedding.dtype.kind == "f" else pa.float32()
@@ -3207,17 +3356,42 @@ class SLAFConverter:
             # Reload dataset to ensure consistency
             cells_dataset = lance.dataset(cells_path)
 
-            obsm_keys.append(key)
-            obsm_dimensions[key] = n_dims
+            obsm_info[key] = {"dimensions": n_dims, "storage": "dense"}
 
-        if not obsm_keys:
+        if sparse_rows or any(
+            info["storage"] == "sparse" for info in obsm_info.values()
+        ):
+            cells_sparse_path = f"{output_path}/cells_sparse.lance"
+            if sparse_rows:
+                sparse_df = pl.concat(sparse_rows, how="vertical_relaxed").sort(
+                    ["obsm_key", "cell_integer_id", "gene_integer_id"]
+                )
+            else:
+                sparse_df = pl.DataFrame(
+                    {
+                        "cell_integer_id": pl.Series([], dtype=pl.UInt32),
+                        "gene_integer_id": pl.Series([], dtype=pl.UInt32),
+                        "value": pl.Series([], dtype=pl.Float32),
+                        "obsm_key": pl.Series([], dtype=pl.Utf8),
+                    }
+                )
+            lance.write_dataset(
+                sparse_df.to_arrow(),
+                cells_sparse_path,
+                mode="overwrite",
+                data_storage_version="2.2",
+            )
+
+        if not obsm_info:
             logger.warning("No valid obsm embeddings to convert")
-            return []
+            return {}
 
         logger.info(
-            f"Successfully converted {len(obsm_keys)} obsm embeddings: {obsm_keys}"
+            "Successfully converted {} obsm embeddings: {}",
+            len(obsm_info),
+            sorted(obsm_info),
         )
-        return obsm_keys
+        return obsm_info
 
     def _convert_varm(
         self,
@@ -3262,8 +3436,14 @@ class SLAFConverter:
                 )
                 continue
 
-            # Convert to numpy array
-            embedding = np.asarray(embedding)
+            if sparse.issparse(embedding):
+                logger.warning(
+                    "varm '{}' is sparse in source AnnData; densifying during conversion.",
+                    key,
+                )
+                embedding = embedding.toarray()
+            else:
+                embedding = np.asarray(embedding)
             n_dims = embedding.shape[1] if len(embedding.shape) > 1 else 1
 
             # Get gene integer IDs in order
@@ -3356,6 +3536,79 @@ class SLAFConverter:
         j_ids = index_to_int_id[cols]
         return i_ids, j_ids, values
 
+    def _build_pairwise_table(
+        self,
+        matrices: dict[str, Any],
+        entity_ids: Any,
+        *,
+        integer_mapping: list[dict[str, Any]] | None = None,
+        integer_dtype: Any = np.uint32,
+        arrow_integer_type: pa.DataType = pa.uint32(),
+    ) -> tuple[pa.Table | None, list[str]]:
+        n_entities = len(entity_ids)
+        if integer_mapping and self.use_integer_keys:
+            id_map = {item["cell_id"]: item["integer_id"] for item in integer_mapping}
+            index_to_int_id = np.array(
+                [id_map.get(str(entity_id), i) for i, entity_id in enumerate(entity_ids)],
+                dtype=integer_dtype,
+            )
+        else:
+            index_to_int_id = np.arange(n_entities, dtype=integer_dtype)
+
+        coo_rows: dict[tuple[int, int], dict[str, float]] = {}
+        pairwise_keys: list[str] = []
+
+        for key, mat in matrices.items():
+            if not hasattr(mat, "shape") or len(mat.shape) != 2:
+                logger.warning("{} is not 2D. Skipping.", key)
+                continue
+            if mat.shape[0] != n_entities or mat.shape[1] != n_entities:
+                logger.warning(
+                    "{} shape {} != ({}, {}). Skipping.",
+                    key,
+                    mat.shape,
+                    n_entities,
+                    n_entities,
+                )
+                continue
+            pairwise_keys.append(key)
+            i_ids, j_ids, values = self._matrix_to_coo_triples(mat, index_to_int_id)
+            for idx in range(len(i_ids)):
+                ij = (int(i_ids[idx]), int(j_ids[idx]))
+                if ij not in coo_rows:
+                    coo_rows[ij] = dict.fromkeys(pairwise_keys, 0.0)
+                coo_rows[ij][key] = float(values[idx])
+
+        if not pairwise_keys:
+            return None, []
+
+        i_list: list[int] = []
+        j_list: list[int] = []
+        key_columns: dict[str, list[float]] = {key_name: [] for key_name in pairwise_keys}
+        for i, j in sorted(coo_rows):
+            vals = coo_rows[(i, j)]
+            i_list.append(i)
+            j_list.append(j)
+            for key_name in pairwise_keys:
+                key_columns[key_name].append(vals.get(key_name, 0.0))
+
+        if not i_list:
+            i_list, j_list = [0], [0]
+            for key_name in pairwise_keys:
+                key_columns[key_name] = [0.0]
+
+        table = pa.table(
+            {
+                "cell_integer_id_i": pa.array(i_list, type=arrow_integer_type),
+                "cell_integer_id_j": pa.array(j_list, type=arrow_integer_type),
+                **{
+                    key_name: pa.array(key_columns[key_name], type=pa.float32())
+                    for key_name in pairwise_keys
+                },
+            }
+        )
+        return table, pairwise_keys
+
     def _convert_obsp(
         self,
         obsp: dict[str, Any],
@@ -3370,68 +3623,15 @@ class SLAFConverter:
         cell_integer_id_i, cell_integer_id_j, and one float32 column per key.
         Only non-zero entries are stored (sparse COO).
         """
-        n_cells = len(cell_ids)
-        if cell_id_mapping and self.use_integer_keys:
-            id_map = {item["cell_id"]: item["integer_id"] for item in cell_id_mapping}
-            index_to_int_id = np.array(
-                [id_map.get(str(cid), i) for i, cid in enumerate(cell_ids)],
-                dtype=np.uint32,
-            )
-        else:
-            index_to_int_id = np.arange(n_cells, dtype=np.uint32)
-
-        # Build union of (i, j) and per-key values
-        coo_rows: dict[tuple[int, int], dict[str, float]] = {}
-        obsp_keys: list[str] = []
-
-        for key, mat in obsp.items():
-            if not hasattr(mat, "shape") or len(mat.shape) != 2:
-                logger.warning(f"obsp '{key}' is not 2D. Skipping.")
-                continue
-            if mat.shape[0] != n_cells or mat.shape[1] != n_cells:
-                logger.warning(
-                    f"obsp '{key}' shape {mat.shape} != ({n_cells}, {n_cells}). Skipping."
-                )
-                continue
-            obsp_keys.append(key)
-            i_ids, j_ids, values = self._matrix_to_coo_triples(mat, index_to_int_id)
-            for idx in range(len(i_ids)):
-                ij = (int(i_ids[idx]), int(j_ids[idx]))
-                if ij not in coo_rows:
-                    coo_rows[ij] = dict.fromkeys(obsp_keys, 0.0)
-                coo_rows[ij][key] = float(values[idx])
-
-        if not obsp_keys:
-            return []
-
-        # Build PyArrow table
-        i_list = []
-        j_list = []
-        key_columns: dict[str, list[float]] = {key_name: [] for key_name in obsp_keys}
-        for i, j in sorted(coo_rows):
-            vals = coo_rows[(i, j)]
-            i_list.append(i)
-            j_list.append(j)
-            for key_name in obsp_keys:
-                key_columns[key_name].append(vals.get(key_name, 0.0))
-
-        # Handle empty coo (e.g. all zeros) - still need to write table with correct schema
-        if not i_list:
-            # One row of zeros so schema is established
-            i_list, j_list = [0], [0]
-            for key_name in obsp_keys:
-                key_columns[key_name] = [0.0]
-
-        table = pa.table(
-            {
-                "cell_integer_id_i": pa.array(i_list, type=pa.uint32()),
-                "cell_integer_id_j": pa.array(j_list, type=pa.uint32()),
-                **{
-                    key_name: pa.array(key_columns[key_name], type=pa.float32())
-                    for key_name in obsp_keys
-                },
-            }
+        table, obsp_keys = self._build_pairwise_table(
+            obsp,
+            cell_ids,
+            integer_mapping=cell_id_mapping,
+            integer_dtype=np.uint32,
+            arrow_integer_type=pa.uint32(),
         )
+        if table is None:
+            return []
         cellsxcells_path = f"{output_path}/cellsxcells.lance"
         lance.write_dataset(
             table,
@@ -3665,9 +3865,101 @@ class SLAFConverter:
             result_df = result_df.rename(columns=column_mapping)
             logger.debug(f"Sanitized column names: {column_mapping}")
 
-        table = pa.table(result_df)
+        table = pa.Table.from_pandas(
+            result_df,
+            preserve_index=False,
+            nthreads=1,
+        )
         table = self._cast_table_string_columns_to_utf8(table, [entity_id_col])
         return table
+
+    def _extract_dense_obsm(
+        self,
+        obsm: Any,
+        n_obs: int,
+    ) -> tuple[dict[str, np.ndarray], dict[str, dict[str, Any]]]:
+        dense_obsm: dict[str, np.ndarray] = {}
+        obsm_info: dict[str, dict[str, Any]] = {}
+
+        if not obsm:
+            return dense_obsm, obsm_info
+
+        for key, embedding in obsm.items():
+            if sparse.issparse(embedding):
+                logger.warning(
+                    "Chunked conversion does not preserve sparse obsm '{}' yet; skipping.",
+                    key,
+                )
+                continue
+
+            embedding_array = np.asarray(embedding)
+            if embedding_array.shape[0] != n_obs:
+                logger.warning(
+                    "obsm '{}' shape {} does not match n_obs {}. Skipping.",
+                    key,
+                    embedding_array.shape[0],
+                    n_obs,
+                )
+                continue
+
+            if embedding_array.ndim == 1:
+                embedding_array = embedding_array.reshape(-1, 1)
+            elif embedding_array.ndim != 2:
+                logger.warning(
+                    "obsm '{}' has unsupported ndim {}. Skipping.",
+                    key,
+                    embedding_array.ndim,
+                )
+                continue
+
+            dense_obsm[key] = np.asarray(embedding_array, dtype=np.float32)
+            obsm_info[key] = {
+                "dimensions": int(embedding_array.shape[1]),
+                "storage": "dense",
+            }
+
+        return dense_obsm, obsm_info
+
+    def _attach_dense_obsm_to_metadata_table(
+        self,
+        table: pa.Table,
+        dense_obsm: dict[str, np.ndarray],
+    ) -> pa.Table:
+        result_table = table
+        for key, embedding in dense_obsm.items():
+            n_dims = int(embedding.shape[1])
+            flat_values = pa.array(
+                np.asarray(embedding, dtype=np.float32).reshape(-1),
+                type=pa.float32(),
+            )
+            vector_array = pa.FixedSizeListArray.from_arrays(flat_values, n_dims)
+            result_table = result_table.append_column(key, vector_array)
+        return result_table
+
+    def _get_chunked_dense_obsm(
+        self,
+        reader: Any,
+    ) -> tuple[dict[str, np.ndarray], dict[str, dict[str, Any]]]:
+        adata = getattr(reader, "adata", None)
+        if adata is None or not hasattr(adata, "obsm"):
+            return {}, {}
+        return self._extract_dense_obsm(adata.obsm, reader.n_obs)
+
+    def _validate_matching_obsm_info(
+        self,
+        current_obsm_info: dict[str, dict[str, Any]],
+        expected_obsm_info: dict[str, dict[str, Any]] | None,
+        *,
+        file_path: str,
+    ) -> dict[str, dict[str, Any]]:
+        if expected_obsm_info is None:
+            return current_obsm_info
+        if current_obsm_info != expected_obsm_info:
+            raise ValueError(
+                f"Inconsistent dense obsm schema in {file_path}. "
+                f"Expected {expected_obsm_info}, found {current_obsm_info}."
+            )
+        return expected_obsm_info
 
     def _cast_table_string_columns_to_utf8(
         self, table: pa.Table, column_names: list[str]
@@ -3875,6 +4167,51 @@ class SLAFConverter:
         # Compute cumulative sum with first value as 0
         return np.insert(np.cumsum(gene_counts)[:-1], 0, 0).tolist()
 
+    def _compute_total_counts(self, reader, obs_df: pd.DataFrame) -> np.ndarray:
+        """Compute total counts per cell during metadata creation."""
+        if "total_counts" in obs_df.columns:
+            logger.info("Using existing total_counts column")
+            return obs_df["total_counts"].to_numpy(dtype=np.float64, copy=False)
+        if "n_counts" in obs_df.columns:
+            logger.info("Using existing n_counts column for total counts")
+            return obs_df["n_counts"].to_numpy(dtype=np.float64, copy=False)
+
+        logger.info("Calculating total counts from expression data...")
+        all_chunk_totals = []
+        for chunk_table, _obs_slice in reader.iter_chunks(chunk_size=self.chunk_size):
+            chunk_df = pl.from_arrow(chunk_table)
+            assert isinstance(chunk_df, pl.DataFrame)
+            if len(chunk_df) > 0:
+                chunk_totals = chunk_df.group_by("cell_integer_id").agg(
+                    pl.col("value").sum().alias("total_counts")
+                )
+                all_chunk_totals.append(chunk_totals)
+
+        total_counts = np.zeros(len(obs_df), dtype=np.float64)
+        if all_chunk_totals:
+            combined_totals = pl.concat(all_chunk_totals)
+            final_totals = combined_totals.group_by("cell_integer_id").agg(
+                pl.col("total_counts").sum().alias("total_counts")
+            )
+            cell_ids = final_totals["cell_integer_id"].to_numpy()
+            counts = final_totals["total_counts"].to_numpy()
+            total_counts[cell_ids] = counts
+        return total_counts
+
+    def _compute_total_counts_anndata(self, adata, obs_df: pd.DataFrame) -> np.ndarray:
+        """Compute total counts per cell for an AnnData object."""
+        if "total_counts" in obs_df.columns:
+            logger.info("Using existing total_counts column")
+            return obs_df["total_counts"].to_numpy(dtype=np.float64, copy=False)
+        if "n_counts" in obs_df.columns:
+            logger.info("Using existing n_counts column for total counts")
+            return obs_df["n_counts"].to_numpy(dtype=np.float64, copy=False)
+
+        logger.info("Calculating total counts from expression data...")
+        if sparse.issparse(adata.X):
+            return np.asarray(adata.X.sum(axis=1)).reshape(-1).astype(np.float64)
+        return np.asarray(adata.X.sum(axis=1), dtype=np.float64).reshape(-1)
+
     def _compute_expression_statistics(
         self, expression_dataset
     ) -> tuple[dict[str, float], int]:
@@ -3973,7 +4310,7 @@ class SLAFConverter:
         output_path: str,
         shape: tuple,
         layer_names: list[str] | None = None,
-        obsm_keys: list[str] | None = None,
+        obsm_info: dict[str, dict[str, Any]] | None = None,
         varm_keys: list[str] | None = None,
         obsp_keys: list[str] | None = None,
         varp_keys: list[str] | None = None,
@@ -4020,6 +4357,10 @@ class SLAFConverter:
             tables["cellsxcells"] = "cellsxcells.lance"
         if varp_keys and len(varp_keys) > 0:
             tables["genesxgenes"] = "genesxgenes.lance"
+        if obsm_info and any(
+            info.get("storage") == "sparse" for info in obsm_info.values()
+        ):
+            tables["cells_sparse"] = "cells_sparse.lance"
 
         config = {
             "format_version": "0.5",  # Bumped to 0.5 for default lance version pinned to 2.2
@@ -4051,23 +4392,19 @@ class SLAFConverter:
             }
 
         # Add obsm metadata if obsm was converted
-        if obsm_keys and len(obsm_keys) > 0:
-            # Get dimensions from cells.lance schema
-            cells_dataset = lance.dataset(f"{output_path}/cells.lance")
-            obsm_dimensions = {}
-            schema = cells_dataset.schema
-            for field in schema:
-                if field.name in obsm_keys and isinstance(
-                    field.type, pa.FixedSizeListType
-                ):
-                    obsm_dimensions[field.name] = field.type.list_size
-
+        if obsm_info and len(obsm_info) > 0:
+            obsm_keys = sorted(obsm_info)
             # All converted obsm keys are immutable by default
             config["obsm"] = {
                 "available": obsm_keys,
                 "immutable": obsm_keys,  # Converted obsm cannot be deleted
                 "mutable": [],  # No mutable obsm yet
-                "dimensions": obsm_dimensions,
+                "dimensions": {
+                    key: int(info["dimensions"]) for key, info in obsm_info.items()
+                },
+                "storage": {
+                    key: str(info["storage"]) for key, info in obsm_info.items()
+                },
             }
 
         # Add varm metadata if varm was converted
@@ -4088,6 +4425,7 @@ class SLAFConverter:
                 "immutable": varm_keys,  # Converted varm cannot be deleted
                 "mutable": [],  # No mutable varm yet
                 "dimensions": varm_dimensions,
+                "storage": {key: "dense" for key in varm_keys},
             }
 
         # Add obsp metadata if obsp was converted (COO; dimensions = side length)
@@ -4124,6 +4462,8 @@ class SLAFConverter:
         combined_cells: pa.Table | None = None,
         combined_genes: pa.Table | None = None,
         layer_names: list[str] | None = None,
+        obsm_info: dict[str, dict[str, Any]] | None = None,
+        obsp_keys: list[str] | None = None,
     ):
         """Save SLAF configuration for multi-file conversion with source file tracking"""
 
@@ -4194,6 +4534,30 @@ class SLAFConverter:
                 "available": layer_names,
                 "immutable": layer_names,  # All converted layers are immutable
                 "mutable": [],
+            }
+
+        if obsm_info and len(obsm_info) > 0:
+            obsm_keys = sorted(obsm_info)
+            config["obsm"] = {
+                "available": obsm_keys,
+                "immutable": obsm_keys,
+                "mutable": [],
+                "dimensions": {
+                    key: int(info["dimensions"]) for key, info in obsm_info.items()
+                },
+                "storage": {
+                    key: str(info["storage"]) for key, info in obsm_info.items()
+                },
+            }
+
+        if obsp_keys and len(obsp_keys) > 0:
+            config["tables"]["cellsxcells"] = "cellsxcells.lance"
+            config["obsp"] = {
+                "available": obsp_keys,
+                "immutable": obsp_keys,
+                "mutable": [],
+                "dimensions": dict.fromkeys(obsp_keys, n_cells),
+                "storage": dict.fromkeys(obsp_keys, "coo"),
             }
 
         config_path = f"{output_path}/config.json"

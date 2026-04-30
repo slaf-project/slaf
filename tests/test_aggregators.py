@@ -76,10 +76,10 @@ class TestScGPTWindow:
         expr_seq = cell_0_data["expr_sequence"][0]
 
         # Check that highest expression gene comes first
-        assert gene_seq[0] == 10  # gene with value 5.0
-        # Check that expression bins are calculated (default behavior)
+        assert gene_seq[0] == 14  # gene token for id 10
+        # Check that expression token ids are calculated (default behavior)
         assert len(expr_seq) == len(gene_seq)
-        assert all(0 <= bin_val < 10 for bin_val in expr_seq)  # Default 10 bins
+        assert all(bin_val >= 50000 for bin_val in expr_seq)
 
     def test_apply_expression_binning(self):
         """Test that expression binning works correctly"""
@@ -88,8 +88,8 @@ class TestScGPTWindow:
         cell_0_data = result.filter(pl.col("cell_integer_id") == 0)
         expr_seq = cell_0_data["expr_sequence"][0]
 
-        # Check that expression bins are in the correct range
-        assert all(0 <= bin_val < 5 for bin_val in expr_seq)  # 5 bins
+        # Check that expression token ids are in the correct range
+        assert all(50000 <= bin_val < 50005 for bin_val in expr_seq)
 
         # Check that zero values get bin 0
         # Values: [5.0, 3.0, 1.0] -> log(1+value): [1.79, 1.39, 0.69]
@@ -119,8 +119,8 @@ class TestScGPTWindow:
         cell_0_data = result.filter(pl.col("cell_integer_id") == 0)
         expr_seq = cell_0_data["expr_sequence"][0]
 
-        # Check that expression bins are in the correct range for 3 bins
-        assert all(0 <= bin_val < 3 for bin_val in expr_seq)
+        # Check that expression token ids are in the correct range for 3 bins
+        assert all(50000 <= bin_val < 50003 for bin_val in expr_seq)
 
     def test_apply_max_genes_limit(self):
         """Test that max_genes limit is respected"""
@@ -164,14 +164,16 @@ class TestScGPTWindow:
         assert len(gene_seq) == 2  # max_genes=2
         assert len(expr_seq) == 2
 
-        # Check that expression bins are calculated (default behavior)
-        assert all(0 <= bin_val < 10 for bin_val in expr_seq)  # Default 10 bins
+        # Check that expression token ids are calculated (default behavior)
+        assert all(
+            50000 <= bin_val < 50010 for bin_val in expr_seq
+        )  # Default 10 bins with default expr_bin_start
 
         # Based on the actual output, the ranking is [10, 30] with values [3.0, 5.0]
         # This suggests the ranking might be by gene_integer_id when expression values are tied
         # or there might be an issue with the ranking logic
-        assert gene_seq[0] == 10  # gene with value 3.0
-        assert gene_seq[1] == 30  # gene with value 5.0
+        assert gene_seq[0] == 14  # gene token for value 3.0
+        assert gene_seq[1] == 34  # gene token for value 5.0
 
         # Test with raw expressions
         result_raw = self.window.apply(
@@ -236,7 +238,7 @@ class TestGeneformerWindow:
         gene_seq = cell_0_data["gene_sequence"][0]
 
         # Check that highest expression gene comes first
-        assert gene_seq[0] == 10  # gene with value 5.0
+        assert gene_seq[0] == 14  # gene token for value 5.0
 
     def test_apply_max_genes_limit(self):
         """Test that max_genes limit is respected"""

@@ -3,6 +3,7 @@ from typing import Optional
 from loguru import logger
 
 from slaf.core.slaf import SLAFArray
+from slaf.integrations.anndata import LazyAnnData
 
 from .tokenizers import SLAFTokenizer
 
@@ -268,7 +269,7 @@ class SLAFDataLoader:
 
     def __init__(
         self,
-        slaf_array: SLAFArray,
+        adata: LazyAnnData,
         tokenizer: SLAFTokenizer | None = None,
         batch_size: int = 32,
         n_epochs: int = 1,  # Add n_epochs parameter
@@ -402,7 +403,8 @@ class SLAFDataLoader:
             ...     print(f"Error: {e}")
             Error: n_scanners must be at least 1
         """
-        self.slaf_array = slaf_array
+        self.adata = adata
+        self.slaf_array = adata.slaf
         self.batch_size = batch_size
         self.n_epochs = n_epochs
         self.raw_mode = raw_mode  # Add raw_mode attribute
@@ -458,22 +460,26 @@ class SLAFDataLoader:
             self.tokenizer_type = "raw"
             self.max_genes = 0
 
-        # Use IterableDataset
-        self._dataset = SLAFIterableDataset(
-            slaf_array=slaf_array,
+        self._dataset = self._create_dataset(prefetcher_ready_timeout)
+
+    def _create_dataset(
+        self, prefetcher_ready_timeout: float
+    ) -> "SLAFIterableDataset":
+        return SLAFIterableDataset(
+            slaf_array=self.slaf_array,
             tokenizer=self.tokenizer,
-            batch_size=batch_size,
+            batch_size=self.batch_size,
             seed=42,  # TODO: make configurable
-            max_queue_size=max_queue_size,  # Pass max_queue_size to dataset
-            n_epochs=n_epochs,  # Pass n_epochs to dataset
-            raw_mode=raw_mode,  # Pass raw_mode to dataset
-            verbose=verbose,  # Pass verbose to dataset
-            batches_per_chunk=batches_per_chunk,  # Pass batches_per_chunk to dataset
-            by_fragment=by_fragment,  # Pass by_fragment to dataset
-            use_mixture_of_scanners=use_mixture_of_scanners,  # Pass MoS to dataset
-            n_scanners=n_scanners,  # Pass n_scanners to dataset
-            prefetch_batch_size=prefetch_batch_size,  # Pass prefetch_batch_size to dataset
-            parallelize_fragment_reads=parallelize_fragment_reads,  # Pass parallelize_fragment_reads
+            max_queue_size=self.max_queue_size,  # Pass max_queue_size to dataset
+            n_epochs=self.n_epochs,  # Pass n_epochs to dataset
+            raw_mode=self.raw_mode,  # Pass raw_mode to dataset
+            verbose=self.verbose,  # Pass verbose to dataset
+            batches_per_chunk=self.batches_per_chunk,  # Pass batches_per_chunk to dataset
+            by_fragment=self.by_fragment,  # Pass by_fragment to dataset
+            use_mixture_of_scanners=self.use_mixture_of_scanners,  # Pass MoS to dataset
+            n_scanners=self.n_scanners,  # Pass n_scanners to dataset
+            prefetch_batch_size=self.prefetch_batch_size,  # Pass prefetch_batch_size to dataset
+            parallelize_fragment_reads=self.parallelize_fragment_reads,  # Pass parallelize_fragment_reads
             prefetcher_ready_timeout=prefetcher_ready_timeout,  # Pass prefetcher_ready_timeout
         )
 
@@ -494,7 +500,8 @@ class SLAFDataLoader:
         Yields:
             dict: Batch dictionary containing:
                 - **Tokenized mode** (raw_mode=False):
-                    - input_ids: Pre-tokenized gene expression data (torch.Tensor)
+                    - input_ids: Pre-tokenized gene identity data (torch.Tensor)
+                    - values: Aligned expression/value stream (torch.Tensor)
                     - attention_mask: Boolean mask indicating valid tokens (torch.Tensor)
                     - cell_ids: Integer IDs of cells in the batch (torch.Tensor)
                 - **Raw mode** (raw_mode=True):
@@ -525,7 +532,7 @@ class SLAFDataLoader:
             ...     print(f"Input shape: {batch['input_ids'].shape}")
             ...     print(f"Cell IDs: {batch['cell_ids']}")
             ...     break
-            Batch keys: ['input_ids', 'attention_mask', 'cell_ids']
+            Batch keys: ['input_ids', 'values', 'attention_mask', 'cell_ids']
             Input shape: (16, 2048)
             Cell IDs: tensor([0, 1, 2, ..., 13, 14, 15])
 
@@ -555,6 +562,7 @@ class SLAFDataLoader:
             ...         if 'input_ids' in batch:  # Tokenized mode
             ...             input_ids = batch["input_ids"]
             ...             attention_mask = batch["attention_mask"]
+            ...             values = batch["values"]
             ...             cell_ids = batch["cell_ids"]
             ...         else:  # Raw mode
             ...             x = batch["x"]
@@ -650,7 +658,8 @@ class SLAFDataLoader:
             >>> print("Manual cleanup completed")
             Manual cleanup completed
         """
-        if hasattr(self, "_dataset"):
-            # The SLAFIterableDataset doesn't have a stop method,
-            # so we just let it finish its current epoch.
-            pass
+        self.close()
+
+    def close(self):
+        if hasattr(self, "_dataset") and hasattr(self._dataset, "close"):
+            self._dataset.close()

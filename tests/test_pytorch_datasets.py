@@ -1,10 +1,12 @@
 from unittest.mock import Mock, patch
 
+import numpy as np
 import pandas as pd
 import pytest
 import torch
 from torch.utils.data import DataLoader
 
+from slaf.integrations.anndata import LazyAnnData
 from slaf.ml.aggregators import GeneformerWindow, ScGPTWindow
 from slaf.ml.datasets import (
     AsyncPrefetcher,
@@ -19,9 +21,9 @@ from slaf.ml.tokenizers import GeneformerTokenizer, ScGPTTokenizer
 class TestSLAFIterableDataset:
     """Test suite for SLAFIterableDataset with comprehensive coverage"""
 
-    def test_dataset_initialization(self, tiny_slaf):
+    def test_dataset_initialization(self, tiny_slaf, tiny_lazy_adata):
         """Test SLAFIterableDataset initialization"""
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
 
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
@@ -41,9 +43,9 @@ class TestSLAFIterableDataset:
         assert hasattr(dataset, "batch_processor")
         assert hasattr(dataset, "prefetcher")
 
-    def test_dataset_initialization_scgpt(self, tiny_slaf):
+    def test_dataset_initialization_scgpt(self, tiny_slaf, tiny_lazy_adata):
         """Test SLAFIterableDataset initialization with scGPT tokenizer"""
-        tokenizer = ScGPTTokenizer(tiny_slaf)
+        tokenizer = ScGPTTokenizer(tiny_lazy_adata)
 
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
@@ -57,10 +59,10 @@ class TestSLAFIterableDataset:
         assert dataset.batch_size == 16
         assert dataset.seed == 123
 
-    def test_prefetch_batch_processor_initialization(self, tiny_slaf):
+    def test_prefetch_batch_processor_initialization(self, tiny_slaf, tiny_lazy_adata):
         """Test PrefetchBatchProcessor initialization and configuration"""
         shuffle = RandomShuffle()
-        tokenizer = ScGPTTokenizer(tiny_slaf)
+        tokenizer = ScGPTTokenizer(tiny_lazy_adata)
 
         processor = PrefetchBatchProcessor(
             slaf_array=tiny_slaf,
@@ -78,14 +80,14 @@ class TestSLAFIterableDataset:
         assert processor.tokenizer.max_genes == 1024
         assert processor.n_expression_bins == 10
         assert processor.use_binned_expressions is True
-        assert hasattr(processor, "expression_dataset")
+        assert hasattr(processor, "source_dataset")
         # With MoS enabled by default, we should have fragment_generators instead of batch_generator
         assert hasattr(processor, "fragment_generators")
 
-    def test_prefetch_batch_processor_fragment_parameter(self, tiny_slaf):
+    def test_prefetch_batch_processor_fragment_parameter(self, tiny_slaf, tiny_lazy_adata):
         """Test the by_fragment parameter in PrefetchBatchProcessor."""
         shuffle = RandomShuffle()
-        tokenizer = ScGPTTokenizer(tiny_slaf)
+        tokenizer = ScGPTTokenizer(tiny_lazy_adata)
 
         # Test fragment-based loading (with MoS disabled to test fragment mode)
         processor_fragment = PrefetchBatchProcessor(
@@ -113,10 +115,10 @@ class TestSLAFIterableDataset:
 
         assert processor_batch.by_fragment is False
 
-    def test_prefetch_batch_processor_reset_fragment(self, tiny_slaf):
+    def test_prefetch_batch_processor_reset_fragment(self, tiny_slaf, tiny_lazy_adata):
         """Test processor epoch reset in fragment mode."""
         shuffle = RandomShuffle()
-        tokenizer = ScGPTTokenizer(tiny_slaf)
+        tokenizer = ScGPTTokenizer(tiny_lazy_adata)
 
         processor = PrefetchBatchProcessor(
             slaf_array=tiny_slaf,
@@ -133,10 +135,10 @@ class TestSLAFIterableDataset:
         assert processor.current_epoch == 1
         assert processor.batch_id == 0
 
-    def test_prefetch_batch_processor_reset_batch(self, tiny_slaf):
+    def test_prefetch_batch_processor_reset_batch(self, tiny_slaf, tiny_lazy_adata):
         """Test processor epoch reset in batch mode."""
         shuffle = RandomShuffle()
-        tokenizer = ScGPTTokenizer(tiny_slaf)
+        tokenizer = ScGPTTokenizer(tiny_lazy_adata)
 
         processor = PrefetchBatchProcessor(
             slaf_array=tiny_slaf,
@@ -153,10 +155,10 @@ class TestSLAFIterableDataset:
         assert processor.current_epoch == 1
         assert processor.batch_id == 0
 
-    def test_prefetch_batch_processor_load_fragment(self, tiny_slaf):
+    def test_prefetch_batch_processor_load_fragment(self, tiny_slaf, tiny_lazy_adata):
         """Test processor batch loading in fragment mode."""
         shuffle = RandomShuffle()
-        tokenizer = ScGPTTokenizer(tiny_slaf)
+        tokenizer = ScGPTTokenizer(tiny_lazy_adata)
 
         processor = PrefetchBatchProcessor(
             slaf_array=tiny_slaf,
@@ -173,10 +175,10 @@ class TestSLAFIterableDataset:
         assert hasattr(batch, "attention_mask")
         assert hasattr(batch, "cell_integer_ids")
 
-    def test_prefetch_batch_processor_load_batch_mode(self, tiny_slaf):
+    def test_prefetch_batch_processor_load_batch_mode(self, tiny_slaf, tiny_lazy_adata):
         """Test processor batch loading in batch mode."""
         shuffle = RandomShuffle()
-        tokenizer = ScGPTTokenizer(tiny_slaf)
+        tokenizer = ScGPTTokenizer(tiny_lazy_adata)
 
         processor = PrefetchBatchProcessor(
             slaf_array=tiny_slaf,
@@ -201,6 +203,7 @@ class TestSLAFIterableDataset:
 
         batch = TokenizedPrefetchBatch(
             batch_id=0,
+            epoch=0,
             input_ids=input_ids,
             attention_mask=attention_mask,
             cell_integer_ids=[100, 101],
@@ -222,6 +225,7 @@ class TestSLAFIterableDataset:
 
         batch = TokenizedPrefetchBatch(
             batch_id=1,
+            epoch=0,
             input_ids=input_ids,
             attention_mask=attention_mask,
             cell_integer_ids=[200, 201, 202],
@@ -236,10 +240,10 @@ class TestSLAFIterableDataset:
         assert batch.cell_integer_ids == [200, 201, 202]
         assert batch.tokenize_time == 0.05
 
-    def test_async_prefetcher_initialization(self, tiny_slaf):
+    def test_async_prefetcher_initialization(self, tiny_slaf, tiny_lazy_adata):
         """Test AsyncPrefetcher initialization"""
         shuffle = RandomShuffle()
-        tokenizer = ScGPTTokenizer(tiny_slaf)
+        tokenizer = ScGPTTokenizer(tiny_lazy_adata)
 
         processor = PrefetchBatchProcessor(
             slaf_array=tiny_slaf,
@@ -256,10 +260,10 @@ class TestSLAFIterableDataset:
         assert prefetcher.worker_thread is None
         assert prefetcher.should_stop is False
 
-    def test_prefetcher_start_stop(self, tiny_slaf):
+    def test_prefetcher_start_stop(self, tiny_slaf, tiny_lazy_adata):
         """Test AsyncPrefetcher start and stop functionality"""
         shuffle = RandomShuffle()
-        tokenizer = ScGPTTokenizer(tiny_slaf)
+        tokenizer = ScGPTTokenizer(tiny_lazy_adata)
 
         processor = PrefetchBatchProcessor(
             slaf_array=tiny_slaf,
@@ -279,10 +283,10 @@ class TestSLAFIterableDataset:
         prefetcher.stop()
         assert prefetcher.should_stop is True
 
-    def test_prefetcher_queue_operations(self, tiny_slaf):
+    def test_prefetcher_queue_operations(self, tiny_slaf, tiny_lazy_adata):
         """Test AsyncPrefetcher queue operations"""
         shuffle = RandomShuffle()
-        tokenizer = ScGPTTokenizer(tiny_slaf)
+        tokenizer = ScGPTTokenizer(tiny_lazy_adata)
 
         processor = PrefetchBatchProcessor(
             slaf_array=tiny_slaf,
@@ -303,9 +307,9 @@ class TestSLAFIterableDataset:
         assert "elapsed_time" in stats
         assert "cells_per_sec" in stats
 
-    def test_dataset_iteration_geneformer(self, tiny_slaf):
+    def test_dataset_iteration_geneformer(self, tiny_slaf, tiny_lazy_adata):
         """Test dataset iteration with Geneformer tokenizer"""
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
             tokenizer=tokenizer,
@@ -336,9 +340,9 @@ class TestSLAFIterableDataset:
 
         assert batch_count > 0
 
-    def test_dataset_iteration_scgpt(self, tiny_slaf):
+    def test_dataset_iteration_scgpt(self, tiny_slaf, tiny_lazy_adata):
         """Test dataset iteration with scGPT tokenizer"""
-        tokenizer = ScGPTTokenizer(tiny_slaf)
+        tokenizer = ScGPTTokenizer(tiny_lazy_adata)
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
             tokenizer=tokenizer,
@@ -372,9 +376,9 @@ class TestSLAFIterableDataset:
 
         assert batch_count > 0
 
-    def test_scgpt_values_alignment_contract(self, tiny_slaf):
+    def test_scgpt_values_alignment_contract(self, tiny_slaf, tiny_lazy_adata):
         """scGPT batches must keep aligned dual streams."""
-        tokenizer = ScGPTTokenizer(tiny_slaf, max_genes=16)
+        tokenizer = ScGPTTokenizer(tiny_lazy_adata, max_genes=16)
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
             tokenizer=tokenizer,
@@ -392,9 +396,9 @@ class TestSLAFIterableDataset:
         assert torch.all(values[cls_positions] == pad_value)
         assert torch.all(values[sep_positions] == pad_value)
 
-    def test_device_transfer(self, tiny_slaf):
+    def test_device_transfer(self, tiny_slaf, tiny_lazy_adata):
         """Test device transfer functionality"""
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
             tokenizer=tokenizer,
@@ -408,9 +412,9 @@ class TestSLAFIterableDataset:
             assert batch["cell_ids"].device.type == "cpu"
             break  # Just test first batch
 
-    def test_prefetcher_timeout(self, tiny_slaf):
+    def test_prefetcher_timeout(self, tiny_slaf, tiny_lazy_adata):
         """Test prefetcher timeout handling"""
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
             tokenizer=tokenizer,
@@ -427,10 +431,10 @@ class TestSLAFIterableDataset:
 
         assert batch_count > 0
 
-    def test_pytorch_dataloader_integration(self, tiny_slaf):
+    def test_pytorch_dataloader_integration(self, tiny_slaf, tiny_lazy_adata):
         """Test integration with PyTorch DataLoader"""
 
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
             tokenizer=tokenizer,
@@ -468,10 +472,10 @@ class TestSLAFIterableDataset:
 
         assert batch_count > 0
 
-    def test_window_strategy_integration(self, tiny_slaf):
+    def test_window_strategy_integration(self, tiny_slaf, tiny_lazy_adata):
         """Test window strategy integration with batch processor"""
         shuffle = RandomShuffle()
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
 
         processor = PrefetchBatchProcessor(
             slaf_array=tiny_slaf,
@@ -484,9 +488,9 @@ class TestSLAFIterableDataset:
         assert processor.shuffle is shuffle
         assert processor.tokenizer.max_genes == 2048
 
-    def test_multi_epoch_initialization(self, tiny_slaf):
+    def test_multi_epoch_initialization(self, tiny_slaf, tiny_lazy_adata):
         """Test SLAFIterableDataset initialization with multi-epoch support"""
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
 
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
@@ -501,9 +505,9 @@ class TestSLAFIterableDataset:
         assert dataset.batch_processor.current_epoch >= 0
         assert dataset.batch_processor.current_epoch < 5
 
-    def test_multi_epoch_iteration(self, tiny_slaf):
+    def test_multi_epoch_iteration(self, tiny_slaf, tiny_lazy_adata):
         """Test multi-epoch iteration functionality"""
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
 
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
@@ -535,9 +539,9 @@ class TestSLAFIterableDataset:
         assert len(epochs_seen) >= 1, f"Expected at least 1 epoch, got {epochs_seen}"
         assert total_batches > 0
 
-    def test_epoch_transition_functionality(self, tiny_slaf):
+    def test_epoch_transition_functionality(self, tiny_slaf, tiny_lazy_adata):
         """Test that epoch transitions work correctly"""
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
 
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
@@ -571,10 +575,10 @@ class TestSLAFIterableDataset:
                 "Epochs should not go backwards"
             )
 
-    def test_batch_processor_epoch_reset(self, tiny_slaf):
+    def test_batch_processor_epoch_reset(self, tiny_slaf, tiny_lazy_adata):
         """Test PrefetchBatchProcessor epoch reset functionality"""
         shuffle = RandomShuffle()
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
 
         processor = PrefetchBatchProcessor(
             slaf_array=tiny_slaf,
@@ -600,9 +604,9 @@ class TestSLAFIterableDataset:
         with pytest.raises(ValueError):
             processor.reset_for_epoch(3)  # Invalid epoch (>= n_epochs)
 
-    def test_multi_epoch_with_small_dataset(self, tiny_slaf):
+    def test_multi_epoch_with_small_dataset(self, tiny_slaf, tiny_lazy_adata):
         """Test multi-epoch functionality with small dataset that gets exhausted"""
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
 
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
@@ -632,9 +636,9 @@ class TestSLAFIterableDataset:
         )
         assert total_batches > 0
 
-    def test_single_epoch_behavior(self, tiny_slaf):
+    def test_single_epoch_behavior(self, tiny_slaf, tiny_lazy_adata):
         """Test that single epoch (default) behavior is unchanged"""
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
 
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
@@ -658,9 +662,9 @@ class TestSLAFIterableDataset:
         assert epochs_seen == {0}, f"Expected only epoch 0, got {epochs_seen}"
         assert batch_count > 0
 
-    def test_multi_epoch_prefetcher_stats(self, tiny_slaf):
+    def test_multi_epoch_prefetcher_stats(self, tiny_slaf, tiny_lazy_adata):
         """Test that AsyncPrefetcher correctly tracks multi-epoch statistics"""
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
 
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
@@ -683,9 +687,9 @@ class TestSLAFIterableDataset:
         assert stats["n_epochs"] == 3
         assert stats["current_epoch"] >= 0
 
-    def test_multi_epoch_completion_detection(self, tiny_slaf):
+    def test_multi_epoch_completion_detection(self, tiny_slaf, tiny_lazy_adata):
         """Test that the dataset correctly detects when all epochs are completed"""
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
 
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
@@ -722,6 +726,7 @@ class TestPrefetchBatchProcessing:
         # Create mock SLAF array
         mock_slaf = Mock()
         mock_slaf.slaf_path = "/mock/path"
+        mock_slaf.shape = (2, 2)
 
         # Mock Lance dataset
         mock_dataset = Mock()
@@ -740,12 +745,19 @@ class TestPrefetchBatchProcessing:
         mock_dataset.get_fragments.return_value = [mock_fragment]
 
         # Mock Lance
-        with patch("slaf.ml.datasets.lance") as mock_lance:
+        with (
+            patch("slaf.ml.datasets.lance") as mock_lance,
+            patch("slaf.ml.datasets.get_sparse_table", return_value=None),
+            patch(
+                "slaf.ml.datasets.compute_row_counts",
+                return_value=np.asarray([2, 2], dtype=np.int64),
+            ),
+        ):
             mock_lance.dataset.return_value = mock_dataset
 
             # Create processor with MoS disabled to avoid fragment generator issues
             shuffle = RandomShuffle()
-            tokenizer = GeneformerTokenizer(mock_slaf)
+            tokenizer = GeneformerTokenizer(LazyAnnData(mock_slaf))
 
             processor = PrefetchBatchProcessor(
                 slaf_array=mock_slaf,
@@ -768,6 +780,7 @@ class TestPrefetchBatchProcessing:
 
         batch = TokenizedPrefetchBatch(
             batch_id=0,
+            epoch=0,
             input_ids=input_ids,
             attention_mask=attention_mask,
             cell_integer_ids=[100, 101],
@@ -782,10 +795,10 @@ class TestPrefetchBatchProcessing:
         assert len(batch.cell_integer_ids) == 2
         assert batch.tokenize_time == 0.1
 
-    def test_batch_processor_expression_binning(self, tiny_slaf):
+    def test_batch_processor_expression_binning(self, tiny_slaf, tiny_lazy_adata):
         """Test batch processor with expression binning"""
         shuffle = RandomShuffle()
-        tokenizer = ScGPTTokenizer(tiny_slaf)
+        tokenizer = ScGPTTokenizer(tiny_lazy_adata)
 
         processor = PrefetchBatchProcessor(
             slaf_array=tiny_slaf,
@@ -798,9 +811,9 @@ class TestPrefetchBatchProcessing:
         assert processor.n_expression_bins == 10
         assert processor.use_binned_expressions is True
 
-    def test_dataset_fragment_parameter(self, tiny_slaf):
+    def test_dataset_fragment_parameter(self, tiny_slaf, tiny_lazy_adata):
         """Test the by_fragment parameter functionality."""
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
 
         # Test fragment-based loading
         dataset_fragment = SLAFIterableDataset(
@@ -824,9 +837,9 @@ class TestPrefetchBatchProcessing:
 
         assert dataset_batch.by_fragment is False
 
-    def test_dataset_iteration_fragment_mode(self, tiny_slaf):
+    def test_dataset_iteration_fragment_mode(self, tiny_slaf, tiny_lazy_adata):
         """Test dataset iteration in fragment mode."""
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
             tokenizer=tokenizer,
@@ -847,9 +860,9 @@ class TestPrefetchBatchProcessing:
 
         assert batch_count > 0
 
-    def test_dataset_iteration_batch_mode(self, tiny_slaf):
+    def test_dataset_iteration_batch_mode(self, tiny_slaf, tiny_lazy_adata):
         """Test dataset iteration in batch mode."""
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
             tokenizer=tokenizer,
@@ -870,7 +883,7 @@ class TestPrefetchBatchProcessing:
 
         assert batch_count > 0
 
-    def test_dataset_raw_mode_fragment(self, tiny_slaf):
+    def test_dataset_raw_mode_fragment(self, tiny_slaf, tiny_lazy_adata):
         """Test dataset in raw mode with fragment loading."""
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
@@ -892,7 +905,7 @@ class TestPrefetchBatchProcessing:
 
         assert batch_count > 0
 
-    def test_dataset_raw_mode_batch(self, tiny_slaf):
+    def test_dataset_raw_mode_batch(self, tiny_slaf, tiny_lazy_adata):
         """Test dataset in raw mode with batch loading."""
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
@@ -914,9 +927,9 @@ class TestPrefetchBatchProcessing:
 
         assert batch_count > 0
 
-    def test_mixture_of_scanners_initialization(self, tiny_slaf):
+    def test_mixture_of_scanners_initialization(self, tiny_slaf, tiny_lazy_adata):
         """Test SLAFIterableDataset initialization with Mixture of Scanners (MoS)"""
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
 
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
@@ -932,9 +945,9 @@ class TestPrefetchBatchProcessing:
         assert dataset.batch_processor.n_scanners == 8
         assert dataset.batch_processor.prefetch_batch_size == 1048576
 
-    def test_mixture_of_scanners_fragment_generators(self, tiny_slaf):
+    def test_mixture_of_scanners_fragment_generators(self, tiny_slaf, tiny_lazy_adata):
         """Test that MoS creates the correct number of fragment generators"""
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
 
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
@@ -959,9 +972,9 @@ class TestPrefetchBatchProcessing:
             dataset.batch_processor.fragment_generators
         )
 
-    def test_mixture_of_scanners_parameter_validation(self, tiny_slaf):
+    def test_mixture_of_scanners_parameter_validation(self, tiny_slaf, tiny_lazy_adata):
         """Test MoS parameter validation"""
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
 
         # Test valid parameters
         dataset = SLAFIterableDataset(
@@ -1022,9 +1035,9 @@ class TestPrefetchBatchProcessing:
                 prefetch_batch_size=10000001,
             )
 
-    def test_mixture_of_scanners_iteration(self, tiny_slaf):
+    def test_mixture_of_scanners_iteration(self, tiny_slaf, tiny_lazy_adata):
         """Test that MoS dataset can iterate through batches"""
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
 
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
@@ -1047,9 +1060,9 @@ class TestPrefetchBatchProcessing:
 
         assert batch_count > 0
 
-    def test_mixture_of_scanners_epoch_reset(self, tiny_slaf):
+    def test_mixture_of_scanners_epoch_reset(self, tiny_slaf, tiny_lazy_adata):
         """Test that MoS epoch reset works correctly"""
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
 
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
@@ -1075,10 +1088,10 @@ class TestPrefetchBatchProcessing:
             dataset.batch_processor.fragment_generators
         )
 
-    def test_mixture_of_scanners_backward_compatibility(self, tiny_slaf):
+    def test_mixture_of_scanners_backward_compatibility(self, tiny_slaf, tiny_lazy_adata):
         """Test that MoS is backward compatible (enabled by default) in PrefetchBatchProcessor"""
         shuffle = RandomShuffle()
-        tokenizer = ScGPTTokenizer(tiny_slaf)
+        tokenizer = ScGPTTokenizer(tiny_lazy_adata)
 
         # Default behavior (MoS enabled)
         processor_default = PrefetchBatchProcessor(
@@ -1104,7 +1117,7 @@ class TestPrefetchBatchProcessing:
         assert not hasattr(processor_disabled, "fragment_generators")
         assert hasattr(processor_disabled, "batch_generator")
 
-    def test_mixture_of_scanners_with_raw_mode(self, tiny_slaf):
+    def test_mixture_of_scanners_with_raw_mode(self, tiny_slaf, tiny_lazy_adata):
         """Test MoS functionality with raw mode"""
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
@@ -1130,9 +1143,9 @@ class TestPrefetchBatchProcessing:
 
         assert batch_count > 0
 
-    def test_mixture_of_scanners_with_fragment_mode(self, tiny_slaf):
+    def test_mixture_of_scanners_with_fragment_mode(self, tiny_slaf, tiny_lazy_adata):
         """Test that MoS automatically enables fragment mode"""
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
 
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
@@ -1147,9 +1160,9 @@ class TestPrefetchBatchProcessing:
         assert dataset.batch_processor.by_fragment is True
         assert dataset.batch_processor.use_mixture_of_scanners is True
 
-    def test_mixture_of_scanners_random_sampling(self, tiny_slaf):
+    def test_mixture_of_scanners_random_sampling(self, tiny_slaf, tiny_lazy_adata):
         """Test that MoS uses random sampling from fragment generators"""
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
 
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
@@ -1175,9 +1188,9 @@ class TestPrefetchBatchProcessing:
             assert "attention_mask" in batch
             assert "cell_ids" in batch
 
-    def test_mixture_of_scanners_generator_exhaustion_handling(self, tiny_slaf):
+    def test_mixture_of_scanners_generator_exhaustion_handling(self, tiny_slaf, tiny_lazy_adata):
         """Test that MoS handles generator exhaustion correctly"""
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
 
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
@@ -1197,9 +1210,9 @@ class TestPrefetchBatchProcessing:
 
         assert batch_count > 0
 
-    def test_mixture_of_scanners_cell_boundary_handling(self, tiny_slaf):
+    def test_mixture_of_scanners_cell_boundary_handling(self, tiny_slaf, tiny_lazy_adata):
         """Test that MoS handles cell boundaries correctly"""
-        tokenizer = GeneformerTokenizer(tiny_slaf)
+        tokenizer = GeneformerTokenizer(tiny_lazy_adata)
 
         dataset = SLAFIterableDataset(
             slaf_array=tiny_slaf,
@@ -1224,11 +1237,11 @@ class TestPrefetchBatchProcessing:
         assert batch_count > 0
 
     def test_prefetch_batch_processor_mixture_of_scanners_initialization(
-        self, tiny_slaf
+        self, tiny_slaf, tiny_lazy_adata
     ):
         """Test PrefetchBatchProcessor initialization with Mixture of Scanners (MoS)"""
         shuffle = RandomShuffle()
-        tokenizer = ScGPTTokenizer(tiny_slaf)
+        tokenizer = ScGPTTokenizer(tiny_lazy_adata)
 
         processor = PrefetchBatchProcessor(
             slaf_array=tiny_slaf,
@@ -1255,10 +1268,10 @@ class TestPrefetchBatchProcessing:
         assert len(processor.generator_last_cells) == len(processor.fragment_generators)
         assert len(processor.generator_active) == len(processor.generator_active)
 
-    def test_prefetch_batch_processor_mos_parameter_validation(self, tiny_slaf):
+    def test_prefetch_batch_processor_mos_parameter_validation(self, tiny_slaf, tiny_lazy_adata):
         """Test MoS parameter validation in PrefetchBatchProcessor"""
         shuffle = RandomShuffle()
-        tokenizer = ScGPTTokenizer(tiny_slaf)
+        tokenizer = ScGPTTokenizer(tiny_lazy_adata)
 
         # Test valid parameters
         processor = PrefetchBatchProcessor(
@@ -1319,10 +1332,10 @@ class TestPrefetchBatchProcessing:
                 prefetch_batch_size=10000001,
             )
 
-    def test_prefetch_batch_processor_mos_epoch_reset(self, tiny_slaf):
+    def test_prefetch_batch_processor_mos_epoch_reset(self, tiny_slaf, tiny_lazy_adata):
         """Test that MoS epoch reset works correctly in PrefetchBatchProcessor"""
         shuffle = RandomShuffle()
-        tokenizer = ScGPTTokenizer(tiny_slaf)
+        tokenizer = ScGPTTokenizer(tiny_lazy_adata)
 
         processor = PrefetchBatchProcessor(
             slaf_array=tiny_slaf,
@@ -1344,10 +1357,10 @@ class TestPrefetchBatchProcessing:
         assert len(processor.generator_last_cells) == len(processor.fragment_generators)
         assert len(processor.generator_active) == len(processor.fragment_generators)
 
-    def test_prefetch_batch_processor_mos_backward_compatibility(self, tiny_slaf):
+    def test_prefetch_batch_processor_mos_backward_compatibility(self, tiny_slaf, tiny_lazy_adata):
         """Test that MoS is backward compatible (enabled by default) in PrefetchBatchProcessor"""
         shuffle = RandomShuffle()
-        tokenizer = ScGPTTokenizer(tiny_slaf)
+        tokenizer = ScGPTTokenizer(tiny_lazy_adata)
 
         # Default behavior (MoS enabled)
         processor_default = PrefetchBatchProcessor(
@@ -1373,7 +1386,7 @@ class TestPrefetchBatchProcessing:
         assert not hasattr(processor_disabled, "fragment_generators")
         assert hasattr(processor_disabled, "batch_generator")
 
-    def test_prefetch_batch_processor_mos_with_raw_mode(self, tiny_slaf):
+    def test_prefetch_batch_processor_mos_with_raw_mode(self, tiny_slaf, tiny_lazy_adata):
         """Test MoS functionality with raw mode in PrefetchBatchProcessor"""
         shuffle = RandomShuffle()
         tokenizer = None  # No tokenizer for raw mode
@@ -1396,10 +1409,10 @@ class TestPrefetchBatchProcessing:
         assert hasattr(batch, "batch_dfs")
         assert hasattr(batch, "cell_integer_ids")
 
-    def test_prefetch_batch_processor_mos_fragment_mode_automatic(self, tiny_slaf):
+    def test_prefetch_batch_processor_mos_fragment_mode_automatic(self, tiny_slaf, tiny_lazy_adata):
         """Test that MoS automatically enables fragment mode in PrefetchBatchProcessor"""
         shuffle = RandomShuffle()
-        tokenizer = ScGPTTokenizer(tiny_slaf)
+        tokenizer = ScGPTTokenizer(tiny_lazy_adata)
 
         processor = PrefetchBatchProcessor(
             slaf_array=tiny_slaf,
@@ -1414,10 +1427,10 @@ class TestPrefetchBatchProcessing:
         assert processor.by_fragment is True
         assert processor.use_mixture_of_scanners is True
 
-    def test_prefetch_batch_processor_mos_load_prefetch_batch(self, tiny_slaf):
+    def test_prefetch_batch_processor_mos_load_prefetch_batch(self, tiny_slaf, tiny_lazy_adata):
         """Test that MoS can load prefetch batches correctly"""
         shuffle = RandomShuffle()
-        tokenizer = ScGPTTokenizer(tiny_slaf)
+        tokenizer = ScGPTTokenizer(tiny_lazy_adata)
 
         processor = PrefetchBatchProcessor(
             slaf_array=tiny_slaf,
@@ -1434,10 +1447,10 @@ class TestPrefetchBatchProcessing:
         assert hasattr(batch, "attention_mask")
         assert hasattr(batch, "cell_integer_ids")
 
-    def test_prefetch_batch_processor_mos_cell_boundary_handling(self, tiny_slaf):
+    def test_prefetch_batch_processor_mos_cell_boundary_handling(self, tiny_slaf, tiny_lazy_adata):
         """Test that MoS handles cell boundaries correctly in PrefetchBatchProcessor"""
         shuffle = RandomShuffle()
-        tokenizer = ScGPTTokenizer(tiny_slaf)
+        tokenizer = ScGPTTokenizer(tiny_lazy_adata)
 
         processor = PrefetchBatchProcessor(
             slaf_array=tiny_slaf,

@@ -383,8 +383,10 @@ class LazySparseMixin:
         elif isinstance(selector, int):
             return 1
 
-        elif isinstance(selector, np.ndarray) and selector.dtype == bool:
-            return int(selector.sum())
+        elif isinstance(selector, np.ndarray):
+            if selector.dtype == bool:
+                return int(selector.sum())
+            return int(len(selector))
 
         else:
             raise ValueError(f"Unsupported selector type: {type(selector)}")

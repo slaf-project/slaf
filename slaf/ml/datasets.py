@@ -54,11 +54,17 @@ except ImportError:
     logger.warning("Polars not available. Fragment loading will be disabled.")
 
 from slaf.core.slaf import SLAFArray
+from slaf.core.sparse_tables import (
+    EXPRESSION_SPARSE_TABLE,
+    compute_row_counts,
+    get_sparse_table,
+    get_sparse_table_path,
+)
 from slaf.core.tabular_schema import SLAF_LANCE_COO_SCHEMA
 from slaf.ml.samplers import Shuffle
 from slaf.ml.tokenizers import SLAFTokenizer
 
-# Define union type for both batch types
+# Define union type for all batch types
 PrefetchBatch = Union["TokenizedPrefetchBatch", "RawPrefetchBatch"]
 
 
@@ -275,10 +281,11 @@ class TokenizedPrefetchBatch:
     """
 
     batch_id: int
-    input_ids: torch.Tensor  # Tokenized sequences
+    epoch: int
+    input_ids: torch.Tensor  # Tokenized identity sequences
     attention_mask: torch.Tensor  # Attention masks
     cell_integer_ids: list[int]  # Corresponding cell integer IDs
-    values: torch.Tensor | None = None  # scGPT aligned expression/value stream
+    values: torch.Tensor | None = None  # aligned expression/value stream
     partial_cell_data: dict | None = (
         None  # Store partial cell data for boundary handling
     )
@@ -290,6 +297,7 @@ class RawPrefetchBatch:
     """Raw prefetch batch containing pre-chunked raw data for fast batch creation."""
 
     batch_id: int
+    epoch: int
     batch_dfs: list[pl.DataFrame]  # List of pre-chunked DataFrames
     cell_integer_ids: list[int]  # List of all cell IDs across all batches
     process_time: float
@@ -374,9 +382,20 @@ class PrefetchBatchProcessor:
         # Track prefetch statistics
         self.total_prefetch_cells = 0
 
-        # Create Lance dataset and batch generator
-        self.expression_dataset = lance.dataset(
-            f"{self.slaf_array.slaf_path}/expression.lance"
+        self.source_descriptor = EXPRESSION_SPARSE_TABLE
+        self.source_logical_key = None
+
+        self.source_dataset = get_sparse_table(self.slaf_array, self.source_descriptor)
+        if self.source_dataset is None:
+            self.source_dataset = lance.dataset(
+                get_sparse_table_path(self.slaf_array, self.source_descriptor)
+            )
+
+        self.source_cell_counts = compute_row_counts(
+            self.slaf_array,
+            self.source_descriptor,
+            n_rows=self.slaf_array.shape[0],
+            logical_key=self.source_logical_key,
         )
 
         if self.use_mixture_of_scanners:
@@ -390,7 +409,7 @@ class PrefetchBatchProcessor:
             ] = []  # Track which generators are still active
 
             # Initialize fragment generators
-            for fragment in self.expression_dataset.get_fragments():
+            for fragment in self.source_dataset.get_fragments():
                 # Pass the prefetch_batch_size to control batch sizes and prevent premature exhaustion
                 generator = fragment.to_batches(batch_size=self.prefetch_batch_size)
                 self.fragment_generators.append(generator)
@@ -409,10 +428,10 @@ class PrefetchBatchProcessor:
 
         elif self.by_fragment:
             # Fragment-based approach: iterate through fragments
-            self.fragment_iterator = iter(self.expression_dataset.get_fragments())
+            self.fragment_iterator = iter(self.source_dataset.get_fragments())
         else:
             # Sequential approach: use batch generator
-            self.batch_generator = self.expression_dataset.to_batches()
+            self.batch_generator = self.source_dataset.to_batches()
 
         # Initialize timing variables for consolidated reporting
         self._last_load_time = 0.0
@@ -496,7 +515,7 @@ class PrefetchBatchProcessor:
             self.generator_last_cells = []
             self.generator_active = []
 
-            for fragment in self.expression_dataset.get_fragments():
+            for fragment in self.source_dataset.get_fragments():
                 generator = fragment.to_batches(batch_size=self.prefetch_batch_size)
                 self.fragment_generators.append(generator)
                 self.generator_last_cells.append(None)
@@ -509,9 +528,9 @@ class PrefetchBatchProcessor:
                 )
 
         elif self.by_fragment:
-            self.fragment_iterator = iter(self.expression_dataset.get_fragments())
+            self.fragment_iterator = iter(self.source_dataset.get_fragments())
         else:
-            self.batch_generator = self.expression_dataset.to_batches()
+            self.batch_generator = self.source_dataset.to_batches()
 
         print_epoch_transition(f"Reset batch generator for epoch {epoch}", self.verbose)
 
@@ -573,7 +592,7 @@ class PrefetchBatchProcessor:
             for _ in range(self.batches_per_chunk):
                 try:
                     batch = next(self.fragment_generators[generator_idx])
-                    batch_df_raw = pl.from_arrow(batch)
+                    batch_df_raw = self._batch_to_dataframe(batch)
                     # Ensure we have a DataFrame, not a Series
                     if isinstance(batch_df_raw, pl.Series):
                         raise TypeError(
@@ -604,6 +623,24 @@ class PrefetchBatchProcessor:
         except StopIteration:
             # Mark this generator as exhausted
             return None, generator_idx, True
+
+    def _batch_to_dataframe(self, batch) -> pl.DataFrame:
+        batch_df_raw = pl.from_arrow(batch)
+        if isinstance(batch_df_raw, pl.Series):
+            raise TypeError("Expected DataFrame but got Series from generator batch")
+        batch_df: pl.DataFrame = batch_df_raw
+        return batch_df
+
+    def _normalize_source_dataframe(self, df: pl.DataFrame) -> pl.DataFrame:
+        if self.source_logical_key is None:
+            return df
+        if "obsm_key" in df.columns:
+            return (
+                df.filter(pl.col("obsm_key") == self.source_logical_key)
+                .select(["cell_integer_id", "gene_integer_id", "value"])
+                .sort(["cell_integer_id", "gene_integer_id"])
+            )
+        return df.sort(["cell_integer_id", "gene_integer_id"])
 
     def load_prefetch_batch(self) -> PrefetchBatch:
         """
@@ -795,13 +832,7 @@ class PrefetchBatchProcessor:
                 # Fragment-based approach: load one fragment at a time
                 try:
                     fragment = next(self.fragment_iterator)
-                    combined_df_raw = pl.from_arrow(fragment.to_table())
-                    # Ensure we have a DataFrame, not a Series
-                    if isinstance(combined_df_raw, pl.Series):
-                        raise TypeError(
-                            "Expected DataFrame but got Series from fragment"
-                        )
-                    combined_df = combined_df_raw
+                    combined_df = self._batch_to_dataframe(fragment.to_table())
                     batch_count = 1  # One fragment
                 except StopIteration:
                     # Emit deferred partial cells (non-MoS holds max cell id per chunk).
@@ -827,13 +858,7 @@ class PrefetchBatchProcessor:
                 for _ in range(self.batches_per_chunk):
                     try:
                         batch = next(self.batch_generator)
-                        batch_df_raw = pl.from_arrow(batch)
-                        # Ensure we have a DataFrame, not a Series
-                        if isinstance(batch_df_raw, pl.Series):
-                            raise TypeError(
-                                "Expected DataFrame but got Series from batch"
-                            )
-                        batch_df: pl.DataFrame = batch_df_raw
+                        batch_df = self._batch_to_dataframe(batch)
                         batch_dfs.append(batch_df)
                     except StopIteration:
                         break
@@ -861,15 +886,20 @@ class PrefetchBatchProcessor:
                     batch_count = len(batch_dfs)
             load_time = time.time() - load_start
 
+            combined_df = self._normalize_source_dataframe(combined_df)
+
             # Record lance loading timing
             self._record_timing("lance_loading", load_time)
 
             # Print detailed loading breakdown every 10 batches
             if self.batch_id % 10 == 0:
-                import psutil  # type: ignore
+                try:
+                    import psutil  # type: ignore
 
-                process = psutil.Process()
-                memory_mb = process.memory_info().rss / 1024 / 1024
+                    process = psutil.Process()
+                    memory_mb = process.memory_info().rss / 1024 / 1024
+                except ImportError:
+                    memory_mb = 0.0
 
                 # Store timing info for consolidated report
                 self._last_load_time = load_time
@@ -892,17 +922,18 @@ class PrefetchBatchProcessor:
                 # MoS mode: validate each cell's row count against ground
                 # truth (_cell_start_index) to handle both intra-fragment
                 # read splits and cross-fragment boundary splits.
-                csi = self.slaf_array._cell_start_index
-
                 self.partial_cell_data = {}
                 if len(combined_df) > 0:
                     cell_counts = combined_df.group_by("cell_integer_id").agg(
                         pl.len().alias("observed")
                     )
                     cell_ids_series = cell_counts["cell_integer_id"]
-                    expected = (
-                        csi.gather(cell_ids_series + 1) - csi.gather(cell_ids_series)
-                    ).alias("expected")
+                    expected = pl.Series(
+                        "expected",
+                        self.source_cell_counts[
+                            cell_ids_series.to_numpy().astype(np.int64, copy=False)
+                        ],
+                    )
                     cell_counts = cell_counts.with_columns(expected)
 
                     incomplete_mask = cell_counts["observed"] < cell_counts["expected"]
@@ -999,6 +1030,7 @@ class PrefetchBatchProcessor:
                     self.batch_id += 1  # Increment batch_id for raw mode
                     return RawPrefetchBatch(
                         batch_id=self.batch_id - 1,
+                        epoch=self.current_epoch,
                         batch_dfs=shuffled_chunks,  # type: ignore[arg-type]  # List of pre-chunked DataFrames
                         cell_integer_ids=complete_df["cell_integer_id"]  # type: ignore[index]
                         .unique()
@@ -1009,6 +1041,9 @@ class PrefetchBatchProcessor:
                 else:
                     # Tokenized mode: apply window functions and tokenize
                     shuffle_start = time.time()
+                    tokenizer = self.tokenizer
+                    if tokenizer is None:
+                        raise RuntimeError("Tokenizer is required for tokenized mode")
 
                     # Apply shuffling directly to the DataFrame (no chunking for tokenized mode)
                     shuffled_out = self.shuffle.apply(
@@ -1030,10 +1065,6 @@ class PrefetchBatchProcessor:
                     window_params.update(
                         self.window_kwargs
                     )  # Add any additional kwargs
-
-                    tokenizer = self.tokenizer
-                    if tokenizer is None:
-                        raise RuntimeError("Tokenizer is required for tokenized mode")
 
                     grouped = tokenizer.apply(
                         shuffled_df,
@@ -1085,6 +1116,7 @@ class PrefetchBatchProcessor:
                     cell_ids_ordered = grouped["cell_integer_id"].to_list()  # type: ignore[index]
                     return TokenizedPrefetchBatch(
                         batch_id=self.batch_id - 1,
+                        epoch=self.current_epoch,
                         input_ids=input_ids,
                         attention_mask=attention_mask,
                         values=values,
@@ -1150,6 +1182,7 @@ class AsyncPrefetcher:
         self.queue: Queue[PrefetchBatch] = Queue(maxsize=max_queue_size)
         self.worker_thread = None
         self.should_stop = False
+        self.worker_exception: Exception | None = None
 
         # Monitoring stats
         self.total_cells_added = 0
@@ -1192,6 +1225,7 @@ class AsyncPrefetcher:
         """
         if self.worker_thread is None or not self.worker_thread.is_alive():
             self.should_stop = False
+            self.worker_exception = None
             self.start_time = time.time()
             self.worker_thread = threading.Thread(
                 target=self._prefetch_worker, daemon=True
@@ -1233,7 +1267,9 @@ class AsyncPrefetcher:
         """
         self.should_stop = True
         if self.worker_thread and self.worker_thread.is_alive():
-            self.worker_thread.join(timeout=1.0)
+            self.worker_thread.join(timeout=30.0)
+        if self.worker_thread and not self.worker_thread.is_alive():
+            self.worker_thread = None
 
     def _prefetch_worker(self):
         """Worker thread that loads batches in background"""
@@ -1263,7 +1299,9 @@ class AsyncPrefetcher:
                         self.total_tokenize_time / self.tokenize_count
                     ) * 1000
                     batch_type = (
-                        "raw" if isinstance(batch, RawPrefetchBatch) else "tokenized"
+                        "tokenized"
+                        if isinstance(batch, TokenizedPrefetchBatch)
+                        else "raw"
                     )
                     rate_report = f"Prefetch rate: {rate:.1f} cells/sec (epoch {self.current_epoch}, total: {self.total_cells_added} cells, avg {batch_type}: {avg_tokenize_ms:.1f}ms)"
                     print_prefetch(rate_report, self.batch_processor.verbose)
@@ -1286,7 +1324,8 @@ class AsyncPrefetcher:
                     logger.info("Reached end of batches")
                 break
             except Exception as e:
-                logger.info(f"Error loading batch: {e}")
+                self.worker_exception = e
+                logger.exception("Error loading batch")
                 break
 
     def get_batch(self, timeout: float = 10.0) -> PrefetchBatch | None:
@@ -1378,6 +1417,9 @@ class AsyncPrefetcher:
             After stop: False
         """
         return not self.queue.empty()
+
+    def get_exception(self) -> Exception | None:
+        return self.worker_exception
 
     def get_stats(self) -> dict:
         """
@@ -1637,6 +1679,11 @@ class SLAFIterableDataset(IterableDataset):
         """
         start_time = time.time()
         while time.time() - start_time < timeout:
+            worker_exception = self.prefetcher.get_exception()
+            if worker_exception is not None:
+                raise RuntimeError(
+                    "Prefetcher failed before producing its first batch.",
+                ) from worker_exception
             if self.prefetcher.has_batch():
                 print_completion(
                     f"Prefetcher ready after {time.time() - start_time:.2f}s",
@@ -1660,7 +1707,8 @@ class SLAFIterableDataset(IterableDataset):
 
         Yields:
             dict: Batch containing:
-                - input_ids: Pre-tokenized sequences (torch.Tensor)
+                - input_ids: Pre-tokenized identity sequences (torch.Tensor)
+                - values: Aligned expression/value stream (torch.Tensor)
                 - attention_mask: Boolean mask for valid tokens (torch.Tensor)
                 - cell_ids: Cell integer IDs (torch.Tensor)
                 - epoch: Current epoch number (int, only if n_epochs > 1)
@@ -1701,7 +1749,7 @@ class SLAFIterableDataset(IterableDataset):
             ...     print(f"Attention mask shape: {batch['attention_mask'].shape}")
             ...     print(f"Cell IDs shape: {batch['cell_ids'].shape}")
             ...     break
-            Keys: ['input_ids', 'attention_mask', 'cell_ids']
+            Keys: ['input_ids', 'values', 'attention_mask', 'cell_ids']
             Input shape: torch.Size([32, 2048])
             Attention mask shape: torch.Size([32, 2048])
             Cell IDs shape: torch.Size([32])
@@ -1731,6 +1779,11 @@ class SLAFIterableDataset(IterableDataset):
             data_time = time.time() - data_start
 
             if data is None:
+                worker_exception = self.prefetcher.get_exception()
+                if worker_exception is not None:
+                    raise RuntimeError(
+                        "Prefetcher failed while loading training data.",
+                    ) from worker_exception
                 # Check if prefetcher has finished all epochs
                 stats = self.prefetcher.get_stats()
                 if stats["current_epoch"] >= stats["n_epochs"]:
@@ -1743,6 +1796,11 @@ class SLAFIterableDataset(IterableDataset):
                 # Wait for more data with timeout
                 wait_start = time.time()
                 while not self.prefetcher.has_batch():
+                    worker_exception = self.prefetcher.get_exception()
+                    if worker_exception is not None:
+                        raise RuntimeError(
+                            "Prefetcher failed while waiting for training data.",
+                        ) from worker_exception
                     time.sleep(0.1)
                     # Timeout after 60 seconds for cloud scenarios (was 5 seconds)
                     if time.time() - wait_start > 60.0:
@@ -1754,6 +1812,11 @@ class SLAFIterableDataset(IterableDataset):
 
                 data = self.prefetcher.get_batch()
                 if data is None:
+                    worker_exception = self.prefetcher.get_exception()
+                    if worker_exception is not None:
+                        raise RuntimeError(
+                            "Prefetcher failed while loading training data.",
+                        ) from worker_exception
                     # Double-check if prefetcher is done
                     stats = self.prefetcher.get_stats()
                     if stats["current_epoch"] >= stats["n_epochs"]:
@@ -1767,7 +1830,7 @@ class SLAFIterableDataset(IterableDataset):
                         break
 
             # Track epoch transitions
-            current_epoch = self.batch_processor.current_epoch
+            current_epoch = data.epoch
             if current_epoch != last_epoch:
                 print_epoch_transition(
                     f"Epoch transition detected: {last_epoch} -> {current_epoch}",
@@ -1833,12 +1896,12 @@ class SLAFIterableDataset(IterableDataset):
                 if values is not None:
                     if values.shape != input_ids.shape:
                         raise ValueError(
-                            "scGPT dual-stream contract violated: values and input_ids must "
+                            "Dual-stream contract violated: values and input_ids must "
                             f"have identical shapes, got {tuple(values.shape)} vs {tuple(input_ids.shape)}"
                         )
                     if values.shape != attention_mask.shape:
                         raise ValueError(
-                            "scGPT dual-stream contract violated: values and attention_mask must "
+                            "Dual-stream contract violated: values and attention_mask must "
                             f"have identical shapes, got {tuple(values.shape)} vs {tuple(attention_mask.shape)}"
                         )
 
@@ -1850,7 +1913,9 @@ class SLAFIterableDataset(IterableDataset):
                     batch_input_ids = input_ids[batch_start:batch_end]
                     batch_attention_mask = attention_mask[batch_start:batch_end]
                     batch_values = (
-                        values[batch_start:batch_end] if values is not None else None
+                        values[batch_start:batch_end]
+                        if values is not None
+                        else None
                     )
                     batch_cell_ids = cell_integer_ids[batch_start:batch_end]
 
@@ -1931,4 +1996,8 @@ class SLAFIterableDataset(IterableDataset):
             >>> print("Manual cleanup completed")
             Manual cleanup completed
         """
-        self.prefetcher.stop()
+        self.close()
+
+    def close(self):
+        if hasattr(self, "prefetcher"):
+            self.prefetcher.stop()

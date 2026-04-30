@@ -11,6 +11,12 @@ import scipy.sparse
 
 from slaf.core.slaf import SLAFArray
 from slaf.core.sparse_ops import LazySparseMixin
+from slaf.core.sparse_tables import (
+    OBSM_SPARSE_TABLE,
+    delete_sparse_matrix,
+    read_sparse_matrix,
+    write_sparse_matrix,
+)
 
 if TYPE_CHECKING:
     import scanpy as sc
@@ -915,6 +921,40 @@ class LazyExpressionMatrix(LazySparseMixin):
         cols = result_df["gene_integer_id"].to_numpy()
         data = result_df["value"].to_numpy()
 
+        def _selector_to_local_indices(selector):
+            if selector is None:
+                return None
+            if isinstance(selector, slice):
+                return None
+            if isinstance(selector, int | np.integer):
+                return np.asarray([int(selector)], dtype=np.int64)
+            if isinstance(selector, list):
+                return np.asarray(selector, dtype=np.int64)
+            if isinstance(selector, np.ndarray):
+                if selector.dtype == bool:
+                    return np.flatnonzero(selector).astype(np.int64, copy=False)
+                return selector.astype(np.int64, copy=False)
+            return None
+
+        def _remap_indices(global_indices, selector):
+            selected_indices = _selector_to_local_indices(selector)
+            if selected_indices is None:
+                return global_indices
+            id_to_local = {
+                int(global_id): local_idx for local_idx, global_id in enumerate(selected_indices)
+            }
+            keep_mask = np.fromiter(
+                (int(global_id) in id_to_local for global_id in global_indices),
+                dtype=bool,
+                count=len(global_indices),
+            )
+            remapped = np.fromiter(
+                (id_to_local[int(global_id)] for global_id in global_indices[keep_mask]),
+                dtype=np.int64,
+                count=int(keep_mask.sum()),
+            )
+            return remapped, keep_mask
+
         # Remap integer IDs to local coordinates if selectors are applied
         if self._cell_selector is not None:
             if isinstance(self._cell_selector, slice):
@@ -922,10 +962,9 @@ class LazyExpressionMatrix(LazySparseMixin):
                 if start > 0:
                     rows = rows - start
             elif isinstance(self._cell_selector, list | np.ndarray):
-                # For list/array selectors, we need to create a mapping
-                # But this is complex, so for now we'll assume the query already filtered correctly
-                # and we just need to remap if it's a slice
-                pass
+                rows, keep_mask = _remap_indices(rows, self._cell_selector)
+                cols = cols[keep_mask]
+                data = data[keep_mask]
 
         if self._gene_selector is not None:
             if isinstance(self._gene_selector, slice):
@@ -933,13 +972,185 @@ class LazyExpressionMatrix(LazySparseMixin):
                 if start > 0:
                     cols = cols - start
             elif isinstance(self._gene_selector, list | np.ndarray):
-                # For list/array selectors, we need to create a mapping
-                # But this is complex, so for now we'll assume the query already filtered correctly
-                # and we just need to remap if it's a slice
-                pass
+                cols, keep_mask = _remap_indices(cols, self._gene_selector)
+                rows = rows[keep_mask]
+                data = data[keep_mask]
 
         # Create sparse matrix
         return scipy.sparse.coo_matrix((data, (rows, cols)), shape=self.shape).tocsr()
+
+
+class LazySparseObsmMatrix(LazySparseMixin):
+    """Lazy sparse matrix view for one sparse obsm key."""
+
+    def __init__(
+        self,
+        slaf_array: SLAFArray,
+        *,
+        key: str,
+        n_obs: int,
+        n_features: int,
+    ):
+        super().__init__()
+        self.slaf_array = slaf_array
+        self.key = key
+        self._base_shape = (n_obs, n_features)
+        self._shape = self._base_shape
+        self._cell_selector: Any = None
+        self._feature_selector: Any = None
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return self._shape
+
+    def __getitem__(self, key) -> "LazySparseObsmMatrix":
+        cell_selector, feature_selector = self._parse_key(key)
+        new_matrix = LazySparseObsmMatrix(
+            self.slaf_array,
+            key=self.key,
+            n_obs=self._base_shape[0],
+            n_features=self._base_shape[1],
+        )
+        new_matrix._cell_selector = self._compose_selectors(
+            self._cell_selector, cell_selector, axis=0
+        )
+        new_matrix._feature_selector = self._compose_selectors(
+            self._feature_selector, feature_selector, axis=1
+        )
+        new_matrix._update_shape()
+        return new_matrix
+
+    def _compose_selectors(self, old, new, axis):
+        axis_size = self._base_shape[axis]
+        if old is None:
+            return new
+        if new is None or (isinstance(new, slice) and new == slice(None)):
+            return old
+        if isinstance(old, slice):
+            old_start = old.start or 0
+            old_stop = old.stop or axis_size
+            old_step = old.step or 1
+            if old_start < 0:
+                old_start = axis_size + old_start
+            if old_stop < 0:
+                old_stop = axis_size + old_stop
+            old_start = max(0, min(old_start, axis_size))
+            old_stop = max(0, min(old_stop, axis_size))
+            old_range = list(range(old_start, old_stop, old_step))
+            if isinstance(new, slice):
+                new_start = new.start or 0
+                new_stop = new.stop or len(old_range)
+                new_step = new.step or 1
+                if new_start < 0:
+                    new_start = len(old_range) + new_start
+                if new_stop < 0:
+                    new_stop = len(old_range) + new_stop
+                new_start = max(0, min(new_start, len(old_range)))
+                new_stop = max(0, min(new_stop, len(old_range)))
+                return old_range[new_start:new_stop:new_step]
+            if isinstance(new, int | np.integer):
+                return [old_range[new]] if 0 <= new < len(old_range) else []
+            if isinstance(new, list | np.ndarray):
+                result = []
+                for idx in new:
+                    if 0 <= idx < len(old_range):
+                        result.append(old_range[idx])
+                return result
+            return new
+        if isinstance(old, list | np.ndarray):
+            if isinstance(new, slice):
+                new_start = new.start or 0
+                new_stop = new.stop or len(old)
+                new_step = new.step or 1
+                if new_start < 0:
+                    new_start = len(old) + new_start
+                if new_stop < 0:
+                    new_stop = len(old) + new_stop
+                new_start = max(0, min(new_start, len(old)))
+                new_stop = max(0, min(new_stop, len(old)))
+                return old[new_start:new_stop:new_step]
+            if isinstance(new, int | np.integer):
+                return [old[new]] if 0 <= new < len(old) else []
+            if isinstance(new, list | np.ndarray):
+                result = []
+                for idx in new:
+                    if 0 <= idx < len(old):
+                        result.append(old[idx])
+                return result
+            return new
+        return new
+
+    def _calculate_selected_count(self, selector, axis: int) -> int:
+        axis_size = self._base_shape[axis]
+        if selector is None or (
+            isinstance(selector, slice) and selector == slice(None)
+        ):
+            return axis_size
+        if isinstance(selector, slice):
+            start = selector.start or 0
+            stop = selector.stop or axis_size
+            step = selector.step or 1
+            start = max(0, min(start, axis_size))
+            stop = max(0, min(stop, axis_size))
+            return len(range(start, stop, step))
+        if isinstance(selector, list | np.ndarray):
+            if isinstance(selector, np.ndarray) and selector.dtype == bool:
+                return int(np.sum(selector))
+            return len(selector)
+        if isinstance(selector, int | np.integer):
+            return 1
+        return axis_size
+
+    def _update_shape(self):
+        self._shape = (
+            self._calculate_selected_count(self._cell_selector, axis=0),
+            self._calculate_selected_count(self._feature_selector, axis=1),
+        )
+
+    def _selector_to_ids(self, selector, axis: int) -> np.ndarray:
+        axis_size = self._base_shape[axis]
+        dtype = np.uint32
+        if selector is None or (
+            isinstance(selector, slice) and selector == slice(None)
+        ):
+            return np.arange(axis_size, dtype=dtype)
+        if isinstance(selector, slice):
+            start = selector.start or 0
+            stop = selector.stop or axis_size
+            step = selector.step or 1
+            return np.arange(start, stop, step, dtype=dtype)
+        if isinstance(selector, list):
+            return np.asarray(selector, dtype=dtype)
+        if isinstance(selector, np.ndarray):
+            if selector.dtype == bool:
+                return np.flatnonzero(selector).astype(dtype, copy=False)
+            return selector.astype(dtype, copy=False)
+        if isinstance(selector, int | np.integer):
+            return np.asarray([int(selector)], dtype=dtype)
+        raise TypeError(f"Unsupported selector type: {type(selector)}")
+
+    def compute(self) -> scipy.sparse.csr_matrix:
+        selected_row_ids = self._selector_to_ids(self._cell_selector, axis=0)
+        selected_col_ids = (
+            None
+            if self._feature_selector is None
+            or (
+                isinstance(self._feature_selector, slice)
+                and self._feature_selector == slice(None)
+            )
+            else self._selector_to_ids(self._feature_selector, axis=1)
+        )
+        return read_sparse_matrix(
+            self.slaf_array,
+            OBSM_SPARSE_TABLE,
+            selected_row_ids=selected_row_ids,
+            selected_col_ids=selected_col_ids,
+            n_cols=self.shape[1],
+            logical_key=self.key,
+        )
+
+    def toarray(self) -> np.ndarray:
+        return self.compute().toarray()
 
 
 class LazyDictionaryViewMixin:
@@ -1789,9 +2000,10 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
             # Convert to numpy array if needed
             if isinstance(value, pd.Series):
                 value = value.values
-            value = np.asarray(value)
-            # For vectors, value should be 2D (n_entities, n_dims)
-            if len(value.shape) == 1:
+            if not scipy.sparse.issparse(value):
+                value = np.asarray(value)
+            # For dense vectors, value should be 2D (n_entities, n_dims)
+            if not scipy.sparse.issparse(value) and len(value.shape) == 1:
                 # If 1D, treat as single dimension vector
                 value = value.reshape(-1, 1)
             self._set_vector_item(key, value)
@@ -2132,7 +2344,7 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
 
         return vector_columns
 
-    def _get_vector_item(self, key: str) -> np.ndarray:
+    def _get_vector_item(self, key: str) -> np.ndarray | scipy.sparse.csr_matrix:
         """Retrieve multi-dimensional array (respects selectors from parent)"""
         if key not in self.keys():
             raise KeyError(f"{self.table_type} key '{key}' not found")
@@ -2201,20 +2413,50 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
         # FixedSizeListArray.from_arrays takes a flat array and list_size
         flat_values = pa.array(value.flatten(), type=value_dtype)
         vector_array = pa.FixedSizeListArray.from_arrays(flat_values, n_dims)
+        # Determine ID column type (uint32 for cells, uint16 for genes)
+        id_pa_type = pa.uint32() if self.table_type == "obsm" else pa.uint16()
 
-        # If overwriting, drop old column first
-        if key in self.keys():
-            table_dataset = getattr(self._slaf_array, self.table_name)
-            table_dataset = table_dataset.drop_columns([key])
+        # If overwriting from a subset view, preserve already-written rows.
+        if key in self.keys() and selector is not None:
             table_path = self._slaf_array._join_path(
                 self._slaf_array.slaf_path,
                 self._slaf_array.config.get("tables", {}).get(
                     self.table_name, f"{self.table_name}.lance"
                 ),
             )
+            table = lance.dataset(table_path)
+            setattr(self._slaf_array, self.table_name, table)
+            existing_df = pl.from_arrow(table.to_table(columns=[self.id_column, key])).filter(
+                pl.col(key).is_not_null()
+            )
+            update_df = pl.from_arrow(
+                pa.table(
+                    {
+                        self.id_column: pa.array(integer_ids, type=id_pa_type),
+                        key: vector_array,
+                    }
+                )
+            )
+            merged_df = (
+                pl.concat([existing_df, update_df], how="vertical_relaxed")
+                .unique(subset=[self.id_column], keep="last")
+                .sort(self.id_column)
+            )
+            column_table = merged_df.to_arrow()
+        else:
+            column_table = pa.table(
+                {
+                    self.id_column: pa.array(integer_ids, type=id_pa_type),
+                    key: vector_array,
+                }
+            )
+
+        # If overwriting, drop old column first
+        if key in self.keys():
+            table_dataset = getattr(self._slaf_array, self.table_name)
+            table_dataset = table_dataset.drop_columns([key])
             setattr(self._slaf_array, self.table_name, lance.dataset(table_path))
 
-        # Create table with id_column and vector column
         table_path = self._slaf_array._join_path(
             self._slaf_array.slaf_path,
             self._slaf_array.config.get("tables", {}).get(
@@ -2222,22 +2464,11 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
             ),
         )
 
-        # Determine ID column type (uint32 for cells, uint16 for genes)
-        id_pa_type = pa.uint32() if self.table_type == "obsm" else pa.uint16()
-
-        # Create table with integer IDs and vector column
-        column_table = pa.table(
-            {
-                self.id_column: pa.array(integer_ids, type=id_pa_type),
-                key: vector_array,
-            }
-        )
-
         # Update table
         self._update_table_with_column(column_table, key, table_path)
 
         # Update config.json
-        self._update_config_vector_list([key], add=True, n_dims=n_dims)
+        self._update_config_vector_list([key], add=True, n_dims=n_dims, storage="dense")
 
         # Reload config to ensure it's up-to-date (config is cached in SLAFArray)
         config_path = self._slaf_array._join_path(
@@ -2263,17 +2494,14 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
                 f"{self.table_type} key '{key}' is immutable and cannot be deleted"
             )
 
-        # Drop the vector column
-        table_dataset = getattr(self._slaf_array, self.table_name)
-        table_dataset = table_dataset.drop_columns([key])
-
-        # Reload dataset
         table_path = self._slaf_array._join_path(
             self._slaf_array.slaf_path,
             self._slaf_array.config.get("tables", {}).get(
                 self.table_name, f"{self.table_name}.lance"
             ),
         )
+        table_dataset = getattr(self._slaf_array, self.table_name)
+        table_dataset = table_dataset.drop_columns([key])
         setattr(self._slaf_array, self.table_name, lance.dataset(table_path))
 
         # Update config.json
@@ -2293,25 +2521,10 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
 
     def _keys_vector(self) -> list[str]:
         """List all available vector keys by detecting FixedSizeListArray columns"""
-        # Fast path: read from config.json
         config = self._slaf_array.config
         if self.table_type in config and "available" in config[self.table_type]:
-            config_keys = config[self.table_type]["available"]
-            # Verify against schema (auto-sync if needed)
-            schema_keys = list(self._detect_vector_columns().keys())
-            if set(config_keys) != set(schema_keys):
-                # Auto-sync: update config with schema keys
-                missing_in_config = set(schema_keys) - set(config_keys)
-                if missing_in_config:
-                    # Add missing keys to config (treat as immutable if they existed before)
-                    self._update_config_vector_list(list(missing_in_config), add=True)
-                    # Re-read config
-                    config = self._slaf_array.config
-                    return config.get(self.table_type, {}).get("available", [])
-            return config_keys
-
-        # Fallback: detect from schema
-        return list(self._detect_vector_columns().keys())
+            return list(config[self.table_type]["available"])
+        return []
 
     def _is_immutable_vector(self, key: str) -> bool:
         """Check if vector key is immutable"""
@@ -2321,7 +2534,7 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
         return False
 
     def _update_config_vector_list(
-        self, keys: list[str], add: bool, n_dims: int | None = None
+        self, keys: list[str], add: bool, n_dims: int | None = None, storage: str | None = None
     ):
         """Update config.json to add or remove vector keys (unified for obsm/varm)"""
         config_path = self._slaf_array._join_path(
@@ -2341,6 +2554,7 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
                 "immutable": [],
                 "mutable": [],
                 "dimensions": {},
+                "storage": {},
             }
 
         vector_config = config[self.table_type]
@@ -2348,6 +2562,7 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
         immutable = set(vector_config.get("immutable", []))
         mutable = set(vector_config.get("mutable", []))
         dimensions = vector_config.get("dimensions", {})
+        storage_map = vector_config.get("storage", {})
 
         if add:
             # Add keys to available and mutable (new keys are mutable)
@@ -2357,6 +2572,8 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
                 immutable.discard(key)
                 if n_dims is not None:
                     dimensions[key] = n_dims
+                if storage is not None:
+                    storage_map[key] = storage
         else:
             # Remove keys from all lists
             for key in keys:
@@ -2364,12 +2581,14 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
                 mutable.discard(key)
                 immutable.discard(key)
                 dimensions.pop(key, None)
+                storage_map.pop(key, None)
 
         # Update config
         vector_config["available"] = sorted(available)
         vector_config["immutable"] = sorted(immutable)
         vector_config["mutable"] = sorted(mutable)
         vector_config["dimensions"] = dimensions
+        vector_config["storage"] = storage_map
 
         # Save updated config
         with self._slaf_array._open_file(config_path, "w") as f:
@@ -2722,6 +2941,128 @@ class LazyObsmView(LazyMetadataViewMixin):
     def shape(self) -> tuple[int, int]:
         """Required by LazySparseMixin - uses parent's shape"""
         return self._shape
+
+    def _get_storage(self, key: str) -> str:
+        storage = self._slaf_array.config.get("obsm", {}).get("storage", {}).get(key)
+        return "sparse" if storage == "sparse" else "dense"
+
+    def _get_vector_item(self, key: str) -> np.ndarray | scipy.sparse.csr_matrix:
+        if self._get_storage(key) == "sparse":
+            if key not in self.keys():
+                raise KeyError(f"obsm key '{key}' not found")
+            n_dims = int(
+                self._slaf_array.config.get("obsm", {})
+                .get("dimensions", {})
+                .get(key, 0)
+            )
+            matrix = LazySparseObsmMatrix(
+                self._slaf_array,
+                key=key,
+                n_obs=self._shape[0],
+                n_features=n_dims,
+            )
+            matrix._cell_selector = self._get_current_selector()
+            matrix._update_shape()
+            return matrix.compute()
+        return super()._get_vector_item(key)
+
+    def _set_vector_item(self, key: str, value: np.ndarray):
+        if scipy.sparse.issparse(value):
+            self._validate_name(key)
+            if key in self.keys() and self._is_immutable(key):
+                raise ValueError(f"obsm key '{key}' is immutable and cannot be overwritten")
+
+            expected_count = self._get_entity_count()
+            sparse_value = scipy.sparse.csr_matrix(value, dtype=np.float32)
+            if sparse_value.shape[0] != expected_count:
+                raise ValueError(
+                    f"Array first dimension {sparse_value.shape[0]} doesn't match obsm count {expected_count}"
+                )
+
+            matrix = LazySparseObsmMatrix(
+                self._slaf_array,
+                key=key,
+                n_obs=self._shape[0],
+                n_features=sparse_value.shape[1],
+            )
+            matrix._cell_selector = self._get_current_selector()
+            cell_ids = matrix._selector_to_ids(matrix._cell_selector, axis=0)
+            n_dims = int(sparse_value.shape[1])
+            storage = self._get_storage(key) if key in self.keys() else None
+            if key in self.keys():
+                if storage == "sparse":
+                    delete_sparse_matrix(
+                        self._slaf_array,
+                        OBSM_SPARSE_TABLE,
+                        logical_key=key,
+                        selected_row_ids=(
+                            cell_ids if self._get_current_selector() is not None else None
+                        ),
+                    )
+                else:
+                    import lance
+
+                    table_path = self._slaf_array._join_path(
+                        self._slaf_array.slaf_path,
+                        self._slaf_array.config.get("tables", {}).get(
+                            "cells", "cells.lance"
+                        ),
+                    )
+                    table_dataset = getattr(self._slaf_array, self.table_name)
+                    table_dataset = table_dataset.drop_columns([key])
+                    setattr(self._slaf_array, self.table_name, lance.dataset(table_path))
+
+            write_sparse_matrix(
+                self._slaf_array,
+                OBSM_SPARSE_TABLE,
+                matrix=sparse_value,
+                selected_row_ids=cell_ids,
+                logical_key=key,
+            )
+            self._update_config_vector_list([key], add=True, n_dims=n_dims, storage="sparse")
+
+            config_path = self._slaf_array._join_path(
+                self._slaf_array.slaf_path, "config.json"
+            )
+            with self._slaf_array._open_file(config_path) as f:
+                self._slaf_array.config = json.load(f)
+            self._invalidate_metadata_cache()
+            return
+
+        if key in self.keys() and self._get_storage(key) == "sparse":
+            delete_sparse_matrix(
+                self._slaf_array,
+                OBSM_SPARSE_TABLE,
+                logical_key=key,
+            )
+        super()._set_vector_item(key, value)
+
+    def _del_vector_item(self, key: str):
+        if key not in self.keys():
+            raise KeyError(f"obsm key '{key}' not found")
+        if self._is_immutable(key):
+            raise ValueError(f"obsm key '{key}' is immutable and cannot be deleted")
+
+        if self._get_storage(key) == "sparse":
+            delete_sparse_matrix(
+                self._slaf_array,
+                OBSM_SPARSE_TABLE,
+                logical_key=key,
+            )
+            self._update_config_vector_list([key], add=False)
+
+            config_path = self._slaf_array._join_path(
+                self._slaf_array.slaf_path, "config.json"
+            )
+            with self._slaf_array._open_file(config_path) as f:
+                self._slaf_array.config = json.load(f)
+            self._invalidate_metadata_cache()
+            return
+
+        super()._del_vector_item(key)
+
+    def _keys_vector(self) -> list[str]:
+        return list(self._slaf_array.config.get("obsm", {}).get("available", []))
 
 
 class LazyVarmView(LazyMetadataViewMixin):
