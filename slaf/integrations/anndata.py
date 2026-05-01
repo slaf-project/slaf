@@ -941,7 +941,8 @@ class LazyExpressionMatrix(LazySparseMixin):
             if selected_indices is None:
                 return global_indices
             id_to_local = {
-                int(global_id): local_idx for local_idx, global_id in enumerate(selected_indices)
+                int(global_id): local_idx
+                for local_idx, global_id in enumerate(selected_indices)
             }
             keep_mask = np.fromiter(
                 (int(global_id) in id_to_local for global_id in global_indices),
@@ -949,7 +950,10 @@ class LazyExpressionMatrix(LazySparseMixin):
                 count=len(global_indices),
             )
             remapped = np.fromiter(
-                (id_to_local[int(global_id)] for global_id in global_indices[keep_mask]),
+                (
+                    id_to_local[int(global_id)]
+                    for global_id in global_indices[keep_mask]
+                ),
                 dtype=np.int64,
                 count=int(keep_mask.sum()),
             )
@@ -2426,9 +2430,9 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
             )
             table = lance.dataset(table_path)
             setattr(self._slaf_array, self.table_name, table)
-            existing_df = pl.from_arrow(table.to_table(columns=[self.id_column, key])).filter(
-                pl.col(key).is_not_null()
-            )
+            existing_df = pl.from_arrow(
+                table.to_table(columns=[self.id_column, key])
+            ).filter(pl.col(key).is_not_null())
             update_df = pl.from_arrow(
                 pa.table(
                     {
@@ -2534,7 +2538,11 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
         return False
 
     def _update_config_vector_list(
-        self, keys: list[str], add: bool, n_dims: int | None = None, storage: str | None = None
+        self,
+        keys: list[str],
+        add: bool,
+        n_dims: int | None = None,
+        storage: str | None = None,
     ):
         """Update config.json to add or remove vector keys (unified for obsm/varm)"""
         config_path = self._slaf_array._join_path(
@@ -2970,7 +2978,9 @@ class LazyObsmView(LazyMetadataViewMixin):
         if scipy.sparse.issparse(value):
             self._validate_name(key)
             if key in self.keys() and self._is_immutable(key):
-                raise ValueError(f"obsm key '{key}' is immutable and cannot be overwritten")
+                raise ValueError(
+                    f"obsm key '{key}' is immutable and cannot be overwritten"
+                )
 
             expected_count = self._get_entity_count()
             sparse_value = scipy.sparse.csr_matrix(value, dtype=np.float32)
@@ -2996,7 +3006,9 @@ class LazyObsmView(LazyMetadataViewMixin):
                         OBSM_SPARSE_TABLE,
                         logical_key=key,
                         selected_row_ids=(
-                            cell_ids if self._get_current_selector() is not None else None
+                            cell_ids
+                            if self._get_current_selector() is not None
+                            else None
                         ),
                     )
                 else:
@@ -3010,7 +3022,9 @@ class LazyObsmView(LazyMetadataViewMixin):
                     )
                     table_dataset = getattr(self._slaf_array, self.table_name)
                     table_dataset = table_dataset.drop_columns([key])
-                    setattr(self._slaf_array, self.table_name, lance.dataset(table_path))
+                    setattr(
+                        self._slaf_array, self.table_name, lance.dataset(table_path)
+                    )
 
             write_sparse_matrix(
                 self._slaf_array,
@@ -3019,7 +3033,9 @@ class LazyObsmView(LazyMetadataViewMixin):
                 selected_row_ids=cell_ids,
                 logical_key=key,
             )
-            self._update_config_vector_list([key], add=True, n_dims=n_dims, storage="sparse")
+            self._update_config_vector_list(
+                [key], add=True, n_dims=n_dims, storage="sparse"
+            )
 
             config_path = self._slaf_array._join_path(
                 self._slaf_array.slaf_path, "config.json"
@@ -3172,7 +3188,7 @@ class LazyCooViewBase(LazyDictionaryViewMixin):
         )
         return df[self._entity_id_col].to_numpy()
 
-    def __getitem__(self, key: str) -> np.ndarray:
+    def __getitem__(self, key: str) -> scipy.sparse.csr_array:
         if key not in self.keys():
             raise KeyError(f"{self._view_name} key '{key}' not found")
         table = getattr(self._slaf_array, self._table_attr, None)
@@ -3196,15 +3212,26 @@ class LazyCooViewBase(LazyDictionaryViewMixin):
         else:
             n = self._n_entities
             id_to_idx = {i: i for i in range(n)}
-        mat = np.zeros((n, n), dtype=np.float32)
+        rows: list[int] = []
+        cols: list[int] = []
+        values: list[float] = []
         for row in df.iter_rows(named=True):
             ri, rj = row[self._id_col_i], row[self._id_col_j]
             if ri is None or rj is None:
                 continue
             i = id_to_idx[int(ri)]
             j = id_to_idx[int(rj)]
-            mat[i, j] = float(row[key] if row[key] is not None else 0.0)
-        return mat
+            value = float(row[key] if row[key] is not None else 0.0)
+            if value == 0.0:
+                continue
+            rows.append(i)
+            cols.append(j)
+            values.append(value)
+        return scipy.sparse.csr_array(
+            (values, (rows, cols)),
+            shape=(n, n),
+            dtype=np.float32,
+        )
 
     def __setitem__(self, key: str, value: np.ndarray) -> None:
         value = np.asarray(value, dtype=np.float32)
