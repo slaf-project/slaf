@@ -144,7 +144,7 @@ class TestDistributedDataLoader:
         assert batches[0]["values"].shape == batches[0]["input_ids"].shape
 
     def test_dataloader_values_shape_mismatch_raises(self):
-        """Mismatched values/input shapes should fail fast."""
+        """Mismatched values/input_ids shapes should fail fast."""
         try:
             import torch
         except ImportError:

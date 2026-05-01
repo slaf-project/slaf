@@ -91,6 +91,34 @@ def test_convert_anndata_with_obsm(anndata_with_metadata):
         assert slaf.config["obsm"]["dimensions"]["X_pca"] == 50
 
 
+def test_convert_anndata_with_sparse_obsm():
+    """Sparse obsm slots should persist as sparse-backed obsm storage."""
+    import scanpy as sc
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        n_cells, n_genes = 6, 4
+        adata = sc.AnnData(X=csr_matrix(np.random.rand(n_cells, n_genes), dtype=np.float32))
+        adata.obs_names = [f"cell_{i}" for i in range(n_cells)]
+        adata.var_names = [f"gene_{i}" for i in range(n_genes)]
+        adata.obsm["X_sparse"] = csr_matrix(np.eye(n_cells, dtype=np.float32))
+
+        converter = SLAFConverter(
+            use_optimized_dtypes=False,
+            compact_after_write=False,
+            chunked=False,
+        )
+        converter.convert_anndata(adata, tmpdir)
+
+        slaf = SLAFArray(tmpdir, load_metadata=False)
+        lazy = LazyAnnData(slaf)
+
+        assert slaf.config["tables"]["cells_sparse"] == "cells_sparse.lance"
+        assert slaf.config["obsm"]["storage"]["X_sparse"] == "sparse"
+        converted = lazy.obsm["X_sparse"]
+        assert isinstance(converted, csr_matrix)
+        np.testing.assert_array_equal(converted.toarray(), np.eye(n_cells, dtype=np.float32))
+
+
 def test_convert_anndata_with_varm(anndata_with_metadata):
     """Test converting AnnData with varm to SLAF format"""
     with tempfile.TemporaryDirectory() as tmpdir:

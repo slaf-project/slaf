@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import polars as pl
+from tqdm.auto import tqdm
 
 from slaf.integrations.anndata import LazyAnnData
 
@@ -713,18 +714,65 @@ class LazyPreprocessing:
                 use_fragments = False
 
         if not use_fragments:
-            # Use global processing (original implementation)
-            # Get cell totals for normalization using only the expression table
-            cell_totals_sql = """
-            SELECT
-                e.cell_integer_id,
-                SUM(e.value) as total_counts
-            FROM expression e
-            GROUP BY e.cell_integer_id
-            ORDER BY e.cell_integer_id
-            """
+            obs_df = adata.slaf.obs
+            if obs_df is not None and "total_counts" in obs_df.columns:
+                cell_totals = obs_df.select(["cell_integer_id", "total_counts"]).sort(
+                    "cell_integer_id",
+                )
+            else:
+                # Use global processing, but accumulate totals fragment-by-fragment so
+                # long-running startup work has visible progress on large datasets.
+                try:
+                    from slaf.core.fragment_processor import FragmentProcessor
 
-            cell_totals = adata.slaf.query(cell_totals_sql)
+                    cell_selector = getattr(adata, "_cell_selector", None)
+                    gene_selector = getattr(adata, "_gene_selector", None)
+                    processor = FragmentProcessor(
+                        adata.slaf,
+                        cell_selector=cell_selector,
+                        gene_selector=gene_selector,
+                        max_workers=1,
+                        enable_caching=True,
+                    )
+                    fragment_totals: list[pl.DataFrame] = []
+                    iterator = tqdm(
+                        processor.fragments,
+                        desc="Computing normalize_total cell totals",
+                        leave=True,
+                    )
+                    for fragment in iterator:
+                        lazy_df = pl.scan_pyarrow_dataset(fragment)
+                        lazy_df = processor._apply_selectors_to_fragment(lazy_df)
+                        fragment_totals.append(
+                            lazy_df.group_by("cell_integer_id")
+                            .agg(pl.col("value").sum().alias("total_counts"))
+                            .collect()
+                        )
+
+                    if len(fragment_totals) == 1:
+                        cell_totals = fragment_totals[0]
+                    else:
+                        cell_totals = pl.concat(
+                            fragment_totals,
+                            how="vertical",
+                        ).group_by("cell_integer_id").agg(
+                            pl.col("total_counts").sum().alias("total_counts")
+                        ).sort(
+                            "cell_integer_id",
+                        )
+                except Exception:
+                    # Fall back to the original single-query path if fragment iteration
+                    # is unavailable for any reason.
+                    cell_totals_sql = """
+                    SELECT
+                        e.cell_integer_id,
+                        SUM(e.value) as total_counts
+                    FROM expression e
+                    GROUP BY e.cell_integer_id
+                    ORDER BY e.cell_integer_id
+                    """
+
+                    cell_totals = adata.slaf.query(cell_totals_sql)
 
         # Work with polars DataFrame internally
         cell_totals_pl = cell_totals
@@ -735,6 +783,19 @@ class LazyPreprocessing:
             # Create mapping from cell_integer_id to cell names
             # Use polars DataFrame to get cell names
             obs_df = adata.slaf.obs
+            had_persisted_total_counts = "total_counts" in obs_df.columns
+            if (
+                not had_persisted_total_counts
+                and getattr(adata, "_cell_selector", None) is None
+                and len(cell_totals_pl) == getattr(adata, "n_obs", len(cell_totals_pl))
+            ):
+                persisted_totals = (
+                    cell_totals_pl.sort("cell_integer_id")["total_counts"]
+                    .to_numpy()
+                    .astype(np.float64, copy=False)
+                )
+                adata.obs["total_counts"] = persisted_totals
+                obs_df = adata.slaf.obs
             if "cell_id" in obs_df.columns:
                 cell_id_to_name = dict(
                     zip(

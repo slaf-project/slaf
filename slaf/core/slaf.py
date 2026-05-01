@@ -504,6 +504,30 @@ class SLAFArray:
             self.layers = None
 
         # Optional: obsp (cellsxcells) and varp (genesxgenes) COO tables
+        if "cells_sparse" in self.config.get("tables", {}):
+            try:
+                self.cells_sparse = lance.dataset(
+                    self._join_path(self.slaf_path, self.config["tables"]["cells_sparse"])
+                )
+            except Exception as e:
+                logger.warning(f"Could not load cells_sparse dataset: {e}")
+                self.cells_sparse = None
+        else:
+            self.cells_sparse = None
+
+        if "cells_sparse_counts" in self.config.get("tables", {}):
+            try:
+                self.cells_sparse_counts = lance.dataset(
+                    self._join_path(
+                        self.slaf_path, self.config["tables"]["cells_sparse_counts"]
+                    )
+                )
+            except Exception as e:
+                logger.warning(f"Could not load cells_sparse_counts dataset: {e}")
+                self.cells_sparse_counts = None
+        else:
+            self.cells_sparse_counts = None
+
         if "cellsxcells" in self.config.get("tables", {}):
             try:
                 self.cellsxcells = lance.dataset(

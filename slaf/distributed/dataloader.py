@@ -416,7 +416,12 @@ class DistributedDataLoader:
                         key
                         for key in first_sample.keys()
                         if key
-                        not in ["input_ids", "attention_mask", "group_key", "values"]
+                        not in [
+                            "input_ids",
+                            "attention_mask",
+                            "group_key",
+                            "values",
+                        ]
                     ]
                     if extra_keys:
                         # Use Polars DataFrame for efficient column extraction
@@ -448,7 +453,7 @@ class DistributedDataLoader:
             else:
                 # Return Python objects (lists) - use Polars DataFrame for efficiency
                 df = pl.DataFrame(samples)
-                yield {
+                batch = {
                     "input_ids": df["input_ids"].to_list(),
                     "attention_mask": df["attention_mask"].to_list(),
                     "cell_ids": (
@@ -457,6 +462,9 @@ class DistributedDataLoader:
                         else [0] * len(samples)
                     ),
                 }
+                if "values" in df.columns:
+                    batch["values"] = df["values"].to_list()
+                yield batch
         elif "grouped" in samples[0]:
             # Raw format - return list of DataFrames
             # Optimized: single pass extraction

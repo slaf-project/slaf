@@ -7,6 +7,7 @@ import polars as pl
 import pytest
 
 from slaf.core.slaf import SLAFArray
+from slaf import get_integrations
 
 
 @pytest.mark.slaf_array
@@ -191,6 +192,17 @@ class TestSLAFArray:
         # Check that column caches are available
         assert hasattr(small_slaf, "_obs_columns")
         assert hasattr(small_slaf, "_var_columns")
+
+    def test_list_gene_selector_remaps_to_local_sparse_coords(self, small_slaf):
+        """List/array gene selectors should remap global gene ids into local matrix columns."""
+        LazyAnnData, _, _ = get_integrations()
+        adata = LazyAnnData(small_slaf)
+
+        subset_matrix = adata[[0, 1, 2], :].X[:, [1, 3]].compute()
+        full_matrix = adata.X.compute()[[0, 1, 2], :][:, [1, 3]]
+
+        assert subset_matrix.shape == (3, 2)
+        assert (subset_matrix != full_matrix).nnz == 0
 
     def test_initialization_performance(self, tmp_path):
         """Test that initialization is fast"""

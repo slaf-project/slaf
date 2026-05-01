@@ -80,12 +80,13 @@ class ScGPTWindow(Window):
         value_out = schema.value_list_key or "expr_sequence"
 
         n_expression_bins = kwargs.get("n_expression_bins", 10)
+        special_token_offset = kwargs.get("special_token_offset", 4)
+        expr_bin_start = kwargs.get("expr_bin_start", 50000)
         use_binned_expressions = kwargs.get(
             "use_binned_expressions", True
         )  # Default to True for scGPT
-
         if use_binned_expressions:
-            grouped = (
+            base = (
                 fragment_df.with_columns(
                     pl.col(vk)
                     .rank(method="dense", descending=True)
@@ -93,8 +94,11 @@ class ScGPTWindow(Window):
                     .alias("gene_rank")
                 )
                 .filter(pl.col("gene_rank") <= max_items)
-                .with_columns(pl.col(vk).log1p().alias("log_value"))
-                .with_columns(
+            )
+            base = base.with_columns(pl.col(vk).alias("log_value"))
+
+            grouped = (
+                base.with_columns(
                     pl.when(pl.col("log_value") > 0)
                     .then(
                         (
@@ -111,8 +115,8 @@ class ScGPTWindow(Window):
                 .group_by(gk, maintain_order=True)
                 .agg(
                     [
-                        pl.col(ik).alias(item_out),
-                        pl.col("expr_bin").alias(value_out),
+                        (pl.col(ik) + special_token_offset).alias(item_out),
+                        (pl.col("expr_bin") + expr_bin_start).alias(value_out),
                     ]
                 )
             )
@@ -128,7 +132,7 @@ class ScGPTWindow(Window):
 
             grouped = result.group_by(gk, maintain_order=True).agg(
                 [
-                    pl.col(ik).alias(item_out),
+                    (pl.col(ik) + special_token_offset).alias(item_out),
                     pl.col(vk).alias(value_out),
                 ]
             )
@@ -163,6 +167,7 @@ class GeneformerWindow(Window):
         item_out = schema.item_list_key
 
         min_percentile = kwargs.get("min_percentile", None)
+        special_token_offset = kwargs.get("special_token_offset", 4)
 
         if min_percentile is not None:
             grouped = (
@@ -190,7 +195,7 @@ class GeneformerWindow(Window):
                 .group_by(gk, maintain_order=True)
                 .agg(
                     [
-                        pl.col(ik).alias(item_out),
+                        (pl.col(ik) + special_token_offset).alias(item_out),
                     ]
                 )
             )
@@ -208,7 +213,7 @@ class GeneformerWindow(Window):
                 .group_by(gk, maintain_order=True)
                 .agg(
                     [
-                        pl.col(ik).alias(item_out),
+                        (pl.col(ik) + special_token_offset).alias(item_out),
                     ]
                 )
             )
