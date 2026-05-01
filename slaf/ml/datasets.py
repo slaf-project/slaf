@@ -4,6 +4,7 @@ import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from itertools import chain
 from queue import Queue
 from typing import Any, Union
 
@@ -427,11 +428,11 @@ class PrefetchBatchProcessor:
                 )
 
         elif self.by_fragment:
-            # Fragment-based approach: iterate through fragments
-            self.fragment_iterator = iter(self.source_dataset.get_fragments())
+            # Fragment-based approach: iterate through fragments in shuffled order
+            self._reset_non_mos_iterators(self.current_epoch)
         else:
-            # Sequential approach: use batch generator
-            self.batch_generator = self.source_dataset.to_batches()
+            # Sequential approach: iterate batches from fragments in shuffled order
+            self._reset_non_mos_iterators(self.current_epoch)
 
         # Initialize timing variables for consolidated reporting
         self._last_load_time = 0.0
@@ -528,9 +529,9 @@ class PrefetchBatchProcessor:
                 )
 
         elif self.by_fragment:
-            self.fragment_iterator = iter(self.source_dataset.get_fragments())
+            self._reset_non_mos_iterators(epoch)
         else:
-            self.batch_generator = self.source_dataset.to_batches()
+            self._reset_non_mos_iterators(epoch)
 
         print_epoch_transition(f"Reset batch generator for epoch {epoch}", self.verbose)
 
@@ -641,6 +642,28 @@ class PrefetchBatchProcessor:
                 .sort(["cell_integer_id", "gene_integer_id"])
             )
         return df.sort(["cell_integer_id", "gene_integer_id"])
+
+    def _get_shuffled_fragments_for_epoch(self, epoch: int) -> list[Any]:
+        """Return fragments in a deterministic epoch-specific shuffled order."""
+        fragments = list(self.source_dataset.get_fragments())
+        if len(fragments) <= 1:
+            return fragments
+
+        rng = np.random.default_rng(self.seed + epoch * 10000)
+        order = rng.permutation(len(fragments))
+        return [fragments[idx] for idx in order]
+
+    def _iter_batches_from_fragments(self, fragments: list[Any]) -> Iterator[Any]:
+        """Yield Lance batches by walking fragments in the provided order."""
+        return chain.from_iterable(fragment.to_batches() for fragment in fragments)
+
+    def _reset_non_mos_iterators(self, epoch: int) -> None:
+        """Reset non-MoS iterators using a shuffled fragment order for this epoch."""
+        fragments = self._get_shuffled_fragments_for_epoch(epoch)
+        if self.by_fragment:
+            self.fragment_iterator = iter(fragments)
+        else:
+            self.batch_generator = self._iter_batches_from_fragments(fragments)
 
     def load_prefetch_batch(self) -> PrefetchBatch:
         """
@@ -1913,9 +1936,7 @@ class SLAFIterableDataset(IterableDataset):
                     batch_input_ids = input_ids[batch_start:batch_end]
                     batch_attention_mask = attention_mask[batch_start:batch_end]
                     batch_values = (
-                        values[batch_start:batch_end]
-                        if values is not None
-                        else None
+                        values[batch_start:batch_end] if values is not None else None
                     )
                     batch_cell_ids = cell_integer_ids[batch_start:batch_end]
 
