@@ -655,7 +655,10 @@ class PrefetchBatchProcessor:
 
     def _iter_batches_from_fragments(self, fragments: list[Any]) -> Iterator[Any]:
         """Yield Lance batches by walking fragments in the provided order."""
-        return chain.from_iterable(fragment.to_batches() for fragment in fragments)
+        return chain.from_iterable(
+            fragment.to_batches(batch_size=self.prefetch_batch_size)
+            for fragment in fragments
+        )
 
     def _reset_non_mos_iterators(self, epoch: int) -> None:
         """Reset non-MoS iterators using a shuffled fragment order for this epoch."""
