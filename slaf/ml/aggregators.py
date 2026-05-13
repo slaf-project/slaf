@@ -86,15 +86,12 @@ class ScGPTWindow(Window):
             "use_binned_expressions", True
         )  # Default to True for scGPT
         if use_binned_expressions:
-            base = (
-                fragment_df.with_columns(
-                    pl.col(vk)
-                    .rank(method="dense", descending=True)
-                    .over(gk)
-                    .alias("gene_rank")
-                )
-                .filter(pl.col("gene_rank") <= max_items)
-            )
+            base = fragment_df.with_columns(
+                pl.col(vk)
+                .rank(method="dense", descending=True)
+                .over(gk)
+                .alias("gene_rank")
+            ).filter(pl.col("gene_rank") <= max_items)
             base = base.with_columns(pl.col(vk).alias("log_value"))
 
             grouped = (

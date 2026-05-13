@@ -503,7 +503,9 @@ class SLAFArray:
         if "cells_sparse" in self.config.get("tables", {}):
             try:
                 self.cells_sparse = lance.dataset(
-                    self._join_path(self.slaf_path, self.config["tables"]["cells_sparse"])
+                    self._join_path(
+                        self.slaf_path, self.config["tables"]["cells_sparse"]
+                    )
                 )
             except Exception as e:
                 logger.warning(f"Could not load cells_sparse dataset: {e}")

@@ -4,7 +4,6 @@ from typing import Any
 
 import lance
 import numpy as np
-import pyarrow as pa
 import polars as pl
 import scipy.sparse
 
@@ -372,8 +371,8 @@ def write_sparse_matrix(
             grouped = logical_df.group_by(descriptor.row_id_col).agg(
                 pl.len().alias("n_rows")
             )
-            row_ids = grouped[descriptor.row_id_col].to_numpy().astype(
-                np.int64, copy=False
+            row_ids = (
+                grouped[descriptor.row_id_col].to_numpy().astype(np.int64, copy=False)
             )
             counts = grouped["n_rows"].to_numpy().astype(np.int64, copy=False)
             valid = row_ids < row_counts.shape[0]
@@ -398,7 +397,9 @@ def delete_sparse_matrix(
 
     remove_expr = pl.lit(True)
     if selected_row_ids is not None:
-        remove_expr = remove_expr & pl.col(descriptor.row_id_col).is_in(selected_row_ids)
+        remove_expr = remove_expr & pl.col(descriptor.row_id_col).is_in(
+            selected_row_ids
+        )
     if descriptor.key_col is not None:
         if logical_key is None:
             raise ValueError("logical_key is required for keyed sparse tables.")
@@ -420,14 +421,16 @@ def delete_sparse_matrix(
     setattr(slaf_array, descriptor.table_attr, lance.dataset(table_path))
     if descriptor.key_col is not None and logical_key is not None:
         logical_df = filtered_df.filter(pl.col(descriptor.key_col) == logical_key)
-        max_row = int(logical_df[descriptor.row_id_col].max()) if len(logical_df) > 0 else -1
+        max_row = (
+            int(logical_df[descriptor.row_id_col].max()) if len(logical_df) > 0 else -1
+        )
         row_counts = np.zeros(max_row + 1 if max_row >= 0 else 0, dtype=np.int64)
         if len(logical_df) > 0:
             grouped = logical_df.group_by(descriptor.row_id_col).agg(
                 pl.len().alias("n_rows")
             )
-            row_ids = grouped[descriptor.row_id_col].to_numpy().astype(
-                np.int64, copy=False
+            row_ids = (
+                grouped[descriptor.row_id_col].to_numpy().astype(np.int64, copy=False)
             )
             counts = grouped["n_rows"].to_numpy().astype(np.int64, copy=False)
             row_counts[row_ids] = counts

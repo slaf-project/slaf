@@ -752,13 +752,16 @@ class LazyPreprocessing:
                     if len(fragment_totals) == 1:
                         cell_totals = fragment_totals[0]
                     else:
-                        cell_totals = pl.concat(
-                            fragment_totals,
-                            how="vertical",
-                        ).group_by("cell_integer_id").agg(
-                            pl.col("total_counts").sum().alias("total_counts")
-                        ).sort(
-                            "cell_integer_id",
+                        cell_totals = (
+                            pl.concat(
+                                fragment_totals,
+                                how="vertical",
+                            )
+                            .group_by("cell_integer_id")
+                            .agg(pl.col("total_counts").sum().alias("total_counts"))
+                            .sort(
+                                "cell_integer_id",
+                            )
                         )
                 except Exception:
                     # Fall back to the original single-query path if fragment iteration

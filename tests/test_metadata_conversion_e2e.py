@@ -97,7 +97,9 @@ def test_convert_anndata_with_sparse_obsm():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         n_cells, n_genes = 6, 4
-        adata = sc.AnnData(X=csr_matrix(np.random.rand(n_cells, n_genes), dtype=np.float32))
+        adata = sc.AnnData(
+            X=csr_matrix(np.random.rand(n_cells, n_genes), dtype=np.float32)
+        )
         adata.obs_names = [f"cell_{i}" for i in range(n_cells)]
         adata.var_names = [f"gene_{i}" for i in range(n_genes)]
         adata.obsm["X_sparse"] = csr_matrix(np.eye(n_cells, dtype=np.float32))
@@ -116,7 +118,9 @@ def test_convert_anndata_with_sparse_obsm():
         assert slaf.config["obsm"]["storage"]["X_sparse"] == "sparse"
         converted = lazy.obsm["X_sparse"]
         assert isinstance(converted, csr_matrix)
-        np.testing.assert_array_equal(converted.toarray(), np.eye(n_cells, dtype=np.float32))
+        np.testing.assert_array_equal(
+            converted.toarray(), np.eye(n_cells, dtype=np.float32)
+        )
 
 
 def test_convert_anndata_with_varm(anndata_with_metadata):

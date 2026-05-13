@@ -424,7 +424,9 @@ def test_create_new_sparse_obsm_embedding(anndata_without_layers):
         retrieved2 = adata2.obsm["X_sparse"]
         assert scipy.sparse.isspmatrix_csr(retrieved2)
         assert np.allclose(retrieved2.toarray(), sparse_embedding.toarray())
-        assert slaf2.config.get("obsm", {}).get("storage", {}).get("X_sparse") == "sparse"
+        assert (
+            slaf2.config.get("obsm", {}).get("storage", {}).get("X_sparse") == "sparse"
+        )
 
 
 def test_create_new_varm_embedding(anndata_without_layers):
@@ -506,7 +508,9 @@ def test_update_mutable_obsm_embedding(anndata_without_layers):
         assert np.allclose(retrieved2, updated, rtol=1e-5)
 
 
-def test_update_mutable_obsm_embedding_from_subsets_preserves_existing_rows(anndata_without_layers):
+def test_update_mutable_obsm_embedding_from_subsets_preserves_existing_rows(
+    anndata_without_layers,
+):
     """Test that subset obsm writes accumulate instead of clearing unwritten rows."""
     with tempfile.TemporaryDirectory() as tmpdir:
         converter = SLAFConverter(
