@@ -302,11 +302,7 @@ class SLAFConverter:
         if not self._path_exists(table_path):
             return None
         dataset = lance.dataset(table_path)
-        return [
-            field.name
-            for field in dataset.schema
-            if field.name not in id_columns
-        ]
+        return [field.name for field in dataset.schema if field.name not in id_columns]
 
     def _load_checkpoint_smart(self, output_path: str) -> dict | None:
         """Load checkpoint with fragment-based resume logic to avoid duplication"""
@@ -949,7 +945,9 @@ class SLAFConverter:
                     if hasattr(reader, "adata") and hasattr(reader.adata, "obsp"):
                         obsp_table, current_obsp_keys = self._build_pairwise_table(
                             dict(reader.adata.obsp),
-                            obs_df["cell_integer_id"].to_numpy(dtype=np.uint32, copy=False),
+                            obs_df["cell_integer_id"].to_numpy(
+                                dtype=np.uint32, copy=False
+                            ),
                             integer_dtype=np.uint32,
                             arrow_integer_type=pa.uint32(),
                         )
@@ -1307,15 +1305,16 @@ class SLAFConverter:
 
                 # Check cell metadata schema compatibility
                 # Exclude columns that are added during SLAF conversion
-                slaF_added_columns = {
+                slaf_added_columns = {
                     "cell_id",
                     "cell_integer_id",
                     "cell_start_index",
                     "source_file",
+                    "total_counts",
                 }
-                new_cell_columns = cells - slaF_added_columns
+                new_cell_columns = cells - slaf_added_columns
                 existing_cell_columns_no_slaf = (
-                    existing_cell_columns - slaF_added_columns
+                    existing_cell_columns - slaf_added_columns
                 )
 
                 if new_cell_columns != existing_cell_columns_no_slaf:
@@ -3549,7 +3548,10 @@ class SLAFConverter:
         if integer_mapping and self.use_integer_keys:
             id_map = {item["cell_id"]: item["integer_id"] for item in integer_mapping}
             index_to_int_id = np.array(
-                [id_map.get(str(entity_id), i) for i, entity_id in enumerate(entity_ids)],
+                [
+                    id_map.get(str(entity_id), i)
+                    for i, entity_id in enumerate(entity_ids)
+                ],
                 dtype=integer_dtype,
             )
         else:
@@ -3584,7 +3586,9 @@ class SLAFConverter:
 
         i_list: list[int] = []
         j_list: list[int] = []
-        key_columns: dict[str, list[float]] = {key_name: [] for key_name in pairwise_keys}
+        key_columns: dict[str, list[float]] = {
+            key_name: [] for key_name in pairwise_keys
+        }
         for i, j in sorted(coo_rows):
             vals = coo_rows[(i, j)]
             i_list.append(i)
@@ -4425,7 +4429,7 @@ class SLAFConverter:
                 "immutable": varm_keys,  # Converted varm cannot be deleted
                 "mutable": [],  # No mutable varm yet
                 "dimensions": varm_dimensions,
-                "storage": {key: "dense" for key in varm_keys},
+                "storage": dict.fromkeys(varm_keys, "dense"),
             }
 
         # Add obsp metadata if obsp was converted (COO; dimensions = side length)
