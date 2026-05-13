@@ -2,6 +2,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import pytest
 import torch
 from torch.utils.data import DataLoader
@@ -84,7 +85,9 @@ class TestSLAFIterableDataset:
         # With MoS enabled by default, we should have fragment_generators instead of batch_generator
         assert hasattr(processor, "fragment_generators")
 
-    def test_prefetch_batch_processor_fragment_parameter(self, tiny_slaf, tiny_lazy_adata):
+    def test_prefetch_batch_processor_fragment_parameter(
+        self, tiny_slaf, tiny_lazy_adata
+    ):
         """Test the by_fragment parameter in PrefetchBatchProcessor."""
         shuffle = RandomShuffle()
         tokenizer = ScGPTTokenizer(tiny_lazy_adata)
@@ -395,6 +398,28 @@ class TestSLAFIterableDataset:
         pad_value = tokenizer.special_tokens["PAD"]
         assert torch.all(values[cls_positions] == pad_value)
         assert torch.all(values[sep_positions] == pad_value)
+
+    def test_dataset_iteration_raw_mode_returns_sparse_polars_batches(self, tiny_slaf):
+        dataset = SLAFIterableDataset(
+            slaf_array=tiny_slaf,
+            tokenizer=None,
+            batch_size=8,
+            raw_mode=True,
+            verbose=False,
+            use_mixture_of_scanners=False,
+            by_fragment=True,
+        )
+
+        batch = next(iter(dataset))
+
+        assert "x" in batch
+        assert "cell_ids" in batch
+        assert isinstance(batch["x"], pl.DataFrame)
+        assert isinstance(batch["cell_ids"], list)
+        assert {"cell_integer_id", "gene_integer_id", "value"}.issubset(
+            batch["x"].columns,
+        )
+        assert len(batch["cell_ids"]) > 0
 
     def test_device_transfer(self, tiny_slaf, tiny_lazy_adata):
         """Test device transfer functionality"""
@@ -1088,7 +1113,9 @@ class TestPrefetchBatchProcessing:
             dataset.batch_processor.fragment_generators
         )
 
-    def test_mixture_of_scanners_backward_compatibility(self, tiny_slaf, tiny_lazy_adata):
+    def test_mixture_of_scanners_backward_compatibility(
+        self, tiny_slaf, tiny_lazy_adata
+    ):
         """Test that MoS is backward compatible (enabled by default) in PrefetchBatchProcessor"""
         shuffle = RandomShuffle()
         tokenizer = ScGPTTokenizer(tiny_lazy_adata)
@@ -1188,7 +1215,9 @@ class TestPrefetchBatchProcessing:
             assert "attention_mask" in batch
             assert "cell_ids" in batch
 
-    def test_mixture_of_scanners_generator_exhaustion_handling(self, tiny_slaf, tiny_lazy_adata):
+    def test_mixture_of_scanners_generator_exhaustion_handling(
+        self, tiny_slaf, tiny_lazy_adata
+    ):
         """Test that MoS handles generator exhaustion correctly"""
         tokenizer = GeneformerTokenizer(tiny_lazy_adata)
 
@@ -1210,7 +1239,9 @@ class TestPrefetchBatchProcessing:
 
         assert batch_count > 0
 
-    def test_mixture_of_scanners_cell_boundary_handling(self, tiny_slaf, tiny_lazy_adata):
+    def test_mixture_of_scanners_cell_boundary_handling(
+        self, tiny_slaf, tiny_lazy_adata
+    ):
         """Test that MoS handles cell boundaries correctly"""
         tokenizer = GeneformerTokenizer(tiny_lazy_adata)
 
@@ -1268,7 +1299,9 @@ class TestPrefetchBatchProcessing:
         assert len(processor.generator_last_cells) == len(processor.fragment_generators)
         assert len(processor.generator_active) == len(processor.generator_active)
 
-    def test_prefetch_batch_processor_mos_parameter_validation(self, tiny_slaf, tiny_lazy_adata):
+    def test_prefetch_batch_processor_mos_parameter_validation(
+        self, tiny_slaf, tiny_lazy_adata
+    ):
         """Test MoS parameter validation in PrefetchBatchProcessor"""
         shuffle = RandomShuffle()
         tokenizer = ScGPTTokenizer(tiny_lazy_adata)
@@ -1357,7 +1390,9 @@ class TestPrefetchBatchProcessing:
         assert len(processor.generator_last_cells) == len(processor.fragment_generators)
         assert len(processor.generator_active) == len(processor.fragment_generators)
 
-    def test_prefetch_batch_processor_mos_backward_compatibility(self, tiny_slaf, tiny_lazy_adata):
+    def test_prefetch_batch_processor_mos_backward_compatibility(
+        self, tiny_slaf, tiny_lazy_adata
+    ):
         """Test that MoS is backward compatible (enabled by default) in PrefetchBatchProcessor"""
         shuffle = RandomShuffle()
         tokenizer = ScGPTTokenizer(tiny_lazy_adata)
@@ -1386,7 +1421,9 @@ class TestPrefetchBatchProcessing:
         assert not hasattr(processor_disabled, "fragment_generators")
         assert hasattr(processor_disabled, "batch_generator")
 
-    def test_prefetch_batch_processor_mos_with_raw_mode(self, tiny_slaf, tiny_lazy_adata):
+    def test_prefetch_batch_processor_mos_with_raw_mode(
+        self, tiny_slaf, tiny_lazy_adata
+    ):
         """Test MoS functionality with raw mode in PrefetchBatchProcessor"""
         shuffle = RandomShuffle()
         tokenizer = None  # No tokenizer for raw mode
@@ -1409,7 +1446,9 @@ class TestPrefetchBatchProcessing:
         assert hasattr(batch, "batch_dfs")
         assert hasattr(batch, "cell_integer_ids")
 
-    def test_prefetch_batch_processor_mos_fragment_mode_automatic(self, tiny_slaf, tiny_lazy_adata):
+    def test_prefetch_batch_processor_mos_fragment_mode_automatic(
+        self, tiny_slaf, tiny_lazy_adata
+    ):
         """Test that MoS automatically enables fragment mode in PrefetchBatchProcessor"""
         shuffle = RandomShuffle()
         tokenizer = ScGPTTokenizer(tiny_lazy_adata)
@@ -1427,7 +1466,9 @@ class TestPrefetchBatchProcessing:
         assert processor.by_fragment is True
         assert processor.use_mixture_of_scanners is True
 
-    def test_prefetch_batch_processor_mos_load_prefetch_batch(self, tiny_slaf, tiny_lazy_adata):
+    def test_prefetch_batch_processor_mos_load_prefetch_batch(
+        self, tiny_slaf, tiny_lazy_adata
+    ):
         """Test that MoS can load prefetch batches correctly"""
         shuffle = RandomShuffle()
         tokenizer = ScGPTTokenizer(tiny_lazy_adata)
@@ -1447,7 +1488,9 @@ class TestPrefetchBatchProcessing:
         assert hasattr(batch, "attention_mask")
         assert hasattr(batch, "cell_integer_ids")
 
-    def test_prefetch_batch_processor_mos_cell_boundary_handling(self, tiny_slaf, tiny_lazy_adata):
+    def test_prefetch_batch_processor_mos_cell_boundary_handling(
+        self, tiny_slaf, tiny_lazy_adata
+    ):
         """Test that MoS handles cell boundaries correctly in PrefetchBatchProcessor"""
         shuffle = RandomShuffle()
         tokenizer = ScGPTTokenizer(tiny_lazy_adata)

@@ -957,6 +957,7 @@ class TestFragmentProcessingEquivalence:
             {
                 "cell_integer_id": [0, 1, 2, 3, 4],
                 "cell_id": ["cell_0", "cell_1", "cell_2", "cell_3", "cell_4"],
+                "total_counts": [30.0, 40.0, 35.0, 20.0, 40.0],
             }
         )
         mock_array.var = pl.DataFrame(
@@ -1012,27 +1013,9 @@ class TestFragmentProcessingEquivalence:
                 lazy_adata_fragments, target_sum=target_sum, fragments=True
             )
 
-        # Mock the query method for global processing to return cell totals
-        with patch.object(mock_slaf_array_with_fragments, "query") as mock_query:
-            # Mock the cell totals query that global processing uses
-            cell_totals = pl.DataFrame(
-                {
-                    "cell_integer_id": [0, 1, 2, 3, 4],
-                    "total_counts": [
-                        30.0,
-                        40.0,
-                        35.0,
-                        20.0,
-                        40.0,
-                    ],  # Sum of values per cell
-                }
-            )
-            mock_query.return_value = cell_totals
-
-            # Apply global processing
-            pp.normalize_total(
-                lazy_adata_global, target_sum=target_sum, fragments=False
-            )
+        # Apply global processing. This path now prefers persisted total_counts
+        # in obs over recomputing via fragment iteration or SQL.
+        pp.normalize_total(lazy_adata_global, target_sum=target_sum, fragments=False)
 
         # Both should have the same transformation stored
         assert "normalize_total" in lazy_adata_fragments._transformations
