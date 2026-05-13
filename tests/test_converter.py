@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import lance
 import numpy as np
@@ -314,6 +315,95 @@ class TestSLAFConverter:
 
         detected_format = detect_format(str(h5_file))
         assert detected_format == "10x_h5"
+
+    def test_10x_h5_schema_read_does_not_force_genome(self, tmp_path, monkeypatch):
+        """10x H5 schema extraction lets Scanpy choose the genome."""
+
+        import scanpy as sc
+        from scipy import sparse
+
+        from slaf.data.utils import _extract_10x_h5_schema
+
+        h5_file = Path(tmp_path) / "filtered_feature_bc_matrix.h5"
+        h5_file.write_text("mock h5 content")
+        adata = sc.AnnData(
+            X=sparse.csr_matrix([[1, 0], [0, 2]]),
+            obs=pd.DataFrame(index=["cell1", "cell2"]),
+            var=pd.DataFrame(index=["gene1", "gene2"]),
+        )
+
+        mock_read = MagicMock(return_value=adata)
+        monkeypatch.setattr(sc, "read_10x_h5", mock_read)
+
+        gene_ids, cell_columns, value_type = _extract_10x_h5_schema(str(h5_file))
+
+        mock_read.assert_called_once_with(str(h5_file))
+        assert "genome" not in mock_read.call_args.kwargs
+        assert gene_ids == {"gene1", "gene2"}
+        assert cell_columns == set()
+        assert value_type == "uint16"
+
+    def test_convert_10x_h5_does_not_force_genome(self, tmp_path, monkeypatch):
+        """10x H5 conversion lets Scanpy choose the genome."""
+
+        import scanpy as sc
+        from scipy import sparse
+
+        h5_file = Path(tmp_path) / "filtered_feature_bc_matrix.h5"
+        h5_file.write_text("mock h5 content")
+        adata = sc.AnnData(
+            X=sparse.csr_matrix([[1, 0], [0, 2]]),
+            obs=pd.DataFrame(index=["cell1", "cell2"]),
+            var=pd.DataFrame(index=["gene1", "gene2"]),
+        )
+        captured = {}
+
+        mock_read = MagicMock(return_value=adata)
+
+        def fake_convert_anndata(self, converted_adata, output_path):
+            captured["adata"] = converted_adata
+            captured["output_path"] = output_path
+
+        monkeypatch.setattr("slaf.data.converter.sc.read_10x_h5", mock_read)
+        monkeypatch.setattr(SLAFConverter, "_convert_anndata", fake_convert_anndata)
+
+        converter = SLAFConverter(chunked=False)
+        converter._convert_10x_h5(str(h5_file), str(tmp_path / "out.slaf"))
+
+        mock_read.assert_called_once_with(str(h5_file))
+        assert "genome" not in mock_read.call_args.kwargs
+        assert captured["adata"].shape == (2, 2)
+        assert captured["output_path"] == str(tmp_path / "out.slaf")
+
+    def test_extract_10x_h5_schema_method_does_not_force_genome(
+        self, tmp_path, monkeypatch
+    ):
+        """SLAFConverter._extract_10x_h5_schema lets Scanpy choose the genome."""
+
+        import scanpy as sc
+        from scipy import sparse
+
+        h5_file = Path(tmp_path) / "filtered_feature_bc_matrix.h5"
+        h5_file.write_text("mock h5 content")
+        adata = sc.AnnData(
+            X=sparse.csr_matrix([[1, 0], [0, 2]]),
+            obs=pd.DataFrame(index=["cell1", "cell2"]),
+            var=pd.DataFrame(index=["gene1", "gene2"]),
+        )
+
+        mock_read = MagicMock(return_value=adata)
+        monkeypatch.setattr("slaf.data.converter.sc.read_10x_h5", mock_read)
+
+        converter = SLAFConverter(chunked=False)
+        gene_ids, cell_columns, value_type = converter._extract_10x_h5_schema(
+            str(h5_file)
+        )
+
+        mock_read.assert_called_once_with(str(h5_file))
+        assert "genome" not in mock_read.call_args.kwargs
+        assert gene_ids == {"gene1", "gene2"}
+        assert cell_columns == set()
+        assert value_type == "uint16"
 
     def test_h5ad_format_detection(self, tmp_path):
         """Test auto-detection of h5ad format"""
@@ -2481,3 +2571,42 @@ class TestSpatialH5ADConversion:
             "tissue_hires_scalef"
         ] == pytest.approx(0.17)
         assert uns_data["spatial"]["library_id"]["metadata"]["chemistry"] == "Visium"
+
+
+class TestNonPosixFilesystemWarning:
+    """_check_output_filesystem raises a clear error on non-POSIX filesystems."""
+
+    def test_non_posix_rename_raises_runtime_error(self, small_sample_adata, tmp_path):
+        """convert() raises RuntimeError when os.rename fails (simulates ExFAT/NTFS)."""
+        h5ad_path = tmp_path / "data.h5ad"
+        small_sample_adata.write(h5ad_path)
+
+        with patch(
+            "slaf.data.converter.os.rename", side_effect=OSError("rename not supported")
+        ):
+            with pytest.raises(RuntimeError, match="atomic renames"):
+                converter = SLAFConverter(chunked=False, compact_after_write=False)
+                converter.convert(str(h5ad_path), str(tmp_path / "output.slaf"))
+
+    def test_posix_filesystem_does_not_raise(self, small_sample_adata, tmp_path):
+        """convert() proceeds normally on a POSIX-compatible filesystem (tmp_path is local APFS)."""
+        h5ad_path = tmp_path / "data.h5ad"
+        small_sample_adata.write(h5ad_path)
+        converter = SLAFConverter(
+            chunked=False,
+            use_optimized_dtypes=False,
+            compact_after_write=False,
+        )
+        converter.convert(str(h5ad_path), str(tmp_path / "output.slaf"))
+
+    def test_error_message_contains_suggested_workaround(
+        self, small_sample_adata, tmp_path
+    ):
+        """RuntimeError message tells the user to use a local POSIX path."""
+        h5ad_path = tmp_path / "data.h5ad"
+        small_sample_adata.write(h5ad_path)
+
+        with patch("slaf.data.converter.os.rename", side_effect=OSError):
+            with pytest.raises(RuntimeError, match="local"):
+                converter = SLAFConverter(chunked=False, compact_after_write=False)
+                converter.convert(str(h5ad_path), str(tmp_path / "output.slaf"))

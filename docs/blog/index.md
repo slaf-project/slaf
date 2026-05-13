@@ -4,6 +4,12 @@ Welcome to the SLAF blog, where we share insights, technical deep dives, and upd
 
 ## Latest Posts
 
+### [Pretraining scGPT on Tahoe-100M for ~$10 over a lunch break](blazing-fast-dataloaders-3.md)
+
+_Last updated: April 23, 2026_
+
+How do we get 100x more shots on goal for single-cell foundation models? This post shows why object-storage-native pub/sub-style dataloading changes the economics of pretraining, introduces `DistributedSLAFDataLoader`, explains why Modal maps well to this architecture, and announces `fast-scgpt` to train models on Tahoe-100M with ~30-minute training runs at a ~$10 GPU price point.
+
 ### [SLAF on Hugging Face: Stream Single-Cell Data Without the Download](huggingface.md)
 
 _Last updated: January 30, 2026_
