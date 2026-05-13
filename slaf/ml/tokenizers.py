@@ -6,7 +6,6 @@ import numpy as np
 import polars as pl
 import torch
 
-from slaf.core.slaf import SLAFArray
 from slaf.core.tabular_schema import SLAF_LANCE_COO_SCHEMA, DataSchema
 from slaf.integrations.anndata import LazyAnnData
 from slaf.ml.aggregators import GeneformerWindow, ScGPTWindow, Window
@@ -313,13 +312,6 @@ class SLAFTokenizer(ABC):
             ),
         )
 
-    def get_factory_kwargs(self) -> dict[str, Any]:
-        """Return constructor kwargs required to recreate this tokenizer."""
-        return {
-            "vocab_size": self.vocab_size,
-            "max_genes": self.max_genes,
-        }
-
     def get_vocab_info(self) -> dict[str, Any]:
         """
         Get vocabulary information for debugging and analysis.
@@ -446,9 +438,7 @@ class ScGPTTokenizer(SLAFTokenizer):
         """
 
         self.n_expression_bins = n_expression_bins
-        super().__init__(
-            adata=adata, vocab_size=vocab_size, max_genes=max_genes
-        )
+        super().__init__(adata=adata, vocab_size=vocab_size, max_genes=max_genes)
 
     def create_window(self) -> Window:
         return ScGPTWindow()
@@ -477,7 +467,9 @@ class ScGPTTokenizer(SLAFTokenizer):
             else None
         )
         if expr_sequences is None:
-            raise ValueError("scGPT grouped tokenization requires expression token sequences")
+            raise ValueError(
+                "scGPT grouped tokenization requires expression token sequences"
+            )
 
         max_sequence_length = self.max_genes + 2
         batch_size = len(gene_sequences)
@@ -492,7 +484,9 @@ class ScGPTTokenizer(SLAFTokenizer):
             dtype=np.int64,
         )
 
-        for i, (genes, exprs) in enumerate(zip(gene_sequences, expr_sequences, strict=False)):
+        for i, (genes, exprs) in enumerate(
+            zip(gene_sequences, expr_sequences, strict=False)
+        ):
             n_pairs = min(len(genes), len(exprs), self.max_genes)
 
             if n_pairs > 0:
@@ -505,7 +499,9 @@ class ScGPTTokenizer(SLAFTokenizer):
                 gene_ids[0] = self.special_tokens["CLS"]
                 gene_ids[1 : 1 + n_pairs] = np.asarray(genes[:n_pairs], dtype=np.int64)
                 gene_ids[1 + n_pairs] = self.special_tokens["SEP"]
-                value_tokens[1 : 1 + n_pairs] = np.asarray(exprs[:n_pairs], dtype=np.int64)
+                value_tokens[1 : 1 + n_pairs] = np.asarray(
+                    exprs[:n_pairs], dtype=np.int64
+                )
             else:
                 gene_ids = np.array(
                     [self.special_tokens["CLS"], self.special_tokens["SEP"]],
@@ -653,11 +649,6 @@ class ScGPTTokenizer(SLAFTokenizer):
             "n_expression_bins": self.n_expression_bins,
         }
 
-    def get_factory_kwargs(self) -> dict[str, Any]:
-        factory_kwargs = super().get_factory_kwargs()
-        factory_kwargs["n_expression_bins"] = self.n_expression_bins
-        return factory_kwargs
-
     def _setup_special_tokens(self):
         """Setup special tokens for tokenization."""
         super()._setup_special_tokens()
@@ -784,9 +775,7 @@ class GeneformerTokenizer(SLAFTokenizer):
         vocab_size: int = 50000,
         max_genes: int = 2048,
     ):
-        super().__init__(
-            adata=adata, vocab_size=vocab_size, max_genes=max_genes
-        )
+        super().__init__(adata=adata, vocab_size=vocab_size, max_genes=max_genes)
 
     def create_window(self) -> Window:
         return GeneformerWindow()

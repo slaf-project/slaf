@@ -10,6 +10,7 @@ from typing import Any
 
 import modal
 from loguru import logger
+from omegaconf import DictConfig, OmegaConf
 
 from slaf.core.slaf import SLAFArray
 from slaf.core.tabular_schema import DataSchema
@@ -94,8 +95,8 @@ def create_app(
     def distributed_prefetch_worker(
         worker_id: str,
         partition_indices: list[int],
-        data_source_config: dict[str, Any],
-        processor_config: dict[str, Any],
+        data_source_config: DictConfig | dict[str, Any],
+        processor_config: DictConfig | dict[str, Any],
         queue_name: str,
         n_scanners: int = 8,
         prefetch_batch_count: int = 32,
@@ -112,6 +113,11 @@ def create_app(
         """
         from slaf.distributed.worker import prefetch_worker
 
+        if not isinstance(data_source_config, DictConfig):
+            data_source_config = OmegaConf.create(data_source_config)
+        if not isinstance(processor_config, DictConfig):
+            processor_config = OmegaConf.create(processor_config)
+
         # Inline Queue/Dict open — do not call module helpers here. ``serialized=True`` workers
         # unpickle against site-packages slaf; a PyPI lag behind your deploy machine would
         # raise DeserializationError if this referenced new helpers on the training side only.
@@ -125,7 +131,7 @@ def create_app(
             queue = modal.Queue.from_name(queue_name, create_if_missing=True)
         partial_groups_kv = None
         if (
-            processor_config.get("enable_cross_worker_boundary_merging", False)
+            bool(processor_config.enable_cross_worker_boundary_merging)
             and partial_groups_kv_name
         ):
             if modal_queue_environment is not None:
@@ -214,6 +220,7 @@ class DistributedSLAFDataLoader:
         self,
         slaf_array: SLAFArray,
         tokenizer: SLAFTokenizer | None = None,
+        tokenizer_config: DictConfig | dict[str, Any] | None = None,
         n_workers: int = 64,
         n_scanners: int = 16,
         cpu: float = 8,
@@ -238,6 +245,8 @@ class DistributedSLAFDataLoader:
             slaf_array: SLAFArray instance containing the data
             tokenizer [PRODUCER]: Instantiated tokenizer for tokenized mode.
                            Required unless raw_mode=True.
+            tokenizer_config [PRODUCER]: Config used to reconstruct the tokenizer
+                           in distributed workers. Required unless raw_mode=True.
             n_workers: [PRODUCER] Number of Modal workers (producer-side parallelism)
             n_scanners: [PRODUCER] Number of scanners per worker (for Mixture of Scanners)
             cpu: [PRODUCER] CPU cores per worker; must match deploy_dataloader_app(cpu=...).
@@ -284,10 +293,18 @@ class DistributedSLAFDataLoader:
 
         window_kwargs = dict(window_kwargs)
         window_kwargs.setdefault("use_binned_expressions", True)
+        if tokenizer_config is not None and not isinstance(
+            tokenizer_config, DictConfig
+        ):
+            tokenizer_config = OmegaConf.create(tokenizer_config)
 
         if not self.raw_mode:
             if tokenizer is None:
                 raise ValueError("tokenizer must be provided unless raw_mode=True.")
+            if tokenizer_config is None:
+                raise ValueError(
+                    "tokenizer_config must be provided unless raw_mode=True.",
+                )
             self.tokenizer = tokenizer
             self.tokenizer_type = self.tokenizer.tokenizer_name
             self.max_genes = self.tokenizer.max_genes
@@ -296,15 +313,12 @@ class DistributedSLAFDataLoader:
                 "n_expression_bins",
                 getattr(self.tokenizer, "n_expression_bins", 10),
             )
-            tokenizer_factory_kwargs = self.tokenizer.get_factory_kwargs()
-            tokenizer_cls = type(self.tokenizer)
         else:
             if tokenizer is not None:
                 raise ValueError("raw_mode=True is incompatible with tokenizer.")
             self.tokenizer_type = "raw"
             self.max_genes = 0
-            tokenizer_factory_kwargs = None
-            tokenizer_cls = None
+            tokenizer_config = None
             self.tokenizer = None
             self.special_tokens = None
         # Create data source
@@ -329,10 +343,12 @@ class DistributedSLAFDataLoader:
         partial_groups_kv_name = f"{queue_name}-partial-groups"
 
         # Prepare configs for workers
-        data_source_config = {
-            "type": "lance",
-            "path": lance_path,
-        }
+        data_source_config = OmegaConf.create(
+            {
+                "type": "lance",
+                "path": lance_path,
+            }
+        )
 
         # Data schema for SLAF (maps generic schema to SLAF column names)
         schema = DataSchema(
@@ -345,42 +361,37 @@ class DistributedSLAFDataLoader:
             value_list_key="expr_sequence",
         )
 
-        processor_config = {
-            "schema": {
-                "group_key": schema.group_key,
-                "item_key": schema.item_key,
-                "value_key": schema.value_key,
-                "group_key_out": schema.group_key_out,
-                "item_list_key": schema.item_list_key,
-                "value_list_key": schema.value_list_key,
-            },
-            "window_factory": None,
-            "shuffle_factory": None,
-            "max_items": self.max_genes,
-            "seed": seed,
-            "n_epochs": n_epochs,
-            "window_kwargs": window_kwargs,
-            "continuity_check": "sequential",
-            "enable_cross_worker_boundary_merging": True,
-            "use_tokenizer_window": not self.raw_mode,
-        }
+        processor_config = OmegaConf.create(
+            {
+                "schema": {
+                    "group_key": schema.group_key,
+                    "item_key": schema.item_key,
+                    "value_key": schema.value_key,
+                    "group_key_out": schema.group_key_out,
+                    "item_list_key": schema.item_list_key,
+                    "value_list_key": schema.value_list_key,
+                },
+                "window_factory": None,
+                "shuffle_factory": None,
+                "max_items": self.max_genes,
+                "seed": seed,
+                "n_epochs": n_epochs,
+                "window_kwargs": window_kwargs,
+                "continuity_check": "sequential",
+                "enable_cross_worker_boundary_merging": True,
+                "use_tokenizer_window": not self.raw_mode,
+            }
+        )
 
         # Create the KV dict to ensure it exists before workers try to access it
-        if processor_config.get("enable_cross_worker_boundary_merging", True):
+        if bool(processor_config.enable_cross_worker_boundary_merging):
             _modal_dict_from_name(
                 partial_groups_kv_name,
                 create_if_missing=True,
                 environment_name=modal_queue_environment,
             )
 
-        if self.tokenizer is not None and tokenizer_cls is not None:
-            processor_config["tokenizer_factory"] = {
-                "module": tokenizer_cls.__module__,
-                "class": tokenizer_cls.__name__,
-                "kwargs": tokenizer_factory_kwargs or {},
-            }
-        else:
-            processor_config["tokenizer_factory"] = None
+        processor_config.tokenizer_config = tokenizer_config
 
         # Spawn workers
         # NOTE: The app must be deployed before spawning workers:
