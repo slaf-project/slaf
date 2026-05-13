@@ -2,7 +2,6 @@ from typing import Optional
 
 from loguru import logger
 
-from slaf.core.slaf import SLAFArray
 from slaf.integrations.anndata import LazyAnnData
 
 from .tokenizers import SLAFTokenizer
@@ -462,9 +461,7 @@ class SLAFDataLoader:
 
         self._dataset = self._create_dataset(prefetcher_ready_timeout)
 
-    def _create_dataset(
-        self, prefetcher_ready_timeout: float
-    ) -> "SLAFIterableDataset":
+    def _create_dataset(self, prefetcher_ready_timeout: float) -> "SLAFIterableDataset":
         return SLAFIterableDataset(
             slaf_array=self.slaf_array,
             tokenizer=self.tokenizer,
@@ -505,8 +502,8 @@ class SLAFDataLoader:
                     - attention_mask: Boolean mask indicating valid tokens (torch.Tensor)
                     - cell_ids: Integer IDs of cells in the batch (torch.Tensor)
                 - **Raw mode** (raw_mode=True):
-                    - x: Raw cell × gene data as Polars DataFrame
-                    - cell_ids: List of cell integer IDs in the batch
+                    - x: Raw sparse cell × gene data (polars.DataFrame)
+                    - cell_ids: Integer IDs of cells in the batch (list[int])
                 - **Multi-epoch** (when n_epochs > 1):
                     - epoch: Current epoch number (int)
 
