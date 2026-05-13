@@ -1,7 +1,7 @@
 import json
 import os
-from typing import Any, cast
 import tempfile
+from typing import Any, cast
 
 import lance
 import numpy as np
