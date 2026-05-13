@@ -2455,18 +2455,18 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
                 }
             )
 
-        # If overwriting, drop old column first
-        if key in self.keys():
-            table_dataset = getattr(self._slaf_array, self.table_name)
-            table_dataset = table_dataset.drop_columns([key])
-            setattr(self._slaf_array, self.table_name, lance.dataset(table_path))
-
         table_path = self._slaf_array._join_path(
             self._slaf_array.slaf_path,
             self._slaf_array.config.get("tables", {}).get(
                 self.table_name, f"{self.table_name}.lance"
             ),
         )
+
+        # If overwriting, drop old column first
+        if key in self.keys():
+            table_dataset = getattr(self._slaf_array, self.table_name)
+            table_dataset = table_dataset.drop_columns([key])
+            setattr(self._slaf_array, self.table_name, lance.dataset(table_path))
 
         # Update table
         self._update_table_with_column(column_table, key, table_path)
