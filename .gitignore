@@ -5,6 +5,7 @@
 **/__marimo__/
 **/*.egg-info/
 *.pyc
+*.swp
 site
 .ruff_cache
 .mypy_cache
