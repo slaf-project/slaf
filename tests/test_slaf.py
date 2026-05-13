@@ -6,8 +6,8 @@ import time
 import polars as pl
 import pytest
 
-from slaf.core.slaf import SLAFArray
 from slaf import get_integrations
+from slaf.core.slaf import SLAFArray
 
 
 @pytest.mark.slaf_array

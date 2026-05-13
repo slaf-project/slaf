@@ -11,8 +11,8 @@ from scipy.sparse import csr_matrix
 
 from slaf.core.slaf import SLAFArray
 from slaf.data import SLAFConverter
-from slaf.integrations.anndata import LazyAnnData
 from slaf.integrations import ensure_h5ad_writable
+from slaf.integrations.anndata import LazyAnnData
 
 
 def _wait_for_all_slaf_threads(timeout=0.3):
