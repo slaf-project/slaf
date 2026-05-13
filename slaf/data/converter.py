@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any
+from typing import Any, cast
 
 import lance
 import numpy as np
@@ -3286,7 +3286,9 @@ class SLAFConverter:
                 continue
 
             if sparse.issparse(embedding):
-                sparse_embedding = embedding.tocsr().astype(np.float32)
+                sparse_embedding = (
+                    cast(sparse.spmatrix, embedding).tocsr().astype(np.float32)
+                )
                 n_dims = sparse_embedding.shape[1]
                 coo = sparse_embedding.tocoo()
                 if coo.nnz > 0:
@@ -3440,7 +3442,7 @@ class SLAFConverter:
                     "varm '{}' is sparse in source AnnData; densifying during conversion.",
                     key,
                 )
-                embedding = embedding.toarray()
+                embedding = cast(sparse.spmatrix, embedding).toarray()
             else:
                 embedding = np.asarray(embedding)
             n_dims = embedding.shape[1] if len(embedding.shape) > 1 else 1
@@ -4191,7 +4193,7 @@ class SLAFConverter:
                 )
                 all_chunk_totals.append(chunk_totals)
 
-        total_counts = np.zeros(len(obs_df), dtype=np.float64)
+        total_counts: np.ndarray = np.zeros(len(obs_df), dtype=np.float64)
         if all_chunk_totals:
             combined_totals = pl.concat(all_chunk_totals)
             final_totals = combined_totals.group_by("cell_integer_id").agg(

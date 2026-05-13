@@ -1,11 +1,13 @@
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import lance
 import numpy as np
 import polars as pl
 import scipy.sparse
+
+from slaf.core.sparse_ops import LazySparseMixin
 
 
 @dataclass(frozen=True)
@@ -17,8 +19,8 @@ class SparseTableDescriptor:
     col_id_col: str
     value_col: str = "value"
     key_col: str | None = None
-    row_dtype: pl.DataType = pl.UInt32
-    col_dtype: pl.DataType = pl.UInt32
+    row_dtype: pl.DataType = pl.UInt32()
+    col_dtype: pl.DataType = pl.UInt32()
 
 
 EXPRESSION_SPARSE_TABLE = SparseTableDescriptor(
@@ -28,8 +30,8 @@ EXPRESSION_SPARSE_TABLE = SparseTableDescriptor(
     row_id_col="cell_integer_id",
     col_id_col="gene_integer_id",
     key_col=None,
-    row_dtype=pl.UInt32,
-    col_dtype=pl.UInt16,
+    row_dtype=pl.UInt32(),
+    col_dtype=pl.UInt16(),
 )
 
 OBSM_SPARSE_TABLE = SparseTableDescriptor(
@@ -39,8 +41,8 @@ OBSM_SPARSE_TABLE = SparseTableDescriptor(
     row_id_col="cell_integer_id",
     col_id_col="gene_integer_id",
     key_col="obsm_key",
-    row_dtype=pl.UInt32,
-    col_dtype=pl.UInt32,
+    row_dtype=pl.UInt32(),
+    col_dtype=pl.UInt32(),
 )
 
 OBSM_SPARSE_COUNTS_TABLE = SparseTableDescriptor(
@@ -50,9 +52,182 @@ OBSM_SPARSE_COUNTS_TABLE = SparseTableDescriptor(
     row_id_col="cell_integer_id",
     col_id_col="row_count",
     key_col="obsm_key",
-    row_dtype=pl.UInt32,
-    col_dtype=pl.UInt32,
+    row_dtype=pl.UInt32(),
+    col_dtype=pl.UInt32(),
 )
+
+
+class LazySparseObsmMatrix(LazySparseMixin):
+    """Lazy sparse matrix view for one sparse obsm key."""
+
+    def __init__(
+        self,
+        slaf_array: Any,
+        *,
+        key: str,
+        n_obs: int,
+        n_features: int,
+    ):
+        super().__init__()
+        self.slaf_array = slaf_array
+        self.key = key
+        self._base_shape = (n_obs, n_features)
+        self._shape = self._base_shape
+        self._cell_selector: Any = None
+        self._feature_selector: Any = None
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return self._shape
+
+    def __getitem__(self, key) -> "LazySparseObsmMatrix":
+        cell_selector, feature_selector = self._parse_key(key)
+        new_matrix = LazySparseObsmMatrix(
+            self.slaf_array,
+            key=self.key,
+            n_obs=self._base_shape[0],
+            n_features=self._base_shape[1],
+        )
+        new_matrix._cell_selector = self._compose_selectors(
+            self._cell_selector, cell_selector, axis=0
+        )
+        new_matrix._feature_selector = self._compose_selectors(
+            self._feature_selector, feature_selector, axis=1
+        )
+        new_matrix._update_shape()
+        return new_matrix
+
+    def _compose_selectors(self, old, new, axis):
+        axis_size = self._base_shape[axis]
+        if old is None:
+            return new
+        if new is None or (isinstance(new, slice) and new == slice(None)):
+            return old
+        if isinstance(old, slice):
+            old_start = old.start or 0
+            old_stop = old.stop or axis_size
+            old_step = old.step or 1
+            if old_start < 0:
+                old_start = axis_size + old_start
+            if old_stop < 0:
+                old_stop = axis_size + old_stop
+            old_start = max(0, min(old_start, axis_size))
+            old_stop = max(0, min(old_stop, axis_size))
+            old_range = list(range(old_start, old_stop, old_step))
+            if isinstance(new, slice):
+                new_start = new.start or 0
+                new_stop = new.stop or len(old_range)
+                new_step = new.step or 1
+                if new_start < 0:
+                    new_start = len(old_range) + new_start
+                if new_stop < 0:
+                    new_stop = len(old_range) + new_stop
+                new_start = max(0, min(new_start, len(old_range)))
+                new_stop = max(0, min(new_stop, len(old_range)))
+                return old_range[new_start:new_stop:new_step]
+            if isinstance(new, int | np.integer):
+                return [old_range[new]] if 0 <= new < len(old_range) else []
+            if isinstance(new, list | np.ndarray):
+                result = []
+                for idx in new:
+                    if 0 <= idx < len(old_range):
+                        result.append(old_range[idx])
+                return result
+            return new
+        if isinstance(old, list | np.ndarray):
+            if isinstance(new, slice):
+                new_start = new.start or 0
+                new_stop = new.stop or len(old)
+                new_step = new.step or 1
+                if new_start < 0:
+                    new_start = len(old) + new_start
+                if new_stop < 0:
+                    new_stop = len(old) + new_stop
+                new_start = max(0, min(new_start, len(old)))
+                new_stop = max(0, min(new_stop, len(old)))
+                return old[new_start:new_stop:new_step]
+            if isinstance(new, int | np.integer):
+                return [old[new]] if 0 <= new < len(old) else []
+            if isinstance(new, list | np.ndarray):
+                result = []
+                for idx in new:
+                    if 0 <= idx < len(old):
+                        result.append(old[idx])
+                return result
+            return new
+        return new
+
+    def _calculate_selected_count(self, selector, axis: int) -> int:
+        axis_size = self._base_shape[axis]
+        if selector is None or (
+            isinstance(selector, slice) and selector == slice(None)
+        ):
+            return axis_size
+        if isinstance(selector, slice):
+            start = selector.start or 0
+            stop = selector.stop or axis_size
+            step = selector.step or 1
+            start = max(0, min(start, axis_size))
+            stop = max(0, min(stop, axis_size))
+            return len(range(start, stop, step))
+        if isinstance(selector, list | np.ndarray):
+            if isinstance(selector, np.ndarray) and selector.dtype == bool:
+                return int(np.sum(selector))
+            return len(selector)
+        if isinstance(selector, int | np.integer):
+            return 1
+        return axis_size
+
+    def _update_shape(self):
+        self._shape = (
+            self._calculate_selected_count(self._cell_selector, axis=0),
+            self._calculate_selected_count(self._feature_selector, axis=1),
+        )
+
+    def _selector_to_ids(self, selector, axis: int) -> np.ndarray:
+        axis_size = self._base_shape[axis]
+        dtype = np.uint32
+        if selector is None or (
+            isinstance(selector, slice) and selector == slice(None)
+        ):
+            return np.arange(axis_size, dtype=dtype)
+        if isinstance(selector, slice):
+            start = selector.start or 0
+            stop = selector.stop or axis_size
+            step = selector.step or 1
+            return np.arange(start, stop, step, dtype=dtype)
+        if isinstance(selector, list):
+            return np.asarray(selector, dtype=dtype)
+        if isinstance(selector, np.ndarray):
+            if selector.dtype == bool:
+                return np.flatnonzero(selector).astype(dtype, copy=False)
+            return selector.astype(dtype, copy=False)
+        if isinstance(selector, int | np.integer):
+            return np.asarray([int(selector)], dtype=dtype)
+        raise TypeError(f"Unsupported selector type: {type(selector)}")
+
+    def compute(self) -> scipy.sparse.csr_matrix:
+        selected_row_ids = self._selector_to_ids(self._cell_selector, axis=0)
+        selected_col_ids = (
+            None
+            if self._feature_selector is None
+            or (
+                isinstance(self._feature_selector, slice)
+                and self._feature_selector == slice(None)
+            )
+            else self._selector_to_ids(self._feature_selector, axis=1)
+        )
+        return read_sparse_matrix(
+            self.slaf_array,
+            OBSM_SPARSE_TABLE,
+            selected_row_ids=selected_row_ids,
+            selected_col_ids=selected_col_ids,
+            n_cols=self.shape[1],
+            logical_key=self.key,
+        )
+
+    def toarray(self) -> np.ndarray:
+        return self.compute().toarray()
 
 
 def get_sparse_table_path(slaf_array: Any, descriptor: SparseTableDescriptor) -> str:
@@ -107,8 +282,8 @@ def _write_sparse_row_counts(
     descriptor = OBSM_SPARSE_COUNTS_TABLE
     table_path = ensure_sparse_table_registered(slaf_array, descriptor)
     table = get_sparse_table(slaf_array, descriptor)
-    cell_ids = np.flatnonzero(counts).astype(np.uint32, copy=False)
-    row_counts = counts[cell_ids].astype(np.uint32, copy=False)
+    cell_ids: np.ndarray = np.flatnonzero(counts).astype(np.uint32, copy=False)
+    row_counts: np.ndarray = counts[cell_ids].astype(np.uint32, copy=False)
     if len(cell_ids) == 0:
         new_df = pl.DataFrame(
             {
@@ -139,8 +314,11 @@ def _write_sparse_row_counts(
         setattr(slaf_array, descriptor.table_attr, lance.dataset(table_path))
         return
     try:
-        existing_df = pl.from_arrow(
-            table.to_table(columns=["obsm_key", "cell_integer_id", "row_count"])
+        existing_df = cast(
+            pl.DataFrame,
+            pl.from_arrow(
+                table.to_table(columns=["obsm_key", "cell_integer_id", "row_count"])
+            ),
         )
     except Exception:
         existing_df = pl.DataFrame(
@@ -152,7 +330,7 @@ def _write_sparse_row_counts(
         )
     kept_df = existing_df.filter(pl.col("obsm_key") != logical_key)
     merged_df = (
-        pl.concat([kept_df, new_df], how="vertical_relaxed")
+        cast(pl.DataFrame, pl.concat([kept_df, new_df], how="vertical_relaxed"))
         if len(new_df) > 0
         else kept_df
     ).sort(["obsm_key", "cell_integer_id"])
@@ -185,17 +363,20 @@ def _load_sparse_frame(
             raise ValueError("logical_key is required for keyed sparse tables.")
         columns.append(descriptor.key_col)
         try:
-            df = pl.from_arrow(
-                table.to_table(
-                    columns=columns,
-                    filter=f"{descriptor.key_col} = '{logical_key}'",
-                )
+            df = cast(
+                pl.DataFrame,
+                pl.from_arrow(
+                    table.to_table(
+                        columns=columns,
+                        filter=f"{descriptor.key_col} = '{logical_key}'",
+                    )
+                ),
             )
             return df
         except TypeError:
             pass
 
-    df = pl.from_arrow(table.to_table(columns=columns))
+    df = cast(pl.DataFrame, pl.from_arrow(table.to_table(columns=columns)))
     if descriptor.key_col is not None:
         df = df.filter(pl.col(descriptor.key_col) == logical_key)
     return df
@@ -261,7 +442,7 @@ def read_sparse_matrix(
 
     sort_order = np.argsort(selected_row_ids)
     sorted_selected_row_ids = selected_row_ids[sort_order]
-    positions = np.searchsorted(sorted_selected_row_ids, row_ids)
+    positions = np.asarray(np.searchsorted(sorted_selected_row_ids, row_ids))
     valid = (positions < n_rows) & (sorted_selected_row_ids[positions] == row_ids)
     if not np.any(valid):
         return scipy.sparse.csr_matrix((n_rows, n_cols), dtype=np.float32)
@@ -273,7 +454,7 @@ def read_sparse_matrix(
     if selected_col_ids is not None:
         col_sort_order = np.argsort(selected_col_ids)
         sorted_selected_col_ids = selected_col_ids[col_sort_order]
-        col_positions = np.searchsorted(sorted_selected_col_ids, local_cols)
+        col_positions = np.asarray(np.searchsorted(sorted_selected_col_ids, local_cols))
         valid_cols = (col_positions < n_cols) & (
             sorted_selected_col_ids[col_positions] == local_cols
         )
@@ -347,7 +528,10 @@ def write_sparse_matrix(
     kept_df = existing_df.filter(~remove_expr)
 
     if len(new_df) > 0:
-        merged_df = pl.concat([kept_df, new_df], how="vertical_relaxed")
+        merged_df = cast(
+            pl.DataFrame,
+            pl.concat([kept_df, new_df], how="vertical_relaxed"),
+        )
     else:
         merged_df = kept_df
 
@@ -421,10 +605,12 @@ def delete_sparse_matrix(
     setattr(slaf_array, descriptor.table_attr, lance.dataset(table_path))
     if descriptor.key_col is not None and logical_key is not None:
         logical_df = filtered_df.filter(pl.col(descriptor.key_col) == logical_key)
-        max_row = (
-            int(logical_df[descriptor.row_id_col].max()) if len(logical_df) > 0 else -1
+        row_id_values = logical_df.get_column(descriptor.row_id_col).to_numpy()
+        max_row = int(row_id_values.max()) if len(row_id_values) > 0 else -1
+        row_counts: np.ndarray = np.zeros(
+            max_row + 1 if max_row >= 0 else 0,
+            dtype=np.int64,
         )
-        row_counts = np.zeros(max_row + 1 if max_row >= 0 else 0, dtype=np.int64)
         if len(logical_df) > 0:
             grouped = logical_df.group_by(descriptor.row_id_col).agg(
                 pl.len().alias("n_rows")
@@ -470,21 +656,33 @@ def compute_row_counts(
         table = get_sparse_table(slaf_array, OBSM_SPARSE_COUNTS_TABLE)
         if table is not None:
             try:
-                df = pl.from_arrow(
-                    table.to_table(
-                        columns=["cell_integer_id", "row_count", "obsm_key"],
-                        filter=f"obsm_key = '{logical_key}'",
-                    )
+                df = cast(
+                    pl.DataFrame,
+                    pl.from_arrow(
+                        table.to_table(
+                            columns=["cell_integer_id", "row_count", "obsm_key"],
+                            filter=f"obsm_key = '{logical_key}'",
+                        )
+                    ),
                 )
             except TypeError:
-                df = pl.from_arrow(
-                    table.to_table(columns=["cell_integer_id", "row_count", "obsm_key"])
+                df = cast(
+                    pl.DataFrame,
+                    pl.from_arrow(
+                        table.to_table(
+                            columns=["cell_integer_id", "row_count", "obsm_key"]
+                        )
+                    ),
                 ).filter(pl.col("obsm_key") == logical_key)
-            counts = np.zeros(n_rows, dtype=np.int64)
+            counts: np.ndarray = np.zeros(n_rows, dtype=np.int64)
             if len(df) == 0:
                 return counts
-            row_ids = df["cell_integer_id"].to_numpy().astype(np.int64, copy=False)
-            row_counts = df["row_count"].to_numpy().astype(np.int64, copy=False)
+            row_ids = (
+                df.get_column("cell_integer_id").to_numpy().astype(np.int64, copy=False)
+            )
+            row_counts = (
+                df.get_column("row_count").to_numpy().astype(np.int64, copy=False)
+            )
             valid = row_ids < n_rows
             counts[row_ids[valid]] = row_counts[valid]
             return counts

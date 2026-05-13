@@ -13,8 +13,8 @@ from slaf.core.slaf import SLAFArray
 from slaf.core.sparse_ops import LazySparseMixin
 from slaf.core.sparse_tables import (
     OBSM_SPARSE_TABLE,
+    LazySparseObsmMatrix,
     delete_sparse_matrix,
-    read_sparse_matrix,
     write_sparse_matrix,
 )
 
@@ -984,179 +984,6 @@ class LazyExpressionMatrix(LazySparseMixin):
         return scipy.sparse.coo_matrix((data, (rows, cols)), shape=self.shape).tocsr()
 
 
-class LazySparseObsmMatrix(LazySparseMixin):
-    """Lazy sparse matrix view for one sparse obsm key."""
-
-    def __init__(
-        self,
-        slaf_array: SLAFArray,
-        *,
-        key: str,
-        n_obs: int,
-        n_features: int,
-    ):
-        super().__init__()
-        self.slaf_array = slaf_array
-        self.key = key
-        self._base_shape = (n_obs, n_features)
-        self._shape = self._base_shape
-        self._cell_selector: Any = None
-        self._feature_selector: Any = None
-
-    @property
-    def shape(self) -> tuple[int, int]:
-        return self._shape
-
-    def __getitem__(self, key) -> "LazySparseObsmMatrix":
-        cell_selector, feature_selector = self._parse_key(key)
-        new_matrix = LazySparseObsmMatrix(
-            self.slaf_array,
-            key=self.key,
-            n_obs=self._base_shape[0],
-            n_features=self._base_shape[1],
-        )
-        new_matrix._cell_selector = self._compose_selectors(
-            self._cell_selector, cell_selector, axis=0
-        )
-        new_matrix._feature_selector = self._compose_selectors(
-            self._feature_selector, feature_selector, axis=1
-        )
-        new_matrix._update_shape()
-        return new_matrix
-
-    def _compose_selectors(self, old, new, axis):
-        axis_size = self._base_shape[axis]
-        if old is None:
-            return new
-        if new is None or (isinstance(new, slice) and new == slice(None)):
-            return old
-        if isinstance(old, slice):
-            old_start = old.start or 0
-            old_stop = old.stop or axis_size
-            old_step = old.step or 1
-            if old_start < 0:
-                old_start = axis_size + old_start
-            if old_stop < 0:
-                old_stop = axis_size + old_stop
-            old_start = max(0, min(old_start, axis_size))
-            old_stop = max(0, min(old_stop, axis_size))
-            old_range = list(range(old_start, old_stop, old_step))
-            if isinstance(new, slice):
-                new_start = new.start or 0
-                new_stop = new.stop or len(old_range)
-                new_step = new.step or 1
-                if new_start < 0:
-                    new_start = len(old_range) + new_start
-                if new_stop < 0:
-                    new_stop = len(old_range) + new_stop
-                new_start = max(0, min(new_start, len(old_range)))
-                new_stop = max(0, min(new_stop, len(old_range)))
-                return old_range[new_start:new_stop:new_step]
-            if isinstance(new, int | np.integer):
-                return [old_range[new]] if 0 <= new < len(old_range) else []
-            if isinstance(new, list | np.ndarray):
-                result = []
-                for idx in new:
-                    if 0 <= idx < len(old_range):
-                        result.append(old_range[idx])
-                return result
-            return new
-        if isinstance(old, list | np.ndarray):
-            if isinstance(new, slice):
-                new_start = new.start or 0
-                new_stop = new.stop or len(old)
-                new_step = new.step or 1
-                if new_start < 0:
-                    new_start = len(old) + new_start
-                if new_stop < 0:
-                    new_stop = len(old) + new_stop
-                new_start = max(0, min(new_start, len(old)))
-                new_stop = max(0, min(new_stop, len(old)))
-                return old[new_start:new_stop:new_step]
-            if isinstance(new, int | np.integer):
-                return [old[new]] if 0 <= new < len(old) else []
-            if isinstance(new, list | np.ndarray):
-                result = []
-                for idx in new:
-                    if 0 <= idx < len(old):
-                        result.append(old[idx])
-                return result
-            return new
-        return new
-
-    def _calculate_selected_count(self, selector, axis: int) -> int:
-        axis_size = self._base_shape[axis]
-        if selector is None or (
-            isinstance(selector, slice) and selector == slice(None)
-        ):
-            return axis_size
-        if isinstance(selector, slice):
-            start = selector.start or 0
-            stop = selector.stop or axis_size
-            step = selector.step or 1
-            start = max(0, min(start, axis_size))
-            stop = max(0, min(stop, axis_size))
-            return len(range(start, stop, step))
-        if isinstance(selector, list | np.ndarray):
-            if isinstance(selector, np.ndarray) and selector.dtype == bool:
-                return int(np.sum(selector))
-            return len(selector)
-        if isinstance(selector, int | np.integer):
-            return 1
-        return axis_size
-
-    def _update_shape(self):
-        self._shape = (
-            self._calculate_selected_count(self._cell_selector, axis=0),
-            self._calculate_selected_count(self._feature_selector, axis=1),
-        )
-
-    def _selector_to_ids(self, selector, axis: int) -> np.ndarray:
-        axis_size = self._base_shape[axis]
-        dtype = np.uint32
-        if selector is None or (
-            isinstance(selector, slice) and selector == slice(None)
-        ):
-            return np.arange(axis_size, dtype=dtype)
-        if isinstance(selector, slice):
-            start = selector.start or 0
-            stop = selector.stop or axis_size
-            step = selector.step or 1
-            return np.arange(start, stop, step, dtype=dtype)
-        if isinstance(selector, list):
-            return np.asarray(selector, dtype=dtype)
-        if isinstance(selector, np.ndarray):
-            if selector.dtype == bool:
-                return np.flatnonzero(selector).astype(dtype, copy=False)
-            return selector.astype(dtype, copy=False)
-        if isinstance(selector, int | np.integer):
-            return np.asarray([int(selector)], dtype=dtype)
-        raise TypeError(f"Unsupported selector type: {type(selector)}")
-
-    def compute(self) -> scipy.sparse.csr_matrix:
-        selected_row_ids = self._selector_to_ids(self._cell_selector, axis=0)
-        selected_col_ids = (
-            None
-            if self._feature_selector is None
-            or (
-                isinstance(self._feature_selector, slice)
-                and self._feature_selector == slice(None)
-            )
-            else self._selector_to_ids(self._feature_selector, axis=1)
-        )
-        return read_sparse_matrix(
-            self.slaf_array,
-            OBSM_SPARSE_TABLE,
-            selected_row_ids=selected_row_ids,
-            selected_col_ids=selected_col_ids,
-            n_cols=self.shape[1],
-            logical_key=self.key,
-        )
-
-    def toarray(self) -> np.ndarray:
-        return self.compute().toarray()
-
-
 class LazyDictionaryViewMixin:
     """
     Base mixin for dictionary-like views (layers, obs, var).
@@ -1455,8 +1282,8 @@ class LazyLayersView(LazyDictionaryViewMixin):
 
         # Check if data is integer or float
         is_integer = np.issubdtype(sample_data.dtype, np.integer)
-        max_value = np.max(data)
-        min_value = np.min(data)
+        max_value: Any = np.max(data)
+        min_value: Any = np.min(data)
 
         if is_integer and max_value <= 65535 and min_value >= 0:
             return data.astype(np.uint16), "uint16"
@@ -1966,8 +1793,8 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
 
         # Check if data is integer or float
         is_integer = np.issubdtype(sample_data.dtype, np.integer)
-        max_value = np.max(data)
-        min_value = np.min(data)
+        max_value: Any = np.max(data)
+        min_value: Any = np.min(data)
 
         if is_integer and max_value <= 65535 and min_value >= 0:
             return data.astype(np.uint16), pa.uint16()
@@ -2348,7 +2175,7 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
 
         return vector_columns
 
-    def _get_vector_item(self, key: str) -> np.ndarray | scipy.sparse.csr_matrix:
+    def _get_vector_item(self, key: str) -> np.ndarray:
         """Retrieve multi-dimensional array (respects selectors from parent)"""
         if key not in self.keys():
             raise KeyError(f"{self.table_type} key '{key}' not found")
@@ -2430,19 +2257,26 @@ class LazyMetadataViewMixin(LazySparseMixin, LazyDictionaryViewMixin):
             )
             table = lance.dataset(table_path)
             setattr(self._slaf_array, self.table_name, table)
-            existing_df = pl.from_arrow(
-                table.to_table(columns=[self.id_column, key])
+            existing_df = cast(
+                pl.DataFrame,
+                pl.from_arrow(table.to_table(columns=[self.id_column, key])),
             ).filter(pl.col(key).is_not_null())
-            update_df = pl.from_arrow(
-                pa.table(
-                    {
-                        self.id_column: pa.array(integer_ids, type=id_pa_type),
-                        key: vector_array,
-                    }
-                )
+            update_df = cast(
+                pl.DataFrame,
+                pl.from_arrow(
+                    pa.table(
+                        {
+                            self.id_column: pa.array(integer_ids, type=id_pa_type),
+                            key: vector_array,
+                        }
+                    )
+                ),
             )
             merged_df = (
-                pl.concat([existing_df, update_df], how="vertical_relaxed")
+                cast(
+                    pl.DataFrame,
+                    pl.concat([existing_df, update_df], how="vertical_relaxed"),
+                )
                 .unique(subset=[self.id_column], keep="last")
                 .sort(self.id_column)
             )
