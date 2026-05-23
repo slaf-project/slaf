@@ -6,8 +6,8 @@ import numpy as np
 import polars as pl
 import torch
 
-from slaf.core.tabular_schema import SLAF_LANCE_COO_SCHEMA, DataSchema
 from slaf.core.slaf import SLAFArray
+from slaf.core.tabular_schema import SLAF_LANCE_COO_SCHEMA, DataSchema
 from slaf.ml.aggregators import GeneformerWindow, ScGPTWindow, Window
 
 TORCH_AVAILABLE = True
@@ -406,7 +406,9 @@ class ScGPTTokenizer(SLAFTokenizer):
 
         self.n_expression_bins = n_expression_bins
         self.use_binned_expressions = use_binned_expressions
-        super().__init__(slaf_array=slaf_array, vocab_size=vocab_size, max_genes=max_genes)
+        super().__init__(
+            slaf_array=slaf_array, vocab_size=vocab_size, max_genes=max_genes
+        )
 
     def create_window(self) -> Window:
         return ScGPTWindow()
@@ -418,8 +420,6 @@ class ScGPTTokenizer(SLAFTokenizer):
         max_items: int,
         **kwargs: Any,
     ) -> pl.DataFrame:
-        kwargs.setdefault("special_token_offset", 4)
-        kwargs.setdefault("expr_bin_start", self.expr_bin_start)
         kwargs.setdefault("n_expression_bins", self.n_expression_bins)
         kwargs.setdefault("use_binned_expressions", self.use_binned_expressions)
         return super().apply(df, schema=schema, max_items=max_items, **kwargs)
@@ -429,67 +429,11 @@ class ScGPTTokenizer(SLAFTokenizer):
         grouped_df: pl.DataFrame,
         schema: DataSchema = SLAF_LANCE_COO_SCHEMA,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
-        gene_sequences = grouped_df[schema.item_list_key].to_list()
-        expr_sequences = (
-            grouped_df[schema.value_list_key].to_list()
-            if schema.value_list_key and schema.value_list_key in grouped_df.columns
-            else None
-        )
-        if expr_sequences is None:
+        if not schema.value_list_key or schema.value_list_key not in grouped_df.columns:
             raise ValueError(
                 "scGPT grouped tokenization requires expression token sequences"
             )
-
-        max_sequence_length = self.max_genes + 2
-        batch_size = len(gene_sequences)
-        gene_token_array = np.full(
-            (batch_size, max_sequence_length),
-            self.special_tokens["PAD"],
-            dtype=np.int64,
-        )
-        value_array = np.full(
-            (batch_size, max_sequence_length),
-            self.special_tokens["PAD"],
-            dtype=np.int64,
-        )
-
-        for i, (genes, exprs) in enumerate(
-            zip(gene_sequences, expr_sequences, strict=False)
-        ):
-            n_pairs = min(len(genes), len(exprs), self.max_genes)
-
-            if n_pairs > 0:
-                gene_ids = np.full(
-                    n_pairs + 2, self.special_tokens["PAD"], dtype=np.int64
-                )
-                value_tokens = np.full(
-                    n_pairs + 2, self.special_tokens["PAD"], dtype=np.int64
-                )
-                gene_ids[0] = self.special_tokens["CLS"]
-                gene_ids[1 : 1 + n_pairs] = np.asarray(genes[:n_pairs], dtype=np.int64)
-                gene_ids[1 + n_pairs] = self.special_tokens["SEP"]
-                value_tokens[1 : 1 + n_pairs] = np.asarray(
-                    exprs[:n_pairs], dtype=np.int64
-                )
-            else:
-                gene_ids = np.array(
-                    [self.special_tokens["CLS"], self.special_tokens["SEP"]],
-                    dtype=np.int64,
-                )
-                value_tokens = np.array(
-                    [self.special_tokens["PAD"], self.special_tokens["PAD"]],
-                    dtype=np.int64,
-                )
-
-            length = min(len(gene_ids), max_sequence_length)
-            gene_token_array[i, :length] = gene_ids[:length]
-            value_array[i, :length] = value_tokens[:length]
-
-        input_ids = torch.from_numpy(gene_token_array)
-        values_tensor = torch.from_numpy(value_array)
-        attention_mask = input_ids != self.special_tokens["PAD"]
-
-        return input_ids, attention_mask, values_tensor
+        return super().tokenize_grouped(grouped_df, schema=schema)
 
     def tokenize(
         self,
@@ -558,9 +502,7 @@ class ScGPTTokenizer(SLAFTokenizer):
                 gene_tokens = np.array(genes[:n_pairs], dtype=np.int64) + 4
 
                 if isinstance(exprs[0], int | np.integer):
-                    expr_tokens = (
-                        np.array(exprs[:n_pairs], dtype=np.int64) + self.expr_bin_start
-                    )
+                    expr_tokens = np.array(exprs[:n_pairs], dtype=np.int64)
                 else:
                     expr_tokens = self._expression_to_bin_vectorized(
                         np.array(exprs[:n_pairs], dtype=np.float32)
@@ -623,7 +565,6 @@ class ScGPTTokenizer(SLAFTokenizer):
         super()._setup_special_tokens()
 
         # Expression binning setup for scGPT
-        self.expr_bin_start = self.vocab_size
         self.expr_bin_size = 1.0 / self.n_expression_bins
 
     def _expression_to_bin(self, expression_value: float) -> int:
@@ -635,7 +576,7 @@ class ScGPTTokenizer(SLAFTokenizer):
         bin_id = min(
             int(expression_value / self.expr_bin_size), self.n_expression_bins - 1
         )
-        return self.expr_bin_start + bin_id
+        return 1 + bin_id
 
     def _expression_to_bin_vectorized(
         self, expression_values: np.ndarray
@@ -655,7 +596,7 @@ class ScGPTTokenizer(SLAFTokenizer):
         # Convert to token IDs
         result = np.where(
             expression_values > 0,
-            self.expr_bin_start + bins,
+            1 + bins,
             self.special_tokens["PAD"],
         )
 
@@ -699,8 +640,8 @@ class ScGPTTokenizer(SLAFTokenizer):
                 special_tokens.append("PAD")
             elif token == self.special_tokens["MASK"]:
                 special_tokens.append("MASK")
-            elif token >= self.expr_bin_start:  # Expression token
-                bin_id = token - self.expr_bin_start
+            elif 1 <= token <= self.n_expression_bins:  # Expression bin
+                bin_id = token - 1
                 expr_value = bin_id * self.expr_bin_size
                 expressions.append(expr_value)
             else:
@@ -760,49 +701,7 @@ class GeneformerTokenizer(SLAFTokenizer):
         max_items: int,
         **kwargs: Any,
     ) -> pl.DataFrame:
-        kwargs.setdefault("special_token_offset", 4)
         return self.window.apply(df, schema=schema, max_items=max_items, **kwargs)
-
-    def tokenize_grouped(
-        self,
-        grouped_df: pl.DataFrame,
-        schema: DataSchema = SLAF_LANCE_COO_SCHEMA,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
-        gene_sequences = grouped_df[schema.item_list_key].to_list()
-        batch_size = len(gene_sequences)
-        token_array = np.full(
-            (batch_size, self.max_genes), self.special_tokens["PAD"], dtype=np.int64
-        )
-
-        for i, genes in enumerate(gene_sequences):
-            gene_tokens = np.asarray(genes, dtype=np.int64)
-            if len(gene_tokens) > 0:
-                tokens = np.concatenate(
-                    [
-                        [self.special_tokens["CLS"]],
-                        gene_tokens,
-                        [self.special_tokens["SEP"]],
-                    ]
-                )
-            else:
-                tokens = np.array(
-                    [self.special_tokens["CLS"], self.special_tokens["SEP"]],
-                    dtype=np.int64,
-                )
-
-            tokens = tokens[: self.max_genes]
-            if len(tokens) < self.max_genes:
-                padding = np.full(
-                    self.max_genes - len(tokens),
-                    self.special_tokens["PAD"],
-                    dtype=np.int64,
-                )
-                tokens = np.concatenate([tokens, padding])
-            token_array[i, :] = tokens
-
-        input_ids = torch.from_numpy(token_array)
-        attention_mask = input_ids != self.special_tokens["PAD"]
-        return input_ids, attention_mask, None
 
     def tokenize(
         self,
