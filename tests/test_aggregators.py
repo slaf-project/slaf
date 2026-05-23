@@ -81,7 +81,7 @@ class TestScGPTWindow:
         assert gene_seq[0] == 10  # gene with value 5.0
         # Check that expression bins are calculated (default behavior)
         assert len(expr_seq) == len(gene_seq)
-        assert all(0 <= bin_val < 10 for bin_val in expr_seq)  # Default 10 bins
+        assert all(0 <= bin_val <= 10 for bin_val in expr_seq)  # PAD + 10 bins
 
     def test_apply_expression_binning(self):
         """Test that expression binning works correctly"""
@@ -91,7 +91,7 @@ class TestScGPTWindow:
         expr_seq = cell_0_data["expr_sequence"][0]
 
         # Check that expression bins are in the correct range
-        assert all(0 <= bin_val < 5 for bin_val in expr_seq)  # 5 bins
+        assert all(0 <= bin_val <= 5 for bin_val in expr_seq)  # PAD + 5 bins
 
         # Check that zero values get bin 0
         # Values: [5.0, 3.0, 1.0] -> log(1+value): [1.79, 1.39, 0.69]
@@ -122,7 +122,7 @@ class TestScGPTWindow:
         expr_seq = cell_0_data["expr_sequence"][0]
 
         # Check that expression bins are in the correct range for 3 bins
-        assert all(0 <= bin_val < 3 for bin_val in expr_seq)
+        assert all(0 <= bin_val <= 3 for bin_val in expr_seq)
 
     def test_apply_max_genes_limit(self):
         """Test that max_genes limit is respected"""
@@ -167,7 +167,7 @@ class TestScGPTWindow:
         assert len(expr_seq) == 2
 
         # Check that expression bins are calculated (default behavior)
-        assert all(0 <= bin_val < 10 for bin_val in expr_seq)  # Default 10 bins
+        assert all(0 <= bin_val <= 10 for bin_val in expr_seq)  # PAD + 10 bins
 
         # Based on the actual output, the ranking is [10, 30] with values [3.0, 5.0]
         # This suggests the ranking might be by gene_integer_id when expression values are tied

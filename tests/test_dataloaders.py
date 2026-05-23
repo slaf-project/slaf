@@ -2,14 +2,8 @@ import polars as pl
 import pytest
 import torch
 
-from slaf.integrations.anndata import LazyAnnData
 from slaf.ml.dataloaders import SLAFDataLoader, get_device_info, get_optimal_device
 from slaf.ml.tokenizers import GeneformerTokenizer, ScGPTTokenizer
-
-
-@pytest.fixture
-def tiny_lazy_adata(tiny_slaf):
-    return LazyAnnData(tiny_slaf)
 
 
 def build_dataloader(adata, tokenizer_kind="geneformer", raw_mode=False, **kwargs):

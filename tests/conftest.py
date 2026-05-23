@@ -12,6 +12,7 @@ from scipy.sparse import csr_matrix
 from slaf.core.slaf import SLAFArray
 from slaf.data import SLAFConverter
 from slaf.integrations import ensure_h5ad_writable
+from slaf.integrations.anndata import LazyAnnData
 
 
 def _wait_for_all_slaf_threads(timeout=0.3):
@@ -439,6 +440,11 @@ def tiny_slaf(temp_dir, tiny_adata):
     # Wait for background metadata loading to complete to avoid cleanup issues
     slaf_array.wait_for_metadata()
     return slaf_array
+
+
+@pytest.fixture
+def tiny_lazy_adata(tiny_slaf):
+    return LazyAnnData(tiny_slaf)
 
 
 @pytest.fixture

@@ -298,6 +298,17 @@ class SLAFTokenizer(ABC):
 
         return transformed_df
 
+    def transform_and_apply(
+        self,
+        df: pl.DataFrame,
+        schema: DataSchema,
+        max_items: int,
+        **kwargs: Any,
+    ) -> pl.DataFrame:
+        """Apply runtime transformations, then group rows into tokenizer-ready sequences."""
+        transformed_df = self._apply_runtime_transformations(df, schema)
+        return self.apply(transformed_df, schema=schema, max_items=max_items, **kwargs)
+
     def apply(
         self,
         df: pl.DataFrame,
@@ -305,14 +316,8 @@ class SLAFTokenizer(ABC):
         max_items: int,
         **kwargs: Any,
     ) -> pl.DataFrame:
-        """Group per-cell COO rows into tokenizer-ready sequences."""
-        transformed_df = self._apply_runtime_transformations(df, schema)
-        return self.window.apply(
-            transformed_df,
-            schema=schema,
-            max_items=max_items,
-            **kwargs,
-        )
+        """Group already-transformed per-cell COO rows into tokenizer-ready sequences."""
+        return self.window.apply(df, schema=schema, max_items=max_items, **kwargs)
 
     def tokenize_grouped(
         self,
@@ -468,9 +473,8 @@ class ScGPTTokenizer(SLAFTokenizer):
         **kwargs: Any,
     ) -> pl.DataFrame:
         kwargs.setdefault("special_token_offset", 4)
-        kwargs.setdefault("expr_bin_start", self.expr_bin_start)
         kwargs.setdefault("n_expression_bins", self.n_expression_bins)
-        return super().apply(df, schema=schema, max_items=max_items, **kwargs)
+        return self.window.apply(df, schema=schema, max_items=max_items, **kwargs)
 
     def tokenize_grouped(
         self,
@@ -606,9 +610,7 @@ class ScGPTTokenizer(SLAFTokenizer):
                 gene_tokens = np.array(genes[:n_pairs], dtype=np.int64) + 4
 
                 if isinstance(exprs[0], int | np.integer):
-                    expr_tokens = (
-                        np.array(exprs[:n_pairs], dtype=np.int64) + self.expr_bin_start
-                    )
+                    expr_tokens = np.array(exprs[:n_pairs], dtype=np.int64)
                 else:
                     expr_tokens = self._expression_to_bin_vectorized(
                         np.array(exprs[:n_pairs], dtype=np.float32)
@@ -671,7 +673,6 @@ class ScGPTTokenizer(SLAFTokenizer):
         super()._setup_special_tokens()
 
         # Expression binning setup for scGPT
-        self.expr_bin_start = self.vocab_size
         self.expr_bin_size = 1.0 / self.n_expression_bins
 
     def _expression_to_bin(self, expression_value: float) -> int:
@@ -683,7 +684,7 @@ class ScGPTTokenizer(SLAFTokenizer):
         bin_id = min(
             int(expression_value / self.expr_bin_size), self.n_expression_bins - 1
         )
-        return self.expr_bin_start + bin_id
+        return 1 + bin_id
 
     def _expression_to_bin_vectorized(
         self, expression_values: np.ndarray
@@ -703,7 +704,7 @@ class ScGPTTokenizer(SLAFTokenizer):
         # Convert to token IDs
         result = np.where(
             expression_values > 0,
-            self.expr_bin_start + bins,
+            1 + bins,
             self.special_tokens["PAD"],
         )
 
@@ -747,8 +748,8 @@ class ScGPTTokenizer(SLAFTokenizer):
                 special_tokens.append("PAD")
             elif token == self.special_tokens["MASK"]:
                 special_tokens.append("MASK")
-            elif token >= self.expr_bin_start:  # Expression token
-                bin_id = token - self.expr_bin_start
+            elif 1 <= token <= self.n_expression_bins:  # Expression bin
+                bin_id = token - 1
                 expr_value = bin_id * self.expr_bin_size
                 expressions.append(expr_value)
             else:

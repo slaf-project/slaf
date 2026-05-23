@@ -1045,7 +1045,7 @@ class PrefetchBatchProcessor:
                     if tokenizer is None:
                         raise RuntimeError("Tokenizer is required for tokenized mode")
 
-                    grouped = tokenizer.apply(
+                    grouped = tokenizer.transform_and_apply(
                         shuffled_df,
                         schema=SLAF_LANCE_COO_SCHEMA,
                         max_items=tokenizer.max_genes,

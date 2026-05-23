@@ -90,9 +90,6 @@ class ScGPTWindow(Window):
 
         preprocessor = kwargs.get("expression_preprocessor")
         fragment_df = apply_expression_preprocessor(fragment_df, schema, preprocessor)
-        already_log1p = (
-            isinstance(preprocessor, ExpressionPreprocessor) and preprocessor.log1p
-        )
 
         if use_binned_expressions:
             grouped = (
@@ -104,20 +101,14 @@ class ScGPTWindow(Window):
                 )
                 .filter(pl.col("gene_rank") <= max_items)
                 .with_columns(
-                    (pl.col(vk) if already_log1p else pl.col(vk).log1p()).alias(
-                        "log_value"
-                    )
-                )
-                .with_columns(
-                    pl.when(pl.col("log_value") > 0)
+                    pl.when(pl.col(vk) > 0)
                     .then(
-                        (
-                            pl.col("log_value")
-                            * n_expression_bins
-                            / pl.col("log_value").max().over(gk)
+                        1
+                        + (
+                            (pl.col(vk) * n_expression_bins / pl.col(vk).max().over(gk))
+                            .floor()
+                            .clip(0, n_expression_bins - 1)
                         )
-                        .floor()
-                        .clip(0, n_expression_bins - 1)
                     )
                     .otherwise(0)
                     .alias("expr_bin")
