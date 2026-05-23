@@ -96,8 +96,8 @@ def create_app(
     def distributed_prefetch_worker(
         worker_id: str,
         partition_indices: list[int],
-        data_source_config: DictConfig | dict[str, Any],
-        processor_config: DictConfig | dict[str, Any],
+        data_source_config: DictConfig,
+        processor_config: DictConfig,
         queue_name: str,
         n_scanners: int = 8,
         prefetch_batch_count: int = 32,
@@ -113,11 +113,6 @@ def create_app(
         handles all Modal-specific setup (Queue, KV store, etc.).
         """
         from slaf.distributed.worker import prefetch_worker
-
-        if not isinstance(data_source_config, DictConfig):
-            data_source_config = OmegaConf.create(data_source_config)
-        if not isinstance(processor_config, DictConfig):
-            processor_config = OmegaConf.create(processor_config)
 
         # Inline Queue/Dict open — do not call module helpers here. ``serialized=True`` workers
         # unpickle against site-packages slaf; a PyPI lag behind your deploy machine would
