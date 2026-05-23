@@ -26,8 +26,8 @@ MODAL_QUEUE_ITEM_SIZE_LIMIT_BYTES = 1024 * 1024
 def prefetch_worker(
     worker_id: str,
     partition_indices: list[int],
-    data_source_config: DictConfig | dict[str, Any],
-    processor_config: DictConfig | dict[str, Any],
+    data_source_config: DictConfig,
+    processor_config: DictConfig,
     queue: Any,  # Modal Queue or any queue-like object
     n_scanners: int = 8,
     prefetch_batch_count: int = 32,
@@ -56,29 +56,14 @@ def prefetch_worker(
     Returns:
         Dictionary with worker metrics
     """
-    if not isinstance(data_source_config, DictConfig):
-        data_source_config = OmegaConf.create(data_source_config)
-    if not isinstance(processor_config, DictConfig):
-        processor_config = OmegaConf.create(processor_config)
-
-    tokenizer_config = OmegaConf.select(processor_config, "tokenizer_config")
-    shuffle_factory_config = OmegaConf.select(processor_config, "shuffle_factory")
-    window_factory_config = OmegaConf.select(processor_config, "window_factory")
-    use_tokenizer_window = bool(
-        OmegaConf.select(processor_config, "use_tokenizer_window", default=False)
-    )
-    continuity_check = str(
-        OmegaConf.select(
-            processor_config,
-            "continuity_check",
-            default="sequential",
-        )
-    )
-    max_items = int(OmegaConf.select(processor_config, "max_items", default=1024))
-    seed_value = int(OmegaConf.select(processor_config, "seed", default=42))
-    window_kwargs = (
-        OmegaConf.select(processor_config, "window_kwargs", default={}) or {}
-    )
+    tokenizer_config = processor_config.tokenizer_config
+    shuffle_factory_config = processor_config.shuffle_factory
+    window_factory_config = processor_config.window_factory
+    use_tokenizer_window = bool(processor_config.use_tokenizer_window)
+    continuity_check = str(processor_config.continuity_check)
+    max_items = int(processor_config.max_items)
+    seed_value = int(processor_config.seed)
+    window_kwargs = processor_config.window_kwargs or {}
 
     # Import data source (generic)
     from slaf.distributed.data_source import LanceDataSource
@@ -312,7 +297,7 @@ def prefetch_worker(
     # Process partitions using Mixture of Scanners (MoS) approach
     total_batches = 0
     total_rows = 0
-    epochs = processor_config.get("n_epochs", 1)
+    epochs = processor_config.n_epochs
 
     # Async writer: use Modal's .aio so we don't block on network I/O (see modal.com/docs/guide/queues)
     writer_queue: queue_module.Queue[list[dict[str, Any]] | None] = queue_module.Queue(
