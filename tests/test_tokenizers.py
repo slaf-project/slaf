@@ -56,7 +56,6 @@ class TestSLAFTokenizer:
         )
 
         assert tokenizer.n_expression_bins == 5
-        assert tokenizer.expr_bin_start == 1000
         assert tokenizer.expr_bin_size == 0.2
 
     def test_geneformer_tokenization(self):
@@ -142,7 +141,7 @@ class TestSLAFTokenizer:
         grouped_df = pd.DataFrame(
             {
                 "gene_sequence": [[4, 5, 6]],
-                "expr_sequence": [[1001, 1005, 1009]],
+                "expr_sequence": [[1, 5, 9]],
             }
         )
         grouped_df = __import__("polars").from_pandas(grouped_df)
@@ -151,7 +150,7 @@ class TestSLAFTokenizer:
 
         assert input_ids[0, 1] == 4
         assert values is not None
-        assert values[0, 1] == 1001
+        assert values[0, 1] == 1
 
     def test_geneformer_tokenize_grouped_uses_preencoded_tokens(self):
         mock_adata, _ = build_mock_adata()
@@ -228,18 +227,18 @@ class TestSLAFTokenizer:
         # Test individual expression binning
         assert tokenizer._expression_to_bin(0.0) == 0  # PAD for zero
         assert tokenizer._expression_to_bin(-1.0) == 0  # PAD for negative
-        assert tokenizer._expression_to_bin(0.1) == 1001  # First bin
-        assert tokenizer._expression_to_bin(0.9) == 1009  # Last bin
-        assert tokenizer._expression_to_bin(1.0) == 1009  # Clipped to last bin
+        assert tokenizer._expression_to_bin(0.1) == 2
+        assert tokenizer._expression_to_bin(0.9) == 10
+        assert tokenizer._expression_to_bin(1.0) == 10  # Clipped to last bin
 
         # Test vectorized expression binning
         expr_values = np.array([0.0, 0.1, 0.5, 0.9, -1.0])
         bins = tokenizer._expression_to_bin_vectorized(expr_values)
 
         assert bins[0] == 0  # PAD for 0.0
-        assert bins[1] == 1001  # First bin for 0.1
-        assert bins[2] == 1005  # Fifth bin for 0.5
-        assert bins[3] == 1009  # Last bin for 0.9
+        assert bins[1] == 2
+        assert bins[2] == 6
+        assert bins[3] == 10
         assert bins[4] == 0  # PAD for -1.0
 
     def test_gene_id_mapping(self):
@@ -314,7 +313,7 @@ class TestSLAFTokenizer:
             }
         )
 
-        grouped = tokenizer.apply(
+        grouped = tokenizer.transform_and_apply(
             df,
             schema=SLAF_LANCE_COO_SCHEMA,
             max_items=2,
@@ -356,7 +355,7 @@ class TestSLAFTokenizer:
             ValueError,
             match="requires precomputed cell_factors keyed by cell_integer_id",
         ):
-            tokenizer.apply(
+            tokenizer.transform_and_apply(
                 df,
                 schema=SLAF_LANCE_COO_SCHEMA,
                 max_items=2,
@@ -387,7 +386,7 @@ class TestSLAFTokenizer:
             }
         )
 
-        grouped = tokenizer.apply(
+        grouped = tokenizer.transform_and_apply(
             df,
             schema=SLAF_LANCE_COO_SCHEMA,
             max_items=2,
@@ -422,7 +421,7 @@ class TestSLAFTokenizer:
             }
         )
 
-        grouped = tokenizer.apply(
+        grouped = tokenizer.transform_and_apply(
             df,
             schema=SLAF_LANCE_COO_SCHEMA,
             max_items=2,
@@ -430,7 +429,7 @@ class TestSLAFTokenizer:
         )
 
         expr_tokens = grouped["expr_sequence"].to_list()[0]
-        assert expr_tokens == [1005, 1009]
+        assert expr_tokens == [6, 10]
 
     def test_token_decoding(self):
         """Test token decoding functionality."""
@@ -459,9 +458,7 @@ class TestSLAFTokenizer:
         assert "PAD" in decoded["special_tokens"]
 
         # Test decoding scGPT tokens
-        tokens = (
-            [1] + gene_tokens + [1001, 1005] + [2, 0]
-        )  # CLS, gene1, gene2, expr1, expr2, SEP, PAD
+        tokens = [1] + gene_tokens + [2, 0]  # CLS, gene1, gene2, SEP, PAD
         decoded = tokenizer.decode_tokens(tokens)
 
         # Check structure
