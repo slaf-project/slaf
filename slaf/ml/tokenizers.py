@@ -266,13 +266,30 @@ class SLAFTokenizer(ABC):
 
         for transform_name, transform_data in transformations.items():
             if transform_name == "normalize_total":
-                target_sum = float(transform_data.get("target_sum", 1e4))
-                transformed_df = transformed_df.with_columns(
-                    (
-                        pl.col(value_col)
-                        / pl.col(value_col).sum().over(group_col)
-                        * target_sum
-                    ).alias(value_col)
+                cell_factors = transform_data.get("cell_factors")
+                if not isinstance(cell_factors, dict) or not cell_factors:
+                    raise ValueError(
+                        "normalize_total runtime transformation requires precomputed "
+                        "cell_factors keyed by cell_integer_id"
+                    )
+
+                factor_df = pl.DataFrame(
+                    {
+                        group_col: [int(cell_id) for cell_id in cell_factors.keys()],
+                        "_normalization_factor": [
+                            float(factor) for factor in cell_factors.values()
+                        ],
+                    }
+                )
+                transformed_df = (
+                    transformed_df.join(factor_df, on=group_col, how="left")
+                    .with_columns(
+                        (
+                            pl.col(value_col)
+                            * pl.col("_normalization_factor").fill_null(1.0)
+                        ).alias(value_col)
+                    )
+                    .drop("_normalization_factor")
                 )
             elif transform_name == "log1p":
                 transformed_df = transformed_df.with_columns(

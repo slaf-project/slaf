@@ -292,6 +292,7 @@ class TestSLAFTokenizer:
             "normalize_total": {
                 "type": "normalize_total",
                 "target_sum": 100.0,
+                "cell_factors": {0: 25.0, 1: 25.0},
             },
             "log1p": {
                 "type": "log1p",
@@ -325,6 +326,76 @@ class TestSLAFTokenizer:
             [np.log1p(25.0), np.log1p(75.0)],
             [np.log1p(50.0), np.log1p(50.0)],
         ]
+        for actual_seq, expected_seq in zip(expr_sequences, expected, strict=False):
+            assert np.asarray(actual_seq) == pytest.approx(np.asarray(expected_seq))
+
+    def test_apply_requires_precomputed_cell_factors_for_normalize_total(self):
+        mock_adata, _ = build_mock_adata()
+        mock_adata._transformations = {
+            "normalize_total": {
+                "type": "normalize_total",
+                "target_sum": 100.0,
+            },
+        }
+
+        tokenizer = ScGPTTokenizer(
+            adata=mock_adata,
+            vocab_size=1000,
+            n_expression_bins=10,
+        )
+
+        df = pl.DataFrame(
+            {
+                "cell_integer_id": [0, 0, 1, 1],
+                "gene_integer_id": [0, 1, 0, 1],
+                "value": [1.0, 3.0, 2.0, 2.0],
+            }
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="requires precomputed cell_factors keyed by cell_integer_id",
+        ):
+            tokenizer.apply(
+                df,
+                schema=SLAF_LANCE_COO_SCHEMA,
+                max_items=2,
+                use_binned_expressions=False,
+            )
+
+    def test_apply_uses_precomputed_cell_factors_by_integer_id(self):
+        mock_adata, _ = build_mock_adata()
+        mock_adata._transformations = {
+            "normalize_total": {
+                "type": "normalize_total",
+                "target_sum": 100.0,
+                "cell_factors": {0: 10.0, 1: 5.0},
+            },
+        }
+
+        tokenizer = ScGPTTokenizer(
+            adata=mock_adata,
+            vocab_size=1000,
+            n_expression_bins=10,
+        )
+
+        df = pl.DataFrame(
+            {
+                "cell_integer_id": [0, 0, 1, 1],
+                "gene_integer_id": [0, 1, 0, 1],
+                "value": [1.0, 3.0, 2.0, 2.0],
+            }
+        )
+
+        grouped = tokenizer.apply(
+            df,
+            schema=SLAF_LANCE_COO_SCHEMA,
+            max_items=2,
+            use_binned_expressions=False,
+        )
+
+        expr_sequences = grouped["expr_sequence"].to_list()
+        expected = [[10.0, 30.0], [10.0, 10.0]]
         for actual_seq, expected_seq in zip(expr_sequences, expected, strict=False):
             assert np.asarray(actual_seq) == pytest.approx(np.asarray(expected_seq))
 
