@@ -2,8 +2,14 @@ import polars as pl
 import pytest
 import torch
 
+from slaf.integrations.anndata import LazyAnnData
 from slaf.ml.dataloaders import SLAFDataLoader, get_device_info, get_optimal_device
 from slaf.ml.tokenizers import GeneformerTokenizer, ScGPTTokenizer
+
+
+@pytest.fixture
+def tiny_lazy_adata(tiny_slaf):
+    return LazyAnnData(tiny_slaf)
 
 
 def build_dataloader(adata, tokenizer_kind="geneformer", raw_mode=False, **kwargs):
@@ -69,10 +75,11 @@ class TestSLAFDataLoader:
     def test_dataloader_initialization_with_default_source(self, tiny_lazy_adata):
         """Test SLAFDataLoader defaults to the main expression matrix."""
         dataloader = build_dataloader(tiny_lazy_adata)
+        batch_processor = dataloader._dataset.batch_processor
 
-        assert dataloader._dataset.batch_processor.source_logical_key is None
-        assert dataloader._dataset.batch_processor.use_mixture_of_scanners is True
-        assert dataloader._dataset.batch_processor.by_fragment is True
+        assert batch_processor.expression_dataset is not None
+        assert batch_processor.use_mixture_of_scanners is True
+        assert batch_processor.by_fragment is True
 
     def test_geneformer_iteration(self, tiny_lazy_adata):
         """Test dataloader iteration with Geneformer tokenizer"""
