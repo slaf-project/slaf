@@ -95,8 +95,8 @@ def create_app(
     def distributed_prefetch_worker(
         worker_id: str,
         partition_indices: list[int],
-        data_source_config: dict[str, Any],
-        processor_config: dict[str, Any],
+        data_source_config: DictConfig,
+        processor_config: DictConfig,
         queue_name: str,
         n_scanners: int = 8,
         prefetch_batch_count: int = 32,
