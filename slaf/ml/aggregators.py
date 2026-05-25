@@ -12,10 +12,7 @@ from typing import Any
 import polars as pl
 
 from slaf.core.tabular_schema import DataSchema
-from slaf.ml.expression_preprocessor import (
-    ExpressionPreprocessor,
-    apply_expression_preprocessor,
-)
+from slaf.ml.expression_preprocessor import apply_expression_preprocessor
 
 
 class Window(ABC):

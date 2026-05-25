@@ -418,6 +418,7 @@ class ScGPTTokenizer(SLAFTokenizer):
         vocab_size: int = 50000,
         n_expression_bins: int = 10,
         max_genes: int = 1024,
+        use_binned_expressions: bool = True,
     ):
         """
         Initialize ScGPTTokenizer with SLAF array and vocabulary settings.
@@ -431,6 +432,8 @@ class ScGPTTokenizer(SLAFTokenizer):
                              Range: 1-1000, default: 10.
             max_genes: Maximum gene--expression pairs per cell. Sequence length is
                        ``2 * max_genes + 2`` (CLS, pairs, SEP).
+            use_binned_expressions: Whether `apply` should emit binned expression
+                       values by default. Set to false to emit raw expression values.
 
         Raises:
             ValueError: If vocab_size is invalid.
@@ -460,6 +463,7 @@ class ScGPTTokenizer(SLAFTokenizer):
         """
 
         self.n_expression_bins = n_expression_bins
+        self.use_binned_expressions = use_binned_expressions
         super().__init__(adata=adata, vocab_size=vocab_size, max_genes=max_genes)
 
     def create_window(self) -> Window:
@@ -474,6 +478,7 @@ class ScGPTTokenizer(SLAFTokenizer):
     ) -> pl.DataFrame:
         kwargs.setdefault("special_token_offset", 4)
         kwargs.setdefault("n_expression_bins", self.n_expression_bins)
+        kwargs.setdefault("use_binned_expressions", self.use_binned_expressions)
         return self.window.apply(df, schema=schema, max_items=max_items, **kwargs)
 
     def tokenize_grouped(
