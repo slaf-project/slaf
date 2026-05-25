@@ -272,6 +272,7 @@ class SLAFDataLoader:
         slaf_array: SLAFArray,
         tokenizer: SLAFTokenizer | None = None,
         batch_size: int = 32,
+        seed: int = 42,
         n_epochs: int = 1,  # Add n_epochs parameter
         raw_mode: bool = False,  # Add raw_mode parameter
         verbose: bool = True,  # Add verbose parameter
@@ -408,6 +409,7 @@ class SLAFDataLoader:
         """
         self.slaf_array = slaf_array
         self.batch_size = batch_size
+        self.seed = seed
         self.n_epochs = n_epochs
         self.raw_mode = raw_mode  # Add raw_mode attribute
         self.verbose = verbose  # Add verbose attribute
@@ -468,7 +470,7 @@ class SLAFDataLoader:
             slaf_array=self.slaf_array,
             tokenizer=self.tokenizer,
             batch_size=self.batch_size,
-            seed=42,  # TODO: make configurable
+            seed=self.seed,
             max_queue_size=self.max_queue_size,  # Pass max_queue_size to dataset
             n_epochs=self.n_epochs,  # Pass n_epochs to dataset
             raw_mode=self.raw_mode,  # Pass raw_mode to dataset
