@@ -3,9 +3,11 @@ from enum import Enum
 from typing import Any
 
 import numpy as np
+import polars as pl
 import torch
 
-from slaf.core.slaf import SLAFArray
+from slaf.core.tabular_schema import SLAF_LANCE_COO_SCHEMA, DataSchema
+from slaf.integrations.anndata import LazyAnnData
 from slaf.ml.aggregators import GeneformerWindow, ScGPTWindow, Window
 
 TORCH_AVAILABLE = True
@@ -41,7 +43,7 @@ class SLAFTokenizer(ABC):
 
     def __init__(
         self,
-        slaf_array: SLAFArray,
+        adata: LazyAnnData,
         vocab_size: int = 50000,
         max_genes: int = 2048,
     ):
@@ -49,9 +51,9 @@ class SLAFTokenizer(ABC):
         Initialize SLAFTokenizer with SLAF array and vocabulary settings.
 
         Args:
-            slaf_array: Initialized SLAFArray instance containing the single-cell data.
-                       Used to build the gene vocabulary and access expression data.
-                       Must be a valid SLAFArray with proper var DataFrame.
+            adata: LazyAnnData instance containing the single-cell data.
+                   Used to build the gene vocabulary, access expression metadata,
+                   and inspect lazy runtime transformations.
             vocab_size: Maximum size of gene vocabulary. Genes beyond this limit
                        are excluded from tokenization. Higher values use more memory.
             max_genes: Max genes per cell for windowing and tokenization (sequence layout
@@ -61,9 +63,10 @@ class SLAFTokenizer(ABC):
         Raises:
             ValueError: If vocab_size or max_genes is invalid.
             RuntimeError: If SLAF array is not properly initialized.
-            TypeError: If slaf_array is not a valid SLAFArray instance.
+            TypeError: If adata is not a valid LazyAnnData instance.
         """
-        self.slaf_array = slaf_array
+        self.adata = adata
+        self.slaf_array = adata.slaf
         self.vocab_size = vocab_size
         if max_genes < 1:
             raise ValueError(f"max_genes must be >= 1, got {max_genes}")
@@ -74,6 +77,11 @@ class SLAFTokenizer(ABC):
         # Build vocabulary and special tokens
         self._build_gene_vocabulary()
         self._setup_special_tokens()
+
+    @property
+    def name(self) -> str:
+        """Stable tokenizer identifier for logging and worker reconstruction."""
+        return self.__class__.__name__
 
     def _build_gene_vocabulary(self):
         """Build gene vocabulary from SLAF var DataFrame or genes Lance table."""
@@ -237,6 +245,95 @@ class SLAFTokenizer(ABC):
         Create a window function based on the tokenizer type.
         """
 
+    def _get_runtime_transformations(self) -> dict[str, Any]:
+        transformations = getattr(self.adata, "_transformations", None)
+        if not isinstance(transformations, dict):
+            return {}
+        return transformations
+
+    def _apply_runtime_transformations(
+        self,
+        df: pl.DataFrame,
+        schema: DataSchema,
+    ) -> pl.DataFrame:
+        transformations = self._get_runtime_transformations()
+        if not transformations:
+            return df
+
+        transformed_df = df
+        value_col = schema.value_key
+        group_col = schema.group_key
+
+        for transform_name, transform_data in transformations.items():
+            if transform_name == "normalize_total":
+                cell_factors = transform_data.get("cell_factors")
+                if not isinstance(cell_factors, dict) or not cell_factors:
+                    raise ValueError(
+                        "normalize_total runtime transformation requires precomputed "
+                        "cell_factors keyed by cell_integer_id"
+                    )
+
+                factor_df = pl.DataFrame(
+                    {
+                        group_col: [int(cell_id) for cell_id in cell_factors.keys()],
+                        "_normalization_factor": [
+                            float(factor) for factor in cell_factors.values()
+                        ],
+                    }
+                )
+                transformed_df = (
+                    transformed_df.join(factor_df, on=group_col, how="left")
+                    .with_columns(
+                        (
+                            pl.col(value_col)
+                            * pl.col("_normalization_factor").fill_null(1.0)
+                        ).alias(value_col)
+                    )
+                    .drop("_normalization_factor")
+                )
+            elif transform_name == "log1p":
+                transformed_df = transformed_df.with_columns(
+                    pl.col(value_col).log1p().alias(value_col)
+                )
+
+        return transformed_df
+
+    def transform_and_apply(
+        self,
+        df: pl.DataFrame,
+        schema: DataSchema,
+        max_items: int,
+        **kwargs: Any,
+    ) -> pl.DataFrame:
+        """Apply runtime transformations, then group rows into tokenizer-ready sequences."""
+        transformed_df = self._apply_runtime_transformations(df, schema)
+        return self.apply(transformed_df, schema=schema, max_items=max_items, **kwargs)
+
+    def apply(
+        self,
+        df: pl.DataFrame,
+        schema: DataSchema,
+        max_items: int,
+        **kwargs: Any,
+    ) -> pl.DataFrame:
+        """Group already-transformed per-cell COO rows into tokenizer-ready sequences."""
+        return self.window.apply(df, schema=schema, max_items=max_items, **kwargs)
+
+    def tokenize_grouped(
+        self,
+        grouped_df: pl.DataFrame,
+        schema: DataSchema = SLAF_LANCE_COO_SCHEMA,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        """Tokenize grouped cell sequences emitted by ``apply``."""
+        return self.tokenize(
+            gene_sequences=grouped_df[schema.item_list_key].to_list(),
+            expr_sequences=(
+                grouped_df[schema.value_list_key].to_list()
+                if schema.value_list_key and schema.value_list_key in grouped_df.columns
+                else None
+            ),
+        )
+
     def get_vocab_info(self) -> dict[str, Any]:
         """
         Get vocabulary information for debugging and analysis.
@@ -317,18 +414,17 @@ class ScGPTTokenizer(SLAFTokenizer):
 
     def __init__(
         self,
-        slaf_array: SLAFArray,
+        adata: LazyAnnData,
         vocab_size: int = 50000,
         n_expression_bins: int = 10,
         max_genes: int = 1024,
+        use_binned_expressions: bool = True,
     ):
         """
         Initialize ScGPTTokenizer with SLAF array and vocabulary settings.
 
         Args:
-            slaf_array: Initialized SLAFArray instance containing the single-cell data.
-                       Used to build the gene vocabulary and access expression data.
-                       Must be a valid SLAFArray with proper var DataFrame.
+            adata: LazyAnnData instance containing the single-cell data.
             vocab_size: Maximum size of gene vocabulary. Genes beyond this limit
                        are excluded from tokenization. Higher values use more memory.
             n_expression_bins: Number of expression bins for scGPT tokenization.
@@ -336,20 +432,22 @@ class ScGPTTokenizer(SLAFTokenizer):
                              Range: 1-1000, default: 10.
             max_genes: Maximum gene--expression pairs per cell. Sequence length is
                        ``2 * max_genes + 2`` (CLS, pairs, SEP).
+            use_binned_expressions: Whether `apply` should emit binned expression
+                       values by default. Set to false to emit raw expression values.
 
         Raises:
             ValueError: If vocab_size is invalid.
             RuntimeError: If SLAF array is not properly initialized.
-            TypeError: If slaf_array is not a valid SLAFArray instance.
+            TypeError: If adata is not a valid LazyAnnData instance.
 
         Examples:
             >>> # Basic initialization
             >>> slaf_array = SLAFArray("path/to/data.slaf")
-            >>> tokenizer = ScGPTTokenizer(slaf_array)
+            >>> tokenizer = ScGPTTokenizer(LazyAnnData(slaf_array))
 
             >>> # scGPT with custom settings
             >>> tokenizer = ScGPTTokenizer(
-            ...     slaf_array=slaf_array,
+            ...     adata=LazyAnnData(slaf_array),
             ...     vocab_size=30000,
             ...     n_expression_bins=20
             ... )
@@ -361,16 +459,94 @@ class ScGPTTokenizer(SLAFTokenizer):
             ...     tokenizer = ScGPTTokenizer(None)
             ... except TypeError as e:
             ...     print(f"Error: {e}")
-            Error: slaf_array must be a valid SLAFArray instance
+            Error: adata must be a valid LazyAnnData instance
         """
 
         self.n_expression_bins = n_expression_bins
-        super().__init__(
-            slaf_array=slaf_array, vocab_size=vocab_size, max_genes=max_genes
-        )
+        self.use_binned_expressions = use_binned_expressions
+        super().__init__(adata=adata, vocab_size=vocab_size, max_genes=max_genes)
 
     def create_window(self) -> Window:
         return ScGPTWindow()
+
+    def apply(
+        self,
+        df: pl.DataFrame,
+        schema: DataSchema,
+        max_items: int,
+        **kwargs: Any,
+    ) -> pl.DataFrame:
+        kwargs.setdefault("special_token_offset", 4)
+        kwargs.setdefault("n_expression_bins", self.n_expression_bins)
+        kwargs.setdefault("use_binned_expressions", self.use_binned_expressions)
+        return self.window.apply(df, schema=schema, max_items=max_items, **kwargs)
+
+    def tokenize_grouped(
+        self,
+        grouped_df: pl.DataFrame,
+        schema: DataSchema = SLAF_LANCE_COO_SCHEMA,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        gene_sequences = grouped_df[schema.item_list_key].to_list()
+        expr_sequences = (
+            grouped_df[schema.value_list_key].to_list()
+            if schema.value_list_key and schema.value_list_key in grouped_df.columns
+            else None
+        )
+        if expr_sequences is None:
+            raise ValueError(
+                "scGPT grouped tokenization requires expression token sequences"
+            )
+
+        max_sequence_length = self.max_genes + 2
+        batch_size = len(gene_sequences)
+        gene_token_array = np.full(
+            (batch_size, max_sequence_length),
+            self.special_tokens["PAD"],
+            dtype=np.int64,
+        )
+        value_array = np.full(
+            (batch_size, max_sequence_length),
+            self.special_tokens["PAD"],
+            dtype=np.int64,
+        )
+
+        for i, (genes, exprs) in enumerate(
+            zip(gene_sequences, expr_sequences, strict=False)
+        ):
+            n_pairs = min(len(genes), len(exprs), self.max_genes)
+
+            if n_pairs > 0:
+                gene_ids = np.full(
+                    n_pairs + 2, self.special_tokens["PAD"], dtype=np.int64
+                )
+                value_tokens = np.full(
+                    n_pairs + 2, self.special_tokens["PAD"], dtype=np.int64
+                )
+                gene_ids[0] = self.special_tokens["CLS"]
+                gene_ids[1 : 1 + n_pairs] = np.asarray(genes[:n_pairs], dtype=np.int64)
+                gene_ids[1 + n_pairs] = self.special_tokens["SEP"]
+                value_tokens[1 : 1 + n_pairs] = np.asarray(
+                    exprs[:n_pairs], dtype=np.int64
+                )
+            else:
+                gene_ids = np.array(
+                    [self.special_tokens["CLS"], self.special_tokens["SEP"]],
+                    dtype=np.int64,
+                )
+                value_tokens = np.array(
+                    [self.special_tokens["PAD"], self.special_tokens["PAD"]],
+                    dtype=np.int64,
+                )
+
+            length = min(len(gene_ids), max_sequence_length)
+            gene_token_array[i, :length] = gene_ids[:length]
+            value_array[i, :length] = value_tokens[:length]
+
+        input_ids = torch.from_numpy(gene_token_array)
+        values_tensor = torch.from_numpy(value_array)
+        attention_mask = input_ids != self.special_tokens["PAD"]
+
+        return input_ids, attention_mask, values_tensor
 
     def tokenize(
         self,
@@ -439,9 +615,7 @@ class ScGPTTokenizer(SLAFTokenizer):
                 gene_tokens = np.array(genes[:n_pairs], dtype=np.int64) + 4
 
                 if isinstance(exprs[0], int | np.integer):
-                    expr_tokens = (
-                        np.array(exprs[:n_pairs], dtype=np.int64) + self.expr_bin_start
-                    )
+                    expr_tokens = np.array(exprs[:n_pairs], dtype=np.int64)
                 else:
                     expr_tokens = self._expression_to_bin_vectorized(
                         np.array(exprs[:n_pairs], dtype=np.float32)
@@ -504,7 +678,6 @@ class ScGPTTokenizer(SLAFTokenizer):
         super()._setup_special_tokens()
 
         # Expression binning setup for scGPT
-        self.expr_bin_start = self.vocab_size
         self.expr_bin_size = 1.0 / self.n_expression_bins
 
     def _expression_to_bin(self, expression_value: float) -> int:
@@ -516,7 +689,7 @@ class ScGPTTokenizer(SLAFTokenizer):
         bin_id = min(
             int(expression_value / self.expr_bin_size), self.n_expression_bins - 1
         )
-        return self.expr_bin_start + bin_id
+        return 1 + bin_id
 
     def _expression_to_bin_vectorized(
         self, expression_values: np.ndarray
@@ -536,7 +709,7 @@ class ScGPTTokenizer(SLAFTokenizer):
         # Convert to token IDs
         result = np.where(
             expression_values > 0,
-            self.expr_bin_start + bins,
+            1 + bins,
             self.special_tokens["PAD"],
         )
 
@@ -580,8 +753,8 @@ class ScGPTTokenizer(SLAFTokenizer):
                 special_tokens.append("PAD")
             elif token == self.special_tokens["MASK"]:
                 special_tokens.append("MASK")
-            elif token >= self.expr_bin_start:  # Expression token
-                bin_id = token - self.expr_bin_start
+            elif 1 <= token <= self.n_expression_bins:  # Expression bin
+                bin_id = token - 1
                 expr_value = bin_id * self.expr_bin_size
                 expressions.append(expr_value)
             else:
@@ -621,16 +794,65 @@ class GeneformerTokenizer(SLAFTokenizer):
 
     def __init__(
         self,
-        slaf_array: SLAFArray,
+        adata: LazyAnnData,
         vocab_size: int = 50000,
         max_genes: int = 2048,
     ):
-        super().__init__(
-            slaf_array=slaf_array, vocab_size=vocab_size, max_genes=max_genes
-        )
+        super().__init__(adata=adata, vocab_size=vocab_size, max_genes=max_genes)
 
     def create_window(self) -> Window:
         return GeneformerWindow()
+
+    def apply(
+        self,
+        df: pl.DataFrame,
+        schema: DataSchema,
+        max_items: int,
+        **kwargs: Any,
+    ) -> pl.DataFrame:
+        kwargs.setdefault("special_token_offset", 4)
+        return self.window.apply(df, schema=schema, max_items=max_items, **kwargs)
+
+    def tokenize_grouped(
+        self,
+        grouped_df: pl.DataFrame,
+        schema: DataSchema = SLAF_LANCE_COO_SCHEMA,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        gene_sequences = grouped_df[schema.item_list_key].to_list()
+        batch_size = len(gene_sequences)
+        token_array = np.full(
+            (batch_size, self.max_genes), self.special_tokens["PAD"], dtype=np.int64
+        )
+
+        for i, genes in enumerate(gene_sequences):
+            gene_tokens = np.asarray(genes, dtype=np.int64)
+            if len(gene_tokens) > 0:
+                tokens = np.concatenate(
+                    [
+                        [self.special_tokens["CLS"]],
+                        gene_tokens,
+                        [self.special_tokens["SEP"]],
+                    ]
+                )
+            else:
+                tokens = np.array(
+                    [self.special_tokens["CLS"], self.special_tokens["SEP"]],
+                    dtype=np.int64,
+                )
+
+            tokens = tokens[: self.max_genes]
+            if len(tokens) < self.max_genes:
+                padding = np.full(
+                    self.max_genes - len(tokens),
+                    self.special_tokens["PAD"],
+                    dtype=np.int64,
+                )
+                tokens = np.concatenate([tokens, padding])
+            token_array[i, :] = tokens
+
+        input_ids = torch.from_numpy(token_array)
+        attention_mask = input_ids != self.special_tokens["PAD"]
+        return input_ids, attention_mask, None
 
     def tokenize(
         self,
