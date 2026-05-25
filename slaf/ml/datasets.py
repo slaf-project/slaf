@@ -56,7 +56,7 @@ except ImportError:
 from slaf.core.slaf import SLAFArray
 from slaf.core.tabular_schema import SLAF_LANCE_COO_SCHEMA
 from slaf.ml.samplers import Shuffle
-from slaf.ml.tokenizers import SLAFTokenizer
+from slaf.ml.tokenizers import ScGPTTokenizer, SLAFTokenizer
 
 # Define union type for both batch types
 PrefetchBatch = Union["TokenizedPrefetchBatch", "RawPrefetchBatch"]
@@ -1026,10 +1026,7 @@ class PrefetchBatchProcessor:
 
                     shuffle_time = time.time() - shuffle_start
                     window_start = time.time()
-                    window_params = {
-                        "n_expression_bins": self.n_expression_bins,
-                        "use_binned_expressions": self.use_binned_expressions,
-                    }
+                    window_params = {}
                     window_params.update(
                         self.window_kwargs
                     )  # Add any additional kwargs
@@ -1574,8 +1571,8 @@ class SLAFIterableDataset(IterableDataset):
             tokenizer, "n_expression_bins", 10
         )  # Default value for raw mode
 
-        # Set binning based on tokenizer type
-        use_binned_expressions = use_binned_expressions  # Use parameter value
+        if isinstance(tokenizer, ScGPTTokenizer):
+            tokenizer.use_binned_expressions = use_binned_expressions
 
         self.batch_processor = PrefetchBatchProcessor(
             slaf_array=slaf_array,
