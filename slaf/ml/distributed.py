@@ -296,7 +296,6 @@ class DistributedSLAFDataLoader:
         self.seed = seed
 
         window_kwargs = dict(window_kwargs)
-        window_kwargs.setdefault("use_binned_expressions", True)
         if expression_preprocessor is not None:
             window_kwargs["expression_preprocessor"] = expression_preprocessor
         if tokenizer_config is not None and not isinstance(
@@ -315,10 +314,6 @@ class DistributedSLAFDataLoader:
             self.tokenizer_type = self.tokenizer.name
             self.max_genes = self.tokenizer.max_genes
             self.special_tokens = self.tokenizer.special_tokens
-            window_kwargs.setdefault(
-                "n_expression_bins",
-                getattr(self.tokenizer, "n_expression_bins", 10),
-            )
         else:
             if tokenizer is not None:
                 raise ValueError("raw_mode=True is incompatible with tokenizer.")
