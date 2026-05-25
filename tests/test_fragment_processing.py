@@ -14,7 +14,7 @@ import pytest
 from slaf.core.fragment_processor import FragmentProcessor
 from slaf.core.sparse_ops import LazySparseMixin
 from slaf.integrations.anndata import LazyAnnData, LazyExpressionMatrix
-from slaf.integrations.scanpy import pp
+from slaf.integrations.scanpy import LazyPreprocessing, pp
 
 
 class TestFragmentProcessorAPI:
@@ -617,36 +617,24 @@ class TestScanpyFragmentIntegration:
         return LazyAnnData(mock_slaf_array_with_fragments)
 
     def test_normalize_total_fragment_processing(self, lazy_adata_with_fragments):
-        """Test normalize_total with fragment processing."""
-        with patch(
-            "slaf.core.fragment_processor.FragmentProcessor"
-        ) as mock_processor_class:
-            mock_processor = Mock()
-            mock_processor_class.return_value = mock_processor
+        """Test normalize_total accepts fragments=True with streaming counts."""
+        total_counts = np.ones(100, dtype=np.float64)
+        total_counts[:3] = [1000.0, 2000.0, 3000.0]
 
-            mock_lazy_pipeline = Mock()
-            mock_processor.build_lazy_pipeline_smart.return_value = mock_lazy_pipeline
-
-            mock_result_df = pl.DataFrame(
-                {
-                    "cell_integer_id": [0, 1, 2],
-                    "gene_integer_id": [0, 1, 2],
-                    "value": [1000.0, 2000.0, 3000.0],
-                }
-            )
-            mock_processor.compute.return_value = mock_result_df
-
-            # Test normalize_total with fragments=True
+        with patch.object(
+            LazyPreprocessing,
+            "_compute_cell_totals_streaming",
+            return_value=total_counts,
+        ) as mock_streaming:
             pp.normalize_total(
                 lazy_adata_with_fragments, target_sum=1e4, fragments=True
             )
 
-            # Check that FragmentProcessor was used
-            mock_processor_class.assert_called_once()
-            mock_processor.build_lazy_pipeline_smart.assert_called_once_with(
-                "normalize_total", target_sum=1e4
-            )
-            mock_processor.compute.assert_called_once_with(mock_lazy_pipeline)
+        mock_streaming.assert_called_once()
+        transform = lazy_adata_with_fragments._transformations["normalize_total"]
+        assert transform["cell_factors"][0] == 10.0
+        assert transform["cell_factors"][1] == 5.0
+        assert transform["cell_factors"][2] == 1e4 / 3000.0
 
     def test_log1p_fragment_processing(self, lazy_adata_with_fragments):
         """Test log1p with fragment processing."""
@@ -679,74 +667,41 @@ class TestScanpyFragmentIntegration:
     def test_normalize_total_automatic_fragment_detection(
         self, lazy_adata_with_fragments
     ):
-        """Test normalize_total with automatic fragment detection."""
-        with patch(
-            "slaf.core.fragment_processor.FragmentProcessor"
-        ) as mock_processor_class:
-            mock_processor = Mock()
-            mock_processor_class.return_value = mock_processor
+        """Test normalize_total fragments=None uses streaming counts."""
+        total_counts = np.ones(100, dtype=np.float64)
+        total_counts[:3] = [1000.0, 2000.0, 3000.0]
 
-            mock_lazy_pipeline = Mock()
-            mock_processor.build_lazy_pipeline_smart.return_value = mock_lazy_pipeline
-
-            mock_result_df = pl.DataFrame(
-                {
-                    "cell_integer_id": [0, 1, 2],
-                    "gene_integer_id": [0, 1, 2],
-                    "value": [1000.0, 2000.0, 3000.0],
-                }
-            )
-            mock_processor.compute.return_value = mock_result_df
-
-            # Test normalize_total with fragments=None (automatic detection)
+        with patch.object(
+            LazyPreprocessing,
+            "_compute_cell_totals_streaming",
+            return_value=total_counts,
+        ) as mock_streaming:
             pp.normalize_total(
                 lazy_adata_with_fragments, target_sum=1e4, fragments=None
             )
 
-            # Check that FragmentProcessor was used (since we have multiple fragments)
-            mock_processor_class.assert_called_once()
-            mock_processor.build_lazy_pipeline_smart.assert_called_once_with(
-                "normalize_total", target_sum=1e4
-            )
+        mock_streaming.assert_called_once()
+        assert "normalize_total" in lazy_adata_with_fragments._transformations
 
     def test_fragment_processing_fallback(self, lazy_adata_with_fragments):
-        """Test fallback to global processing when fragment processing fails."""
+        """Test normalize_total no longer depends on FragmentProcessor fallback."""
+        total_counts = np.ones(100, dtype=np.float64)
+
         with patch(
-            "slaf.core.fragment_processor.FragmentProcessor"
+            "slaf.core.fragment_processor.FragmentProcessor",
+            side_effect=Exception("Fragment processing failed"),
         ) as mock_processor_class:
-            # Make FragmentProcessor raise an exception
-            mock_processor_class.side_effect = Exception("Fragment processing failed")
-
-            # Mock the query method to avoid the mock issues
-            with patch.object(lazy_adata_with_fragments.slaf, "query") as mock_query:
-                mock_query.return_value = pl.DataFrame(
-                    {
-                        "cell_integer_id": [0, 1, 2],
-                        "total_counts": [1000.0, 2000.0, 3000.0],
-                    }
+            with patch.object(
+                LazyPreprocessing,
+                "_compute_cell_totals_streaming",
+                return_value=total_counts,
+            ):
+                pp.normalize_total(
+                    lazy_adata_with_fragments, target_sum=1e4, fragments=True
                 )
 
-                # Mock the obs property to return a real DataFrame
-                mock_obs = pl.DataFrame(
-                    {
-                        "cell_integer_id": [0, 1, 2],
-                        "cell_id": ["cell_0", "cell_1", "cell_2"],
-                    }
-                )
-                with patch.object(lazy_adata_with_fragments.slaf, "obs", mock_obs):
-                    # Mock the _update_with_normalized_data method
-                    with patch.object(
-                        lazy_adata_with_fragments, "_update_with_normalized_data"
-                    ) as mock_update:
-                        mock_update.return_value = None
-
-                        # Test normalize_total with fragments=True
-                        pp.normalize_total(
-                            lazy_adata_with_fragments, target_sum=1e4, fragments=True
-                        )
-
-                        # Check that fallback was used
-                        # The method should handle the exception and continue with global processing
+        mock_processor_class.assert_not_called()
+        assert "normalize_total" in lazy_adata_with_fragments._transformations
 
 
 class TestAnnDataFragmentIntegration:
@@ -975,61 +930,21 @@ class TestFragmentProcessingEquivalence:
         lazy_adata_fragments = LazyAnnData(mock_slaf_array_with_fragments)
         lazy_adata_global = LazyAnnData(mock_slaf_array_with_fragments)
 
-        # Mock FragmentProcessor for fragment processing
-        with patch(
-            "slaf.core.fragment_processor.FragmentProcessor"
-        ) as mock_processor_class:
-            mock_processor = Mock()
-            mock_processor_class.return_value = mock_processor
+        cell_totals = (
+            sample_expression_data.group_by("cell_integer_id")
+            .agg(pl.col("value").sum().alias("total_counts"))
+            .sort("cell_integer_id")["total_counts"]
+            .to_numpy()
+        )
 
-            # Calculate expected normalized values manually
-            cell_sums = sample_expression_data.group_by("cell_integer_id").agg(
-                pl.col("value").sum().alias("cell_sum")
-            )
-            normalized_data = (
-                sample_expression_data.join(cell_sums, on="cell_integer_id", how="left")
-                .with_columns(
-                    [
-                        (pl.col("value") / pl.col("cell_sum") * target_sum).alias(
-                            "normalized_value"
-                        )
-                    ]
-                )
-                .select(
-                    [
-                        "cell_integer_id",
-                        "gene_integer_id",
-                        pl.col("normalized_value").alias("value"),
-                    ]
-                )
-            )
-
-            mock_processor.build_lazy_pipeline.return_value = Mock()
-            mock_processor.compute.return_value = normalized_data
-
-            # Apply fragment processing
+        with patch.object(
+            LazyPreprocessing,
+            "_compute_cell_totals_streaming",
+            return_value=cell_totals,
+        ):
             pp.normalize_total(
                 lazy_adata_fragments, target_sum=target_sum, fragments=True
             )
-
-        # Mock the query method for global processing to return cell totals
-        with patch.object(mock_slaf_array_with_fragments, "query") as mock_query:
-            # Mock the cell totals query that global processing uses
-            cell_totals = pl.DataFrame(
-                {
-                    "cell_integer_id": [0, 1, 2, 3, 4],
-                    "total_counts": [
-                        30.0,
-                        40.0,
-                        35.0,
-                        20.0,
-                        40.0,
-                    ],  # Sum of values per cell
-                }
-            )
-            mock_query.return_value = cell_totals
-
-            # Apply global processing
             pp.normalize_total(
                 lazy_adata_global, target_sum=target_sum, fragments=False
             )

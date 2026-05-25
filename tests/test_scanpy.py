@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import numpy as np
 import pytest
 import scanpy as sc
@@ -5,7 +7,7 @@ import scanpy as sc
 from slaf.core.slaf import SLAFArray
 from slaf.data.converter import SLAFConverter
 from slaf.integrations.anndata import LazyAnnData, LazyExpressionMatrix
-from slaf.integrations.scanpy import pp
+from slaf.integrations.scanpy import LazyPreprocessing, pp
 
 
 class TestLazyPreprocessingCorrectness:
@@ -507,6 +509,62 @@ class TestLazyPreprocessingCorrectness:
             rtol=1e-6,
             err_msg="Cell totals mismatch between lazy and scanpy after normalization",
         )
+
+    def test_normalize_total_uses_streaming_counts(self, tiny_slaf):
+        """Test normalize_total avoids the whole-table SQL aggregation path."""
+        lazy_adata = LazyAnnData(tiny_slaf)
+
+        with patch.object(
+            tiny_slaf,
+            "query",
+            side_effect=AssertionError("normalize_total should not call query"),
+        ):
+            with patch.object(
+                LazyPreprocessing,
+                "_compute_cell_totals_streaming",
+                wraps=LazyPreprocessing._compute_cell_totals_streaming,
+            ) as mock_streaming:
+                pp.normalize_total(lazy_adata, target_sum=1e4, batch_size=2)
+
+        mock_streaming.assert_called_once()
+        assert "normalize_total" in lazy_adata._transformations
+
+    def test_normalize_total_persists_key_added(self, tiny_slaf, tiny_adata):
+        """Test normalize_total can persist total counts into obs/cells.lance."""
+        lazy_adata = LazyAnnData(tiny_slaf)
+        key_added = "stream_total_counts"
+
+        pp.normalize_total(lazy_adata, target_sum=1e4, key_added=key_added)
+
+        assert key_added in lazy_adata.obs.keys()
+        expected_totals = tiny_adata.X.sum(axis=1).A1
+        np.testing.assert_allclose(
+            lazy_adata.obs[key_added].to_numpy(),
+            expected_totals,
+            rtol=1e-6,
+        )
+
+    def test_normalize_total_reuses_key_added(self, slaf_with_obs_columns):
+        """Test normalize_total reuses existing total counts from obs."""
+        lazy_adata = LazyAnnData(slaf_with_obs_columns)
+
+        with patch.object(
+            LazyPreprocessing,
+            "_compute_cell_totals_streaming",
+            side_effect=AssertionError("existing total_counts should be reused"),
+        ):
+            pp.normalize_total(
+                lazy_adata,
+                target_sum=1000.0,
+                key_added="total_counts",
+            )
+
+        transform = lazy_adata._transformations["normalize_total"]
+        assert transform["cell_factors"] == {
+            0: 1000.0 / 3.0,
+            1: 1000.0 / 7.0,
+            2: 1000.0 / 11.0,
+        }
 
     def test_combined_transformations(self, tiny_slaf, tiny_adata):
         """Test combined transformations (log1p + normalize_total) with numerical comparison"""

@@ -1,7 +1,10 @@
+import math
+
 import numpy as np
 import pandas as pd
 import polars as pl
 from loguru import logger
+from tqdm.auto import tqdm
 
 from slaf.integrations.anndata import LazyAnnData
 
@@ -9,6 +12,71 @@ from slaf.integrations.anndata import LazyAnnData
 # Preprocessing module compatibility
 class LazyPreprocessing:
     """Scanpy preprocessing functions with lazy evaluation"""
+
+    @staticmethod
+    def _obs_column_exists(adata: LazyAnnData, key: str) -> bool:
+        return key in adata.obs.keys()
+
+    @staticmethod
+    def _get_cell_totals_from_obs(adata: LazyAnnData, key: str) -> np.ndarray:
+        return np.asarray(adata.obs[key].to_numpy(), dtype=np.float64)
+
+    @staticmethod
+    def _compute_cell_totals_streaming(
+        adata: LazyAnnData,
+        batch_size: int,
+        show_progress: bool = True,
+    ) -> np.ndarray:
+        totals = np.zeros(adata.slaf.shape[0], dtype=np.float64)
+        expression_count = adata.slaf.config.get("metadata", {}).get("expression_count")
+        if expression_count is None:
+            expression_count = adata.slaf.expression.count_rows()
+        n_batches = (
+            math.ceil(int(expression_count) / batch_size)
+            if expression_count is not None
+            else None
+        )
+
+        batches = adata.slaf.expression.to_batches(batch_size=batch_size)
+        if show_progress:
+            batches = tqdm(
+                batches,
+                total=n_batches,
+                desc="Computing cell total_counts",
+                unit="batch",
+            )
+
+        for batch in batches:
+            cell_ids = batch.column("cell_integer_id").to_numpy(zero_copy_only=False)
+            values = batch.column("value").to_numpy(zero_copy_only=False)
+            np.add.at(totals, cell_ids.astype(np.int64, copy=False), values)
+
+        return totals
+
+    @staticmethod
+    def _set_normalize_total_transform(
+        adata: LazyAnnData,
+        target_sum: float,
+        total_counts: np.ndarray,
+    ) -> None:
+        if not hasattr(adata, "_transformations"):
+            adata._transformations = {}
+
+        cell_factors = np.divide(
+            target_sum,
+            total_counts,
+            out=np.ones_like(total_counts, dtype=np.float64),
+            where=total_counts > 0,
+        )
+        normalization_dict = {
+            int(cell_id): float(factor) for cell_id, factor in enumerate(cell_factors)
+        }
+
+        adata._transformations["normalize_total"] = {
+            "type": "normalize_total",
+            "target_sum": float(f"{target_sum:.10f}"),
+            "cell_factors": normalization_dict,
+        }
 
     @staticmethod
     def calculate_qc_metrics(
@@ -616,6 +684,8 @@ class LazyPreprocessing:
         target_sum: float | None = 1e4,
         inplace: bool = True,
         fragments: bool | None = None,
+        key_added: str | None = None,
+        batch_size: int = 1_000_000,
     ) -> LazyAnnData | None:
         """
         Normalize counts per cell to target sum using lazy evaluation.
@@ -631,6 +701,11 @@ class LazyPreprocessing:
                     a copy with the transformation applied.
             fragments: Whether to use fragment-based processing. If None, automatically
                       selects based on dataset characteristics.
+            key_added: Column in adata.obs/cells.lance containing raw per-cell total
+                      counts. If present, it is reused; if missing, newly computed
+                      totals are persisted to this column.
+            batch_size: Number of expression rows per Lance batch when computing
+                       total counts.
 
         Returns:
             LazyAnnData | None: If inplace=False, returns LazyAnnData with transformation.
@@ -668,110 +743,58 @@ class LazyPreprocessing:
         if target_sum <= 0:
             raise ValueError("target_sum must be positive")
 
-        # Determine processing strategy
-        if fragments is not None:
-            use_fragments = fragments
-        else:
-            # Check if dataset has multiple fragments
-            try:
-                fragments_list = adata.slaf.expression.get_fragments()
-                use_fragments = len(fragments_list) > 1
-            except Exception:
-                use_fragments = False
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
 
-        if use_fragments:
-            # Use fragment-based processing
-            try:
-                from slaf.core.fragment_processor import FragmentProcessor
+        target_adata = adata if inplace else adata.copy()
+        loaded_from_obs = False
 
-                # Get selectors from the LazyAnnData if it's sliced
-                cell_selector = getattr(adata, "_cell_selector", None)
-                gene_selector = getattr(adata, "_gene_selector", None)
-
-                processor = FragmentProcessor(
-                    adata.slaf,
-                    cell_selector=cell_selector,
-                    gene_selector=gene_selector,
-                    max_workers=4,
-                    enable_caching=True,
-                )
-                # Use smart strategy selection for optimal performance
-                lazy_pipeline = processor.build_lazy_pipeline_smart(
-                    "normalize_total", target_sum=target_sum
-                )
-                result_df = processor.compute(lazy_pipeline)
-
-                # Update adata with normalized values
-                return adata._update_with_normalized_data(
-                    result_df, target_sum, inplace
-                )
-
-            except Exception as e:
-                logger.warning(
-                    f"Fragment processing failed, falling back to global processing: {e}"
-                )
-                # Fall back to global processing
-                use_fragments = False
-
-        if not use_fragments:
-            # Use global processing (original implementation)
-            # Get cell totals for normalization using only the expression table
-            cell_totals_sql = """
-            SELECT
-                e.cell_integer_id,
-                SUM(e.value) as total_counts
-            FROM expression e
-            GROUP BY e.cell_integer_id
-            ORDER BY e.cell_integer_id
-            """
-
-            cell_totals = adata.slaf.query(cell_totals_sql)
-
-        # Work with polars DataFrame internally
-        cell_totals_pl = cell_totals
-
-        # Store factors keyed by SLAF's internal cell_integer_id.
-        cell_totals_pl = cell_totals_pl.with_columns(
-            (target_sum / pl.col("total_counts")).alias("normalization_factor")
-        )
-        normalization_dict = dict(
-            zip(
-                cell_totals_pl["cell_integer_id"].to_list(),
-                cell_totals_pl["normalization_factor"].to_list(),
-                strict=False,
+        if key_added is not None and LazyPreprocessing._obs_column_exists(
+            target_adata,
+            key_added,
+        ):
+            total_counts = LazyPreprocessing._get_cell_totals_from_obs(
+                target_adata,
+                key_added,
             )
+            loaded_from_obs = True
+            logger.info(f"Loaded normalize_total total_counts from obs['{key_added}']")
+        else:
+            if fragments:
+                logger.info(
+                    "normalize_total uses streaming total-count computation; "
+                    "the fragments parameter is accepted for compatibility"
+                )
+            total_counts = LazyPreprocessing._compute_cell_totals_streaming(
+                target_adata,
+                batch_size,
+            )
+            if key_added is not None:
+                target_adata.obs[key_added] = total_counts
+                logger.info(
+                    f"Stored normalize_total total_counts in obs['{key_added}']"
+                )
+
+        if total_counts.shape[0] != target_adata.slaf.shape[0]:
+            raise ValueError(
+                "normalize_total total_counts length does not match number of cells: "
+                f"{total_counts.shape[0]} != {target_adata.slaf.shape[0]}"
+            )
+
+        LazyPreprocessing._set_normalize_total_transform(
+            target_adata,
+            target_sum,
+            total_counts,
         )
 
         if inplace:
-            # Store normalization factors for lazy application
-            if not hasattr(adata, "_transformations"):
-                adata._transformations = {}
-
-            adata._transformations["normalize_total"] = {
-                "type": "normalize_total",
-                "target_sum": float(
-                    f"{target_sum:.10f}"
-                ),  # Convert to regular decimal format
-                "cell_factors": normalization_dict,
-            }
-
-            logger.info(f"Applied normalize_total with target_sum={target_sum}")
+            source = f"obs['{key_added}']" if loaded_from_obs else "streamed counts"
+            logger.info(
+                f"Applied normalize_total with target_sum={target_sum} from {source}"
+            )
             return None
-        else:
-            # Create a copy with the transformation (copy-on-write)
-            new_adata = adata.copy()
-            if not hasattr(new_adata, "_transformations"):
-                new_adata._transformations = {}
 
-            new_adata._transformations["normalize_total"] = {
-                "type": "normalize_total",
-                "target_sum": float(
-                    f"{target_sum:.10f}"
-                ),  # Convert to regular decimal format
-                "cell_factors": normalization_dict,
-            }
-
-            return new_adata
+        return target_adata
 
     @staticmethod
     def log1p(
