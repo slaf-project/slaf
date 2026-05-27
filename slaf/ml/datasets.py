@@ -380,29 +380,26 @@ class PrefetchBatchProcessor:
         )
 
         if self.use_mixture_of_scanners:
-            # MoS approach: initialize one generator per fragment
-            self.fragment_generators: list[Any] = []
-            self.generator_last_cells: list[
-                int | None
-            ] = []  # Track last cell per generator
-            self.generator_active: list[
-                bool
-            ] = []  # Track which generators are still active
-
-            # Initialize fragment generators
-            for fragment in self.expression_dataset.get_fragments():
-                # Pass the prefetch_batch_size to control batch sizes and prevent premature exhaustion
-                generator = fragment.to_batches(batch_size=self.prefetch_batch_size)
-                self.fragment_generators.append(generator)
-                self.generator_last_cells.append(None)
-                self.generator_active.append(True)
+            # MoS holds per-fragment row cursors and opens scanners on demand
+            # in ``_read_from_generator`` (rather than caching a persistent
+            # ``to_batches`` iterator per fragment, which would pin Lance's
+            # per-fragment scanner buffers for the lifetime of the processor).
+            self.fragments: list[Any] = list(self.expression_dataset.get_fragments())
+            self.fragment_row_counts: list[int] = [
+                int(f.count_rows()) for f in self.fragments
+            ]
+            self.fragment_positions: list[int] = [0] * len(self.fragments)
+            self.generator_last_cells: list[int | None] = [None] * len(self.fragments)
+            self.generator_active: list[bool] = [
+                n > 0 for n in self.fragment_row_counts
+            ]
 
             # Set by_fragment to True for MoS mode
             self.by_fragment = True
 
             if self.verbose:
                 print_prefetch(
-                    f"Mixture of Scanners enabled: {len(self.fragment_generators)} fragment generators, "
+                    f"Mixture of Scanners enabled: {len(self.fragments)} fragments, "
                     f"{self.n_scanners} scanners, prefetch_batch_size={self.prefetch_batch_size:,}",
                     self.verbose,
                 )
@@ -491,20 +488,14 @@ class PrefetchBatchProcessor:
 
         # Reinitialize the data iterator based on the approach
         if self.use_mixture_of_scanners:
-            # MoS approach: reinitialize all fragment generators
-            self.fragment_generators = []
-            self.generator_last_cells = []
-            self.generator_active = []
-
-            for fragment in self.expression_dataset.get_fragments():
-                generator = fragment.to_batches(batch_size=self.prefetch_batch_size)
-                self.fragment_generators.append(generator)
-                self.generator_last_cells.append(None)
-                self.generator_active.append(True)
+            # Rewind per-fragment cursors; reuse fragments + row counts.
+            self.fragment_positions = [0] * len(self.fragments)
+            self.generator_last_cells = [None] * len(self.fragments)
+            self.generator_active = [n > 0 for n in self.fragment_row_counts]
 
             if self.verbose:
                 print_epoch_transition(
-                    f"Reset MoS: {len(self.fragment_generators)} fragment generators for epoch {epoch}",
+                    f"Reset MoS: {len(self.fragments)} fragments for epoch {epoch}",
                     self.verbose,
                 )
 
@@ -561,49 +552,52 @@ class PrefetchBatchProcessor:
     def _read_from_generator(
         self, generator_idx: int
     ) -> tuple[pl.DataFrame | None, int, bool]:
-        """
-        Read batches_per_chunk from a single generator.
+        """Read ``batches_per_chunk`` row-batches from one MoS fragment.
+
+        Opens a fresh ``fragment.scanner(offset, limit).to_table()`` per call
+        so Lance's per-fragment scanner buffers release when the local table
+        goes out of scope.
 
         Returns:
             tuple: (generator_combined DataFrame, generator_idx, is_exhausted)
         """
-        try:
-            # Read batches_per_chunk times from this generator
-            generator_batches: list[pl.DataFrame] = []
-            for _ in range(self.batches_per_chunk):
-                try:
-                    batch = next(self.fragment_generators[generator_idx])
-                    batch_df_raw = pl.from_arrow(batch)
-                    # Ensure we have a DataFrame, not a Series
-                    if isinstance(batch_df_raw, pl.Series):
-                        raise TypeError(
-                            "Expected DataFrame but got Series from generator batch"
-                        )
-                    batch_df: pl.DataFrame = batch_df_raw
-                    generator_batches.append(batch_df)
-                except StopIteration:
-                    # This generator is exhausted
-                    return None, generator_idx, True
-
-            if not generator_batches:
-                # Generator was exhausted
-                return None, generator_idx, True
-
-            # Combine all batches from this generator
-            if len(generator_batches) > 1:
-                generator_combined = pl.concat(generator_batches)  # type: ignore
-            else:
-                generator_combined = generator_batches[0]
-
-            # Ensure we return a DataFrame, not a Series
-            if isinstance(generator_combined, pl.Series):
-                raise TypeError("Expected DataFrame but got Series from generator")
-
-            return generator_combined, generator_idx, False
-
-        except StopIteration:
-            # Mark this generator as exhausted
+        total = self.fragment_row_counts[generator_idx]
+        if self.fragment_positions[generator_idx] >= total:
             return None, generator_idx, True
+
+        fragment = self.fragments[generator_idx]
+        generator_batches: list[pl.DataFrame] = []
+        for _ in range(self.batches_per_chunk):
+            pos = self.fragment_positions[generator_idx]
+            if pos >= total:
+                break
+            tbl = fragment.scanner(
+                offset=pos,
+                limit=self.prefetch_batch_size,
+            ).to_table()
+            self.fragment_positions[generator_idx] = pos + tbl.num_rows
+            if tbl.num_rows == 0:
+                break
+            batch_df_raw = pl.from_arrow(tbl)
+            del tbl
+            if isinstance(batch_df_raw, pl.Series):
+                raise TypeError(
+                    "Expected DataFrame but got Series from generator batch"
+                )
+            generator_batches.append(batch_df_raw)
+
+        if not generator_batches:
+            return None, generator_idx, True
+
+        if len(generator_batches) > 1:
+            generator_combined = pl.concat(generator_batches)  # type: ignore
+        else:
+            generator_combined = generator_batches[0]
+
+        if isinstance(generator_combined, pl.Series):
+            raise TypeError("Expected DataFrame but got Series from generator")
+
+        return generator_combined, generator_idx, False
 
     def load_prefetch_batch(self) -> PrefetchBatch:
         """

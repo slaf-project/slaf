@@ -79,8 +79,12 @@ class TestSLAFIterableDataset:
         assert processor.n_expression_bins == 10
         assert processor.use_binned_expressions is True
         assert hasattr(processor, "expression_dataset")
-        # With MoS enabled by default, we should have fragment_generators instead of batch_generator
-        assert hasattr(processor, "fragment_generators")
+        # With MoS enabled by default, the processor holds per-fragment
+        # cursor state (fragments + fragment_positions + row counts), not
+        # a single batch_generator.
+        assert hasattr(processor, "fragments")
+        assert hasattr(processor, "fragment_positions")
+        assert hasattr(processor, "fragment_row_counts")
 
     def test_prefetch_batch_processor_fragment_parameter(self, tiny_slaf):
         """Test the by_fragment parameter in PrefetchBatchProcessor."""
@@ -932,8 +936,8 @@ class TestPrefetchBatchProcessing:
         assert dataset.batch_processor.n_scanners == 8
         assert dataset.batch_processor.prefetch_batch_size == 1048576
 
-    def test_mixture_of_scanners_fragment_generators(self, tiny_slaf):
-        """Test that MoS creates the correct number of fragment generators"""
+    def test_mixture_of_scanners_fragment_state(self, tiny_slaf):
+        """Test that MoS sets up per-fragment cursor state correctly."""
         tokenizer = GeneformerTokenizer(tiny_slaf)
 
         dataset = SLAFIterableDataset(
@@ -945,18 +949,24 @@ class TestPrefetchBatchProcessing:
             prefetch_batch_size=1048576,
         )
 
-        # Check that fragment generators are created
-        assert hasattr(dataset.batch_processor, "fragment_generators")
-        assert len(dataset.batch_processor.fragment_generators) > 0
-
-        # Check that generator tracking arrays are created
-        assert hasattr(dataset.batch_processor, "generator_last_cells")
-        assert hasattr(dataset.batch_processor, "generator_active")
-        assert len(dataset.batch_processor.generator_last_cells) == len(
-            dataset.batch_processor.fragment_generators
-        )
-        assert len(dataset.batch_processor.generator_active) == len(
-            dataset.batch_processor.fragment_generators
+        proc = dataset.batch_processor
+        assert hasattr(proc, "fragments")
+        assert len(proc.fragments) > 0
+        assert hasattr(proc, "fragment_positions")
+        assert hasattr(proc, "fragment_row_counts")
+        assert hasattr(proc, "generator_last_cells")
+        assert hasattr(proc, "generator_active")
+        n = len(proc.fragments)
+        assert len(proc.fragment_positions) == n
+        assert len(proc.fragment_row_counts) == n
+        assert len(proc.generator_last_cells) == n
+        assert len(proc.generator_active) == n
+        # Cursors must stay within their fragment's row count at all times.
+        assert all(
+            0 <= p <= total
+            for p, total in zip(
+                proc.fragment_positions, proc.fragment_row_counts, strict=True
+            )
         )
 
     def test_mixture_of_scanners_parameter_validation(self, tiny_slaf):
@@ -1066,14 +1076,13 @@ class TestPrefetchBatchProcessing:
         assert dataset.batch_processor.current_epoch == 1
         assert dataset.batch_processor.batch_id == 0
 
-        # Check that fragment generators are reinitialized
-        assert len(dataset.batch_processor.fragment_generators) > 0
-        assert len(dataset.batch_processor.generator_last_cells) == len(
-            dataset.batch_processor.fragment_generators
-        )
-        assert len(dataset.batch_processor.generator_active) == len(
-            dataset.batch_processor.fragment_generators
-        )
+        # Per-fragment cursors must be rewound to zero on epoch reset.
+        proc = dataset.batch_processor
+        n = len(proc.fragments)
+        assert n > 0
+        assert all(p == 0 for p in proc.fragment_positions)
+        assert len(proc.generator_last_cells) == n
+        assert len(proc.generator_active) == n
 
     def test_mixture_of_scanners_backward_compatibility(self, tiny_slaf):
         """Test that MoS is backward compatible (enabled by default) in PrefetchBatchProcessor"""
@@ -1088,7 +1097,8 @@ class TestPrefetchBatchProcessing:
         )
 
         assert processor_default.use_mixture_of_scanners is True
-        assert hasattr(processor_default, "fragment_generators")
+        assert hasattr(processor_default, "fragments")
+        assert hasattr(processor_default, "fragment_positions")
         assert not hasattr(processor_default, "batch_generator")
 
         # Explicitly disable MoS and use batch mode
@@ -1101,7 +1111,7 @@ class TestPrefetchBatchProcessing:
         )
 
         assert processor_disabled.use_mixture_of_scanners is False
-        assert not hasattr(processor_disabled, "fragment_generators")
+        assert not hasattr(processor_disabled, "fragment_positions")
         assert hasattr(processor_disabled, "batch_generator")
 
     def test_mixture_of_scanners_with_raw_mode(self, tiny_slaf):
@@ -1245,15 +1255,16 @@ class TestPrefetchBatchProcessing:
         assert processor.prefetch_batch_size == 1048576
         assert processor.by_fragment is True  # MoS automatically enables fragment mode
 
-        # Check that fragment generators are created
-        assert hasattr(processor, "fragment_generators")
-        assert len(processor.fragment_generators) > 0
-
-        # Check that generator tracking arrays are created
+        # Check that per-fragment cursor state is created (on-demand scanner pattern)
+        assert hasattr(processor, "fragments")
+        assert len(processor.fragments) > 0
+        assert hasattr(processor, "fragment_positions")
         assert hasattr(processor, "generator_last_cells")
         assert hasattr(processor, "generator_active")
-        assert len(processor.generator_last_cells) == len(processor.fragment_generators)
-        assert len(processor.generator_active) == len(processor.generator_active)
+        n = len(processor.fragments)
+        assert len(processor.fragment_positions) == n
+        assert len(processor.generator_last_cells) == n
+        assert len(processor.generator_active) == n
 
     def test_prefetch_batch_processor_mos_parameter_validation(self, tiny_slaf):
         """Test MoS parameter validation in PrefetchBatchProcessor"""
@@ -1339,10 +1350,12 @@ class TestPrefetchBatchProcessing:
         assert processor.current_epoch == 1
         assert processor.batch_id == 0
 
-        # Check that fragment generators are reinitialized
-        assert len(processor.fragment_generators) > 0
-        assert len(processor.generator_last_cells) == len(processor.fragment_generators)
-        assert len(processor.generator_active) == len(processor.fragment_generators)
+        # Per-fragment cursors must be rewound to zero on epoch reset.
+        n = len(processor.fragments)
+        assert n > 0
+        assert all(p == 0 for p in processor.fragment_positions)
+        assert len(processor.generator_last_cells) == n
+        assert len(processor.generator_active) == n
 
     def test_prefetch_batch_processor_mos_backward_compatibility(self, tiny_slaf):
         """Test that MoS is backward compatible (enabled by default) in PrefetchBatchProcessor"""
@@ -1357,7 +1370,8 @@ class TestPrefetchBatchProcessing:
         )
 
         assert processor_default.use_mixture_of_scanners is True
-        assert hasattr(processor_default, "fragment_generators")
+        assert hasattr(processor_default, "fragments")
+        assert hasattr(processor_default, "fragment_positions")
         assert not hasattr(processor_default, "batch_generator")
 
         # Explicitly disable MoS and use batch mode
@@ -1370,7 +1384,7 @@ class TestPrefetchBatchProcessing:
         )
 
         assert processor_disabled.use_mixture_of_scanners is False
-        assert not hasattr(processor_disabled, "fragment_generators")
+        assert not hasattr(processor_disabled, "fragment_positions")
         assert hasattr(processor_disabled, "batch_generator")
 
     def test_prefetch_batch_processor_mos_with_raw_mode(self, tiny_slaf):
