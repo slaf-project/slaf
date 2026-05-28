@@ -616,25 +616,68 @@ class LazyExpressionMatrix(LazySparseMixin):
     ) -> scipy.sparse.csr_matrix:
         """Apply normalize_total transformation using vectorized operations"""
         cell_factors = transform_data.get("cell_factors", {})
-
-        if isinstance(cell_selector, int | np.integer):
-            selected_cell_integer_ids = [int(cell_selector)]
-        elif isinstance(cell_selector, slice):
-            selected_cell_integer_ids = list(range(self.slaf_array.shape[0]))[
-                cell_selector
-            ]
-        elif isinstance(cell_selector, np.ndarray) and cell_selector.dtype == bool:
-            selected_cell_integer_ids = (
-                np.flatnonzero(cell_selector).astype(int).tolist()
-            )
-        elif isinstance(cell_selector, list | np.ndarray):
-            selected_cell_integer_ids = [int(i) for i in cell_selector]
+        obs_names_local = []  # Always a list
+        obs_names = None
+        if hasattr(self, "parent_adata") and self.parent_adata is not None:
+            try:
+                obs_names = self.parent_adata.obs_names
+            except (AttributeError, TypeError):
+                obs_names = None
+        if obs_names is None or not isinstance(obs_names, list | np.ndarray | pd.Index):
+            if (
+                matrix is not None
+                and hasattr(matrix, "shape")
+                and matrix.shape is not None
+            ):
+                obs_names_local = [f"cell_{i}" for i in range(matrix.shape[0])]
+            else:
+                obs_names_local = []
         else:
-            selected_cell_integer_ids = list(range(matrix.shape[0]))
-
+            obs_names_local = list(obs_names)
+        # Now obs_names_local is always a list
+        # Determine selected_cell_names based on cell_selector
+        if cell_selector is None or (
+            isinstance(cell_selector, slice) and cell_selector == slice(None)
+        ):
+            selected_cell_names = obs_names_local
+        elif isinstance(cell_selector, slice):
+            start = cell_selector.start or 0
+            stop = cell_selector.stop or len(obs_names_local)
+            step = cell_selector.step or 1
+            # Clamp bounds
+            start = max(0, min(start, len(obs_names_local)))
+            stop = max(0, min(stop, len(obs_names_local)))
+            selected_cell_names = obs_names_local[start:stop:step]
+        elif isinstance(cell_selector, list | np.ndarray):
+            if len(obs_names_local) > 0:
+                if (
+                    isinstance(cell_selector, np.ndarray)
+                    and cell_selector.dtype == bool
+                ):
+                    selected_cell_names = [
+                        obs_names_local[i]
+                        for i, keep in enumerate(cell_selector)
+                        if keep and 0 <= i < len(obs_names_local)
+                    ]
+                else:
+                    selected_cell_names = [
+                        obs_names_local[i]
+                        for i in cell_selector
+                        if isinstance(i, int | np.integer)
+                        and 0 <= i < len(obs_names_local)
+                    ]
+            else:
+                selected_cell_names = []
+        elif isinstance(cell_selector, int | np.integer):
+            if 0 <= cell_selector < len(obs_names_local):
+                selected_cell_names = [obs_names_local[cell_selector]]
+            else:
+                selected_cell_names = []
+        else:
+            selected_cell_names = obs_names_local
         # Create a vector of factors for all cells at once
         cell_factors_vector = np.array(
-            [cell_factors.get(cell_id, 1.0) for cell_id in selected_cell_integer_ids]
+            [cell_factors.get(name, 1.0) for name in selected_cell_names]
         )
         # Apply vectorized scaling using CSR matrix properties
         # Create a copy only if we need to modify the data

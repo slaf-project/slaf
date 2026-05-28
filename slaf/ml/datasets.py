@@ -57,7 +57,7 @@ from slaf.core.slaf import SLAFArray
 from slaf.core.tabular_schema import SLAF_LANCE_COO_SCHEMA
 from slaf.ml.expression_preprocessor import ExpressionPreprocessor
 from slaf.ml.samplers import Shuffle
-from slaf.ml.tokenizers import ScGPTTokenizer, SLAFTokenizer
+from slaf.ml.tokenizers import SLAFTokenizer
 
 # Define union type for both batch types
 PrefetchBatch = Union["TokenizedPrefetchBatch", "RawPrefetchBatch"]
@@ -1029,8 +1029,13 @@ class PrefetchBatchProcessor:
 
                     shuffle_time = time.time() - shuffle_start
                     window_start = time.time()
-                    window_params: dict[str, Any] = {}
-                    window_params.update(self.window_kwargs)
+                    window_params: dict[str, Any] = {
+                        "n_expression_bins": self.n_expression_bins,
+                        "use_binned_expressions": self.use_binned_expressions,
+                    }
+                    window_params.update(
+                        self.window_kwargs
+                    )  # Add any additional kwargs
                     if self.expression_preprocessor is not None:
                         window_params["expression_preprocessor"] = (
                             self.expression_preprocessor
@@ -1040,10 +1045,10 @@ class PrefetchBatchProcessor:
                     if tokenizer is None:
                         raise RuntimeError("Tokenizer is required for tokenized mode")
 
-                    grouped = tokenizer.transform_and_apply(
+                    grouped = tokenizer.window.apply(
                         shuffled_df,
-                        schema=SLAF_LANCE_COO_SCHEMA,
-                        max_items=tokenizer.max_genes,
+                        SLAF_LANCE_COO_SCHEMA,
+                        tokenizer.max_genes,
                         **window_params,
                     )
                     window_time = time.time() - window_start
@@ -1054,9 +1059,13 @@ class PrefetchBatchProcessor:
                     if self.tokenizer is None:
                         raise RuntimeError("Tokenizer is required for tokenized mode")
 
-                    input_ids, attention_mask, values = self.tokenizer.tokenize_grouped(
-                        grouped,
-                        schema=SLAF_LANCE_COO_SCHEMA,
+                    input_ids, attention_mask, values = self.tokenizer.tokenize(
+                        gene_sequences=grouped["gene_sequence"].to_list(),
+                        expr_sequences=(
+                            grouped["expr_sequence"].to_list()
+                            if "expr_sequence" in grouped.columns
+                            else None
+                        ),
                     )
 
                     tokenize_time = time.time() - tokenize_start
@@ -1577,8 +1586,8 @@ class SLAFIterableDataset(IterableDataset):
             tokenizer, "n_expression_bins", 10
         )  # Default value for raw mode
 
-        if isinstance(tokenizer, ScGPTTokenizer):
-            tokenizer.use_binned_expressions = use_binned_expressions
+        # Set binning based on tokenizer type
+        use_binned_expressions = use_binned_expressions  # Use parameter value
 
         self.batch_processor = PrefetchBatchProcessor(
             slaf_array=slaf_array,

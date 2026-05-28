@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 import polars as pl
-from loguru import logger
 
 from slaf.integrations.anndata import LazyAnnData
 
@@ -465,7 +464,7 @@ class LazyPreprocessing:
         if inplace:
             # Apply filter to adata (would need proper implementation)
             # For now, just return the original adata
-            logger.info(
+            print(
                 f"Filtered out {np.sum(~cell_mask)} cells, {np.sum(cell_mask)} remaining"
             )
             return None
@@ -600,7 +599,7 @@ class LazyPreprocessing:
 
         if inplace:
             # Apply filter to adata (would need proper implementation)
-            logger.info(
+            print(
                 f"Filtered out {np.sum(~gene_mask)} genes, {np.sum(gene_mask)} remaining"
             )
             return None
@@ -707,7 +706,7 @@ class LazyPreprocessing:
                 )
 
             except Exception as e:
-                logger.warning(
+                print(
                     f"Fragment processing failed, falling back to global processing: {e}"
                 )
                 # Fall back to global processing
@@ -730,17 +729,70 @@ class LazyPreprocessing:
         # Work with polars DataFrame internally
         cell_totals_pl = cell_totals
 
-        # Store factors keyed by SLAF's internal cell_integer_id.
-        cell_totals_pl = cell_totals_pl.with_columns(
-            (target_sum / pl.col("total_counts")).alias("normalization_factor")
-        )
-        normalization_dict = dict(
-            zip(
-                cell_totals_pl["cell_integer_id"].to_list(),
-                cell_totals_pl["normalization_factor"].to_list(),
-                strict=False,
+        # Create normalization factors using polars
+        # Map cell_integer_id to cell names for compatibility with anndata.py
+        if hasattr(adata.slaf, "obs") and adata.slaf.obs is not None:
+            # Create mapping from cell_integer_id to cell names
+            # Use polars DataFrame to get cell names
+            obs_df = adata.slaf.obs
+            if "cell_id" in obs_df.columns:
+                cell_id_to_name = dict(
+                    zip(
+                        obs_df["cell_integer_id"].to_list(),
+                        obs_df["cell_id"].to_list(),
+                        strict=False,
+                    )
+                )
+            else:
+                # Fallback: create cell names from integer IDs
+                cell_id_to_name = {i: f"cell_{i}" for i in range(len(obs_df))}
+            # Use vectorized polars operations for mapping
+            # Create mapping DataFrame
+            cell_map_df = pl.DataFrame(
+                {
+                    "cell_integer_id": list(cell_id_to_name.keys()),
+                    "cell_id": list(cell_id_to_name.values()),
+                }
             )
-        )
+            # Join with mapping DataFrame
+            cell_totals_pl = cell_totals_pl.join(
+                cell_map_df, on="cell_integer_id", how="left"
+            )
+            # Fill any missing values with default format
+            cell_totals_pl = cell_totals_pl.with_columns(
+                [
+                    pl.col("cell_id").fill_null(
+                        pl.col("cell_integer_id")
+                        .cast(pl.Utf8)
+                        .map_elements(lambda x: f"cell_{x}", return_dtype=pl.Utf8)
+                    ),
+                    (target_sum / pl.col("total_counts")).alias("normalization_factor"),
+                ]
+            )
+            # Convert to dictionary for compatibility
+            normalization_dict = dict(
+                zip(
+                    cell_totals_pl["cell_id"].to_list(),
+                    cell_totals_pl["normalization_factor"].to_list(),
+                    strict=False,
+                )
+            )
+        else:
+            # Fallback: use cell_integer_id as string keys
+            cell_totals_pl = cell_totals_pl.with_columns(
+                [
+                    pl.col("cell_integer_id").cast(pl.Utf8).alias("cell_id"),
+                    (target_sum / pl.col("total_counts")).alias("normalization_factor"),
+                ]
+            )
+            # Convert to dictionary for compatibility
+            normalization_dict = dict(
+                zip(
+                    cell_totals_pl["cell_id"].to_list(),
+                    cell_totals_pl["normalization_factor"].to_list(),
+                    strict=False,
+                )
+            )
 
         if inplace:
             # Store normalization factors for lazy application
@@ -755,7 +807,7 @@ class LazyPreprocessing:
                 "cell_factors": normalization_dict,
             }
 
-            logger.info(f"Applied normalize_total with target_sum={target_sum}")
+            print(f"Applied normalize_total with target_sum={target_sum}")
             return None
         else:
             # Create a copy with the transformation (copy-on-write)
@@ -847,7 +899,7 @@ class LazyPreprocessing:
                 return adata._update_with_log1p_data(result_df, inplace)
 
             except Exception as e:
-                logger.warning(
+                print(
                     f"Fragment processing failed, falling back to global processing: {e}"
                 )
                 # Fall back to global processing
@@ -862,7 +914,7 @@ class LazyPreprocessing:
 
                 adata._transformations["log1p"] = {"type": "log1p", "applied": True}
 
-                logger.info("Applied log1p transformation")
+                print("Applied log1p transformation")
                 return None
             else:
                 # Create a copy with the transformation (copy-on-write)
@@ -1048,7 +1100,7 @@ class LazyPreprocessing:
 
         if inplace:
             # Update var metadata (would need implementation)
-            logger.info(f"Identified {hvg_mask.sum()} highly variable genes")
+            print(f"Identified {hvg_mask.sum()} highly variable genes")
             return None
         else:
             return gene_stats_complete
