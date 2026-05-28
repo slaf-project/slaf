@@ -11,6 +11,7 @@ from .datasets import (
     PrefetchBatchProcessor,
     SLAFIterableDataset,
 )
+from .expression_preprocessor import ExpressionPreprocessor
 from .samplers import (
     RandomShuffle,
     Shuffle,
@@ -24,6 +25,7 @@ from .tokenizers import SLAFTokenizer, TokenizerType
 __all__ = [
     # Core DataLoaders
     "SLAFDataLoader",
+    "ExpressionPreprocessor",
     "TileDBDataLoader",
     "TileDBIterableDataset",
     # Dataset and Processing

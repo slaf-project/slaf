@@ -12,6 +12,10 @@ from typing import Any
 import polars as pl
 
 from slaf.core.tabular_schema import DataSchema
+from slaf.ml.expression_preprocessor import (
+    ExpressionPreprocessor,
+    apply_expression_preprocessor,
+)
 
 
 class Window(ABC):
@@ -84,6 +88,12 @@ class ScGPTWindow(Window):
             "use_binned_expressions", True
         )  # Default to True for scGPT
 
+        preprocessor = kwargs.get("expression_preprocessor")
+        fragment_df = apply_expression_preprocessor(fragment_df, schema, preprocessor)
+        already_log1p = (
+            isinstance(preprocessor, ExpressionPreprocessor) and preprocessor.log1p
+        )
+
         if use_binned_expressions:
             grouped = (
                 fragment_df.with_columns(
@@ -93,7 +103,11 @@ class ScGPTWindow(Window):
                     .alias("gene_rank")
                 )
                 .filter(pl.col("gene_rank") <= max_items)
-                .with_columns(pl.col(vk).log1p().alias("log_value"))
+                .with_columns(
+                    (pl.col(vk) if already_log1p else pl.col(vk).log1p()).alias(
+                        "log_value"
+                    )
+                )
                 .with_columns(
                     pl.when(pl.col("log_value") > 0)
                     .then(
@@ -163,6 +177,9 @@ class GeneformerWindow(Window):
         item_out = schema.item_list_key
 
         min_percentile = kwargs.get("min_percentile", None)
+
+        preprocessor = kwargs.get("expression_preprocessor")
+        fragment_df = apply_expression_preprocessor(fragment_df, schema, preprocessor)
 
         if min_percentile is not None:
             grouped = (
@@ -236,6 +253,9 @@ class SimpleWindow(Window):
         vk = schema.value_key
         item_out = schema.item_list_key
         value_out = schema.value_list_key or "expr_sequence"
+
+        preprocessor = kwargs.get("expression_preprocessor")
+        fragment_df = apply_expression_preprocessor(fragment_df, schema, preprocessor)
 
         result = fragment_df.with_columns(
             [

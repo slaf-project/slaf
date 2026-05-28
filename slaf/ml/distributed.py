@@ -20,6 +20,7 @@ from slaf.distributed.data_source import LanceDataSource
 from slaf.distributed.dataloader import DecompressingQueueWrapper, DistributedDataLoader
 
 # Import SLAF-specific components (for type hints and adapters)
+from slaf.ml.expression_preprocessor import ExpressionPreprocessor
 from slaf.ml.tokenizers import GeneformerTokenizer, ScGPTTokenizer
 
 # Configure Modal image for SLAF workers.
@@ -232,6 +233,7 @@ class DistributedSLAFDataLoader:
         seed: int = 42,
         queue_name: str | None = None,
         modal_queue_environment: str | None = None,
+        expression_preprocessor: ExpressionPreprocessor | None = None,
         **window_kwargs: Any,
     ):
         """
@@ -271,6 +273,8 @@ class DistributedSLAFDataLoader:
             queue_name: Name of Modal Queue (auto-generated if None)
             modal_queue_environment: Optional Modal Environment name for Queue/Dict
                 (match consumer’s ``modal.Queue.from_name(..., environment_name=…)``, e.g. ``"main"`` in some apps).
+            expression_preprocessor: Optional COO value preprocessing before rank/bin (same as
+                ``SLAFDataLoader``). Merged into ``window_kwargs`` for workers.
             **window_kwargs: Additional window function parameters
         """
         self.slaf_array = slaf_array
@@ -303,6 +307,8 @@ class DistributedSLAFDataLoader:
         window_kwargs = dict(window_kwargs)
         window_kwargs.setdefault("n_expression_bins", n_expression_bins)
         window_kwargs.setdefault("use_binned_expressions", True)
+        if expression_preprocessor is not None:
+            window_kwargs["expression_preprocessor"] = expression_preprocessor
 
         tokenizer_factory_kwargs: dict[str, Any] | None = None
         tokenizer_cls: type[GeneformerTokenizer] | type[ScGPTTokenizer] | None = None

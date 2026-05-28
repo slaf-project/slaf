@@ -4,6 +4,7 @@ from loguru import logger
 
 from slaf.core.slaf import SLAFArray
 
+from .expression_preprocessor import ExpressionPreprocessor
 from .tokenizers import GeneformerTokenizer, ScGPTTokenizer, SLAFTokenizer
 
 # Try to import torch, but make it optional
@@ -284,6 +285,7 @@ class SLAFDataLoader:
         max_queue_size: int = 5000,  # Add max_queue_size parameter
         parallelize_fragment_reads: bool = False,  # Parallelize fragment reads in MoS (cloud optimization)
         prefetcher_ready_timeout: float = 10.0,  # Timeout for waiting for prefetcher to be ready
+        expression_preprocessor: ExpressionPreprocessor | None = None,
     ):
         """
         Initialize the SLAF DataLoader with training configuration.
@@ -339,6 +341,8 @@ class SLAFDataLoader:
                                Higher values improve throughput but use more memory.
                                Range: 1000-10000000, default: 4194304. Only used when
                                use_mixture_of_scanners=True.
+            expression_preprocessor: Optional per-cell normalize_total and element-wise log1p on
+                COO values before rank/bin. Default None preserves the historical window behavior.
             parallelize_fragment_reads: Whether to parallelize fragment reads in MoS mode.
                                        Critical for cloud scenarios where network latency
                                        dominates (can improve throughput 10-30x). For local
@@ -501,6 +505,7 @@ class SLAFDataLoader:
             prefetch_batch_size=prefetch_batch_size,  # Pass prefetch_batch_size to dataset
             parallelize_fragment_reads=parallelize_fragment_reads,  # Pass parallelize_fragment_reads
             prefetcher_ready_timeout=prefetcher_ready_timeout,  # Pass prefetcher_ready_timeout
+            expression_preprocessor=expression_preprocessor,
         )
 
     def __iter__(self):
