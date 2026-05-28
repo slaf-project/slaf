@@ -3,9 +3,11 @@ from enum import Enum
 from typing import Any
 
 import numpy as np
+import polars as pl
 import torch
 
 from slaf.core.slaf import SLAFArray
+from slaf.core.tabular_schema import SLAF_LANCE_COO_SCHEMA, DataSchema
 from slaf.ml.aggregators import GeneformerWindow, ScGPTWindow, Window
 
 TORCH_AVAILABLE = True
@@ -236,6 +238,22 @@ class SLAFTokenizer(ABC):
         """
         Create a window function based on the tokenizer type.
         """
+
+    def tokenize_grouped(
+        self,
+        grouped_df: pl.DataFrame,
+        schema: DataSchema = SLAF_LANCE_COO_SCHEMA,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        """Tokenize grouped cell sequences emitted by ``window.apply``."""
+        expr_key = schema.value_list_key
+        return self.tokenize(
+            gene_sequences=grouped_df[schema.item_list_key].to_list(),
+            expr_sequences=(
+                grouped_df[expr_key].to_list()
+                if expr_key and expr_key in grouped_df.columns
+                else None
+            ),
+        )
 
     def get_vocab_info(self) -> dict[str, Any]:
         """

@@ -124,43 +124,27 @@ def prefetch_worker(
             def tokenize_grouped(
                 grouped_df: pl.DataFrame, schema: DataSchema
             ) -> dict[str, Any]:
-                """Tokenize grouped DataFrame with gene/value sequences.
-
-                For scGPT tokenizers, this enforces the dual-stream contract:
-                tokenized output must include aligned ``input_ids`` and ``values``.
-                """
-                # Extract gene sequences and expression sequences
-                gene_sequences = grouped_df[schema.item_list_key].to_list()
+                """Tokenize grouped DataFrame via tokenizer-owned grouping contract."""
                 is_scgpt_tokenizer = hasattr(tokenizer_instance, "n_expression_bins")
-
-                # Check if we have expression sequences (for scGPT)
-                if (
-                    schema.value_list_key
-                    and schema.value_list_key in grouped_df.columns
+                if is_scgpt_tokenizer and (
+                    not schema.value_list_key
+                    or schema.value_list_key not in grouped_df.columns
                 ):
-                    expr_sequences = grouped_df[schema.value_list_key].to_list()
-                    input_ids, attention_mask, values = tokenizer_instance.tokenize(
-                        gene_sequences, expr_sequences
-                    )
-                else:
-                    input_ids, attention_mask, values = tokenizer_instance.tokenize(
-                        gene_sequences
+                    raise ValueError(
+                        "scGPT distributed tokenization requires expression/value sequences; "
+                        f"missing grouped column '{schema.value_list_key}'."
                     )
 
-                if is_scgpt_tokenizer:
-                    if (
-                        not schema.value_list_key
-                        or schema.value_list_key not in grouped_df.columns
-                    ):
-                        raise ValueError(
-                            "scGPT distributed tokenization requires expression/value sequences; "
-                            f"missing grouped column '{schema.value_list_key}'."
-                        )
-                    if values is None:
-                        raise ValueError(
-                            "scGPT distributed tokenization requires dual-stream output; "
-                            "tokenizer returned values=None."
-                        )
+                input_ids, attention_mask, values = tokenizer_instance.tokenize_grouped(
+                    grouped_df,
+                    schema=schema,
+                )
+
+                if is_scgpt_tokenizer and values is None:
+                    raise ValueError(
+                        "scGPT distributed tokenization requires dual-stream output; "
+                        "tokenizer returned values=None."
+                    )
 
                 # Return as dict (format expected by processor)
                 result = {

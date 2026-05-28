@@ -7,6 +7,7 @@ from unittest.mock import Mock
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import pytest
 import torch
 
@@ -127,6 +128,53 @@ class TestSLAFTokenizer:
         sep_positions = input_ids == tokenizer.special_tokens["SEP"]
         assert torch.all(values[cls_positions] == tokenizer.special_tokens["PAD"])
         assert torch.all(values[sep_positions] == tokenizer.special_tokens["PAD"])
+
+    def test_scgpt_tokenize_grouped(self):
+        mock_slaf_array = Mock(spec=SLAFArray)
+        mock_var = Mock()
+        mock_var.index = pd.Index(["gene_0", "gene_1", "gene_2"])
+        mock_slaf_array.var = mock_var
+
+        tokenizer = ScGPTTokenizer(
+            slaf_array=mock_slaf_array,
+            vocab_size=1000,
+            n_expression_bins=10,
+        )
+
+        grouped_df = pl.from_pandas(
+            pd.DataFrame(
+                {
+                    "gene_sequence": [[0, 1, 2]],
+                    "expr_sequence": [[0.5, 0.8, 0.2]],
+                }
+            )
+        )
+
+        input_ids, attention_mask, values = tokenizer.tokenize_grouped(grouped_df)
+
+        assert input_ids.shape == (1, 1026)
+        assert attention_mask.shape == (1, 1026)
+        assert values is not None
+        assert input_ids[0, 0] == tokenizer.special_tokens["CLS"]
+
+    def test_geneformer_tokenize_grouped(self):
+        mock_slaf_array = Mock(spec=SLAFArray)
+        mock_var = Mock()
+        mock_var.index = pd.Index(["gene_0", "gene_1", "gene_2"])
+        mock_slaf_array.var = mock_var
+
+        tokenizer = GeneformerTokenizer(
+            slaf_array=mock_slaf_array,
+            vocab_size=1000,
+        )
+
+        grouped_df = pl.from_pandas(pd.DataFrame({"gene_sequence": [[0, 1, 2]]}))
+
+        input_ids, attention_mask, values = tokenizer.tokenize_grouped(grouped_df)
+
+        assert input_ids.shape[0] == 1
+        assert values is None
+        assert input_ids[0, 0] == tokenizer.special_tokens["CLS"]
 
     def test_scgpt_tokenization_no_expression(self):
         """Test that scGPT tokenization works without expressions (empty sequences)."""
