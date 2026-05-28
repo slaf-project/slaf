@@ -5,7 +5,7 @@ from loguru import logger
 from slaf.integrations.anndata import LazyAnnData
 
 from .expression_preprocessor import ExpressionPreprocessor
-from .tokenizers import GeneformerTokenizer, ScGPTTokenizer, SLAFTokenizer
+from .tokenizers import SLAFTokenizer
 
 # Try to import torch, but make it optional
 try:
@@ -423,6 +423,7 @@ class SLAFDataLoader:
         self.parallelize_fragment_reads = (
             parallelize_fragment_reads  # Add parallelize_fragment_reads attribute
         )
+        self.expression_preprocessor = expression_preprocessor
 
         # Validate MoS parameters
         if self.use_mixture_of_scanners:
@@ -482,7 +483,7 @@ class SLAFDataLoader:
             prefetch_batch_size=self.prefetch_batch_size,  # Pass prefetch_batch_size to dataset
             parallelize_fragment_reads=self.parallelize_fragment_reads,  # Pass parallelize_fragment_reads
             prefetcher_ready_timeout=prefetcher_ready_timeout,  # Pass prefetcher_ready_timeout
-            expression_preprocessor=expression_preprocessor,
+            expression_preprocessor=self.expression_preprocessor,
         )
 
     def __iter__(self):
