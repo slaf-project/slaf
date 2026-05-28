@@ -808,8 +808,14 @@ class TestSLAFDataLoader:
         assert len(epochs_seen) >= 1, f"Expected at least 1 epoch, got {epochs_seen}"
         assert batch_count > 0
 
-    def test_mixture_of_scanners_fragment_generators_creation(self, tiny_slaf):
-        """Test that MoS creates fragment generators correctly"""
+    def test_mixture_of_scanners_fragment_state_creation(self, tiny_slaf):
+        """Test that MoS sets up per-fragment cursor state correctly.
+
+        MoS reads fragments on-demand via ``frag.scanner(offset, limit)``
+        rather than holding persistent Lance iterators, so the processor
+        carries ``fragments`` (the Lance Fragment objects), per-fragment
+        ``fragment_row_counts``, and ``fragment_positions`` cursors.
+        """
         dataloader = SLAFDataLoader(
             slaf_array=tiny_slaf,
             batch_size=32,
@@ -818,18 +824,24 @@ class TestSLAFDataLoader:
             prefetch_batch_size=1048576,
         )
 
-        # Check that fragment generators are created in the underlying dataset
-        assert hasattr(dataloader._dataset.batch_processor, "fragment_generators")
-        assert len(dataloader._dataset.batch_processor.fragment_generators) > 0
-
-        # Check that generator tracking arrays are created
-        assert hasattr(dataloader._dataset.batch_processor, "generator_last_cells")
-        assert hasattr(dataloader._dataset.batch_processor, "generator_active")
-        assert len(dataloader._dataset.batch_processor.generator_last_cells) == len(
-            dataloader._dataset.batch_processor.fragment_generators
-        )
-        assert len(dataloader._dataset.batch_processor.generator_active) == len(
-            dataloader._dataset.batch_processor.fragment_generators
+        proc = dataloader._dataset.batch_processor
+        assert hasattr(proc, "fragments")
+        assert len(proc.fragments) > 0
+        assert hasattr(proc, "fragment_row_counts")
+        assert hasattr(proc, "fragment_positions")
+        assert hasattr(proc, "generator_last_cells")
+        assert hasattr(proc, "generator_active")
+        n = len(proc.fragments)
+        assert len(proc.fragment_row_counts) == n
+        assert len(proc.fragment_positions) == n
+        assert len(proc.generator_last_cells) == n
+        assert len(proc.generator_active) == n
+        # Cursors must stay within their fragment's row count at all times.
+        assert all(
+            0 <= p <= total
+            for p, total in zip(
+                proc.fragment_positions, proc.fragment_row_counts, strict=True
+            )
         )
 
     def test_mixture_of_scanners_random_sampling_behavior(self, tiny_slaf):

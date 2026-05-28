@@ -282,7 +282,7 @@ class SLAFDataLoader:
         use_mixture_of_scanners: bool = True,  # Default to True for MoS (was False)
         n_scanners: int = 16,  # Add n_scanners parameter for MoS
         prefetch_batch_size: int = 4194304,  # Add prefetch_batch_size parameter for MoS
-        max_queue_size: int = 5000,  # Add max_queue_size parameter
+        max_queue_size: int | None = None,  # None resolves per mode in __init__
         parallelize_fragment_reads: bool = False,  # Parallelize fragment reads in MoS (cloud optimization)
         prefetcher_ready_timeout: float = 10.0,  # Timeout for waiting for prefetcher to be ready
         expression_preprocessor: ExpressionPreprocessor | None = None,
@@ -432,6 +432,12 @@ class SLAFDataLoader:
         self.prefetch_batch_size = (
             prefetch_batch_size  # Add prefetch_batch_size attribute
         )
+        # Raw payloads carry one full producer load
+        # (``n_scanners × prefetch_batch_size`` rows, hundreds of MiB on
+        # large datasets), so a deep queue would pin tens of GiB of host
+        # memory. Tokenized payloads are compact tensors and stay cheap.
+        if max_queue_size is None:
+            max_queue_size = 1 if raw_mode else 5000
         self.max_queue_size = max_queue_size  # Add max_queue_size attribute
         self.parallelize_fragment_reads = (
             parallelize_fragment_reads  # Add parallelize_fragment_reads attribute
@@ -494,7 +500,7 @@ class SLAFDataLoader:
             tokenizer=self.tokenizer,
             batch_size=batch_size,
             seed=42,  # TODO: make configurable
-            max_queue_size=max_queue_size,  # Pass max_queue_size to dataset
+            max_queue_size=self.max_queue_size,  # Pass resolved value to dataset
             n_epochs=n_epochs,  # Pass n_epochs to dataset
             raw_mode=raw_mode,  # Pass raw_mode to dataset
             verbose=verbose,  # Pass verbose to dataset
@@ -646,31 +652,17 @@ class SLAFDataLoader:
         return 0  # Indicates unknown length
 
     def __del__(self):
+        """Stop the background prefetcher on garbage collection.
+
+        Best-effort: ``__del__`` may run during interpreter shutdown when
+        module globals are already torn down, so exceptions are swallowed.
         """
-        Cleanup method to stop async prefetching.
-
-        This method is called when the DataLoader object is garbage collected.
-        It ensures that the underlying dataset's prefetcher is properly cleaned up
-        to prevent resource leaks.
-
-        Examples:
-            >>> # DataLoader cleanup happens automatically
-            >>> slaf_array = SLAFArray("path/to/data.slaf")
-            >>> dataloader = SLAFDataLoader(slaf_array)
-            >>> print("DataLoader created")
-            DataLoader created
-            >>> # When dataloader goes out of scope, __del__ is called automatically
-            >>> del dataloader
-            >>> print("DataLoader destroyed and cleaned up")
-            DataLoader destroyed and cleaned up
-
-            >>> # Manual cleanup (not usually needed)
-            >>> dataloader = SLAFDataLoader(slaf_array)
-            >>> dataloader.__del__()
-            >>> print("Manual cleanup completed")
-            Manual cleanup completed
-        """
-        if hasattr(self, "_dataset"):
-            # The SLAFIterableDataset doesn't have a stop method,
-            # so we just let it finish its current epoch.
+        try:
+            dataset = getattr(self, "_dataset", None)
+            if dataset is None:
+                return
+            prefetcher = getattr(dataset, "prefetcher", None)
+            if prefetcher is not None:
+                prefetcher.stop()
+        except Exception:
             pass
