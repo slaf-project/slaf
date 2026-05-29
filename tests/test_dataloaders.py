@@ -69,9 +69,11 @@ class TestSLAFDataLoader:
     def test_dataloader_initialization_with_default_loading_mode(self, tiny_slaf):
         """Test SLAFDataLoader default loading mode."""
         dataloader = build_dataloader(tiny_slaf)
+        batch_processor = dataloader._dataset.batch_processor
 
-        assert dataloader._dataset.batch_processor.use_mixture_of_scanners is True
-        assert dataloader._dataset.batch_processor.by_fragment is True
+        assert batch_processor.use_mixture_of_scanners is True
+        assert batch_processor.by_fragment is True
+        assert batch_processor.expression_dataset is not None
 
     def test_geneformer_iteration(self, tiny_slaf):
         """Test dataloader iteration with Geneformer tokenizer"""
