@@ -104,6 +104,7 @@ test = [
     "psutil>=6.0.0",
     "torch>=2.5.0",
     "tiledbsoma>=1.17.1",
+    "omegaconf>=2.3.0",
 ]
 
 # Full installation includes all optional dependencies

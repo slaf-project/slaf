@@ -5552,6 +5552,7 @@ ml = [
 test = [
     { name = "coverage" },
     { name = "h5py" },
+    { name = "omegaconf" },
     { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -5603,6 +5604,7 @@ requires-dist = [
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8.0" },
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "omegaconf", marker = "extra == 'ml'", specifier = ">=2.3.0" },
+    { name = "omegaconf", marker = "extra == 'test'", specifier = ">=2.3.0" },
     { name = "pandas", specifier = ">=2.1.0,<3" },
     { name = "polars", specifier = ">=1.36.0" },
     { name = "psutil", marker = "extra == 'dev'", specifier = ">=6.0.0" },
