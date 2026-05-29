@@ -109,15 +109,16 @@ class ScGPTWindow(Window):
                     )
                 )
                 .with_columns(
-                    pl.when(pl.col("log_value") > 0)
+                    # TODO: Decide whether scGPT expression bins should use log_value
+                    # or the transformed raw value column for normalization.
+                    pl.when(pl.col(vk) > 0)
                     .then(
-                        (
-                            pl.col("log_value")
-                            * n_expression_bins
-                            / pl.col("log_value").max().over(gk)
+                        1
+                        + (
+                            (pl.col(vk) * n_expression_bins / pl.col(vk).max().over(gk))
+                            .floor()
+                            .clip(0, n_expression_bins - 1)
                         )
-                        .floor()
-                        .clip(0, n_expression_bins - 1)
                     )
                     .otherwise(0)
                     .alias("expr_bin")
