@@ -122,7 +122,9 @@ def prefetch_worker(
                 if "args" in tokenizer_config and tokenizer_config.args is not None
                 else {}
             )
-            tokenizer_instance = tokenizer_class( slaf_array=slaf_array, **tokenizer_kwargs)
+            tokenizer_instance = tokenizer_class(
+                slaf_array=slaf_array, **tokenizer_kwargs
+            )
 
             def tokenize_grouped(
                 grouped_df: pl.DataFrame, schema: DataSchema
