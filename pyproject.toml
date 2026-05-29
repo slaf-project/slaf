@@ -37,7 +37,12 @@ dependencies = [
 
 [project.optional-dependencies]
 # Machine learning - for ML modules
-ml = ["torch>=2.5.0", "tiledb>=0.34.2", "tiledbsoma>=1.17.1"]
+ml = [
+    "torch>=2.5.0",
+    "tiledb>=0.34.2",
+    "tiledbsoma>=1.17.1",
+    "omegaconf>=2.3.0",
+]
 
 # Advanced single-cell tools
 advanced = ["igraph>=0.11.9", "leidenalg>=0.10.2"]
@@ -99,6 +104,7 @@ test = [
     "psutil>=6.0.0",
     "torch>=2.5.0",
     "tiledbsoma>=1.17.1",
+    "omegaconf>=2.3.0",
 ]
 
 # Full installation includes all optional dependencies
