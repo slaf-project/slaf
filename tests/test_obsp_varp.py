@@ -11,7 +11,7 @@ import tempfile
 
 import numpy as np
 import pytest
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix, isspmatrix_csr
 
 from slaf.core.slaf import SLAFArray
 from slaf.data.converter import SLAFConverter
@@ -104,12 +104,14 @@ def test_obsp_accessible_after_conversion(anndata_with_obsp_varp):
 
         orig_conn = anndata_with_obsp_varp.obsp["connectivities"]
         conv_conn = adata.obsp["connectivities"]
+        assert isspmatrix_csr(conv_conn)
         assert conv_conn.shape == (10, 10)
-        np.testing.assert_array_almost_equal(conv_conn, orig_conn, decimal=5)
+        np.testing.assert_array_almost_equal(conv_conn.toarray(), orig_conn, decimal=5)
 
         orig_dist = anndata_with_obsp_varp.obsp["distances"]
         conv_dist = adata.obsp["distances"]
-        np.testing.assert_array_almost_equal(conv_dist, orig_dist, decimal=5)
+        assert isspmatrix_csr(conv_dist)
+        np.testing.assert_array_almost_equal(conv_dist.toarray(), orig_dist, decimal=5)
 
 
 def test_varp_accessible_after_conversion(anndata_with_obsp_varp):
@@ -128,8 +130,9 @@ def test_varp_accessible_after_conversion(anndata_with_obsp_varp):
         assert "correlation" in adata.varp
         orig = anndata_with_obsp_varp.varp["correlation"]
         conv = adata.varp["correlation"]
+        assert isspmatrix_csr(conv)
         assert conv.shape == (5, 5)
-        np.testing.assert_array_almost_equal(conv, orig, decimal=5)
+        np.testing.assert_array_almost_equal(conv.toarray(), orig, decimal=5)
 
 
 def test_obsp_immutable_after_conversion(anndata_with_obsp_varp):
@@ -172,14 +175,18 @@ def test_create_new_obsp_key(anndata_with_obsp_varp):
         adata.obsp["custom"] = new_mat
 
         assert "custom" in adata.obsp
-        np.testing.assert_array_almost_equal(adata.obsp["custom"], new_mat, decimal=5)
+        custom = adata.obsp["custom"]
+        assert isspmatrix_csr(custom)
+        np.testing.assert_array_almost_equal(custom.toarray(), new_mat, decimal=5)
 
         # Reload and check config + data
         slaf2 = SLAFArray(tmpdir, load_metadata=False)
         assert "custom" in slaf2.config["obsp"]["available"]
         assert "custom" in slaf2.config["obsp"]["mutable"]
         adata2 = LazyAnnData(slaf2)
-        np.testing.assert_array_almost_equal(adata2.obsp["custom"], new_mat, decimal=5)
+        np.testing.assert_array_almost_equal(
+            adata2.obsp["custom"].toarray(), new_mat, decimal=5
+        )
 
 
 def test_create_new_varp_key(anndata_with_obsp_varp):
@@ -199,11 +206,15 @@ def test_create_new_varp_key(anndata_with_obsp_varp):
         adata.varp["new_key"] = new_mat
 
         assert "new_key" in adata.varp
-        np.testing.assert_array_almost_equal(adata.varp["new_key"], new_mat, decimal=5)
+        np.testing.assert_array_almost_equal(
+            adata.varp["new_key"].toarray(), new_mat, decimal=5
+        )
 
         slaf2 = SLAFArray(tmpdir, load_metadata=False)
         adata2 = LazyAnnData(slaf2)
-        np.testing.assert_array_almost_equal(adata2.varp["new_key"], new_mat, decimal=5)
+        np.testing.assert_array_almost_equal(
+            adata2.varp["new_key"].toarray(), new_mat, decimal=5
+        )
 
 
 def test_empty_obsp_varp_when_absent():
