@@ -9,6 +9,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import polars as pl
+from omegaconf import OmegaConf
 
 from slaf.distributed.data_source import DataSource
 from slaf.distributed.worker import prefetch_worker
@@ -64,6 +65,33 @@ class MockKVStore:
         return self._store.pop(key, default)
 
 
+def make_data_source_config():
+    return OmegaConf.create({"type": "lance", "path": "/fake/path"})
+
+
+def make_processor_config(**overrides):
+    config = {
+        "schema": {
+            "group_key": "group_id",
+            "item_key": "item_id",
+            "value_key": "value",
+            "item_list_key": "item_list",
+        },
+        "tokenizer_config": None,
+        "shuffle_factory": None,
+        "window_factory": None,
+        "use_tokenizer_window": False,
+        "continuity_check": "sequential",
+        "max_items": 5,
+        "seed": 42,
+        "n_epochs": 1,
+        "window_kwargs": {},
+        "enable_cross_worker_boundary_merging": False,
+    }
+    config.update(overrides)
+    return OmegaConf.create(config)
+
+
 def create_test_dataframe(
     group_key: str = "group_id",
     item_key: str = "item_id",
@@ -102,18 +130,8 @@ class TestWorker:
         queue = MockQueue()
 
         # Configs
-        data_source_config = {"type": "lance", "path": "/fake/path"}
-        processor_config = {
-            "schema": {
-                "group_key": "group_id",
-                "item_key": "item_id",
-                "value_key": "value",
-                "item_list_key": "item_list",
-            },
-            "max_items": 5,
-            "seed": 42,
-            "n_epochs": 1,
-        }
+        data_source_config = make_data_source_config()
+        processor_config = make_processor_config()
 
         # Call worker
         result = prefetch_worker(
@@ -147,18 +165,8 @@ class TestWorker:
         queue = MockQueue()
 
         # Configs
-        data_source_config = {"type": "lance", "path": "/fake/path"}
-        processor_config = {
-            "schema": {
-                "group_key": "group_id",
-                "item_key": "item_id",
-                "value_key": "value",
-                "item_list_key": "item_list",
-            },
-            "max_items": 5,
-            "seed": 42,
-            "n_epochs": 1,
-        }
+        data_source_config = make_data_source_config()
+        processor_config = make_processor_config()
 
         # Call worker
         result = prefetch_worker(
@@ -199,18 +207,8 @@ class TestWorker:
         queue = MockQueue()
 
         # Configs
-        data_source_config = {"type": "lance", "path": "/fake/path"}
-        processor_config = {
-            "schema": {
-                "group_key": "group_id",
-                "item_key": "item_id",
-                "value_key": "value",
-                "item_list_key": "item_list",
-            },
-            "max_items": 5,
-            "seed": 42,
-            "n_epochs": 1,
-        }
+        data_source_config = make_data_source_config()
+        processor_config = make_processor_config()
 
         # Call worker
         result = prefetch_worker(
@@ -243,18 +241,8 @@ class TestWorker:
         queue = MockQueue()
 
         # Configs
-        data_source_config = {"type": "lance", "path": "/fake/path"}
-        processor_config = {
-            "schema": {
-                "group_key": "group_id",
-                "item_key": "item_id",
-                "value_key": "value",
-                "item_list_key": "item_list",
-            },
-            "max_items": 5,
-            "seed": 42,
-            "n_epochs": 1,
-        }
+        data_source_config = make_data_source_config()
+        processor_config = make_processor_config()
 
         # Call worker with prefetch_batch_count
         result = prefetch_worker(
@@ -287,18 +275,8 @@ class TestWorker:
         queue = MockQueue()
 
         # Configs
-        data_source_config = {"type": "lance", "path": "/fake/path"}
-        processor_config = {
-            "schema": {
-                "group_key": "group_id",
-                "item_key": "item_id",
-                "value_key": "value",
-                "item_list_key": "item_list",
-            },
-            "max_items": 5,
-            "seed": 42,
-            "n_epochs": 1,
-        }
+        data_source_config = make_data_source_config()
+        processor_config = make_processor_config()
 
         # Call worker with prefetch_batch_size
         result = prefetch_worker(
@@ -331,18 +309,8 @@ class TestWorker:
         queue = MockQueue()
 
         # Configs
-        data_source_config = {"type": "lance", "path": "/fake/path"}
-        processor_config = {
-            "schema": {
-                "group_key": "group_id",
-                "item_key": "item_id",
-                "value_key": "value",
-                "item_list_key": "item_list",
-            },
-            "max_items": 5,
-            "seed": 42,
-            "n_epochs": 1,
-        }
+        data_source_config = make_data_source_config()
+        processor_config = make_processor_config()
 
         # Call worker with max_batches
         result = prefetch_worker(
@@ -377,20 +345,10 @@ class TestWorker:
         kv_store = MockKVStore()
 
         # Configs with cross-worker merging enabled
-        data_source_config = {"type": "lance", "path": "/fake/path"}
-        processor_config = {
-            "schema": {
-                "group_key": "group_id",
-                "item_key": "item_id",
-                "value_key": "value",
-                "item_list_key": "item_list",
-            },
-            "max_items": 5,
-            "seed": 42,
-            "n_epochs": 1,
-            "enable_cross_worker_boundary_merging": True,
-            "continuity_check": "sequential",
-        }
+        data_source_config = make_data_source_config()
+        processor_config = make_processor_config(
+            enable_cross_worker_boundary_merging=True
+        )
 
         # Call worker with KV store
         result = prefetch_worker(
@@ -424,18 +382,8 @@ class TestWorker:
         queue = MockQueue()
 
         # Configs
-        data_source_config = {"type": "lance", "path": "/fake/path"}
-        processor_config = {
-            "schema": {
-                "group_key": "group_id",
-                "item_key": "item_id",
-                "value_key": "value",
-                "item_list_key": "item_list",
-            },
-            "max_items": 5,
-            "seed": 42,
-            "n_epochs": 1,
-        }
+        data_source_config = make_data_source_config()
+        processor_config = make_processor_config()
 
         # Call worker
         result = prefetch_worker(
@@ -469,18 +417,8 @@ class TestWorker:
         queue = MockQueue()
 
         # Configs
-        data_source_config = {"type": "lance", "path": "/fake/path"}
-        processor_config = {
-            "schema": {
-                "group_key": "group_id",
-                "item_key": "item_id",
-                "value_key": "value",
-                "item_list_key": "item_list",
-            },
-            "max_items": 5,
-            "seed": 42,
-            "n_epochs": 1,
-        }
+        data_source_config = make_data_source_config()
+        processor_config = make_processor_config()
 
         # Call worker - should handle error gracefully
         result = prefetch_worker(
@@ -513,18 +451,8 @@ class TestWorker:
         queue = MockQueue()
 
         # Configs
-        data_source_config = {"type": "lance", "path": "/fake/path"}
-        processor_config = {
-            "schema": {
-                "group_key": "group_id",
-                "item_key": "item_id",
-                "value_key": "value",
-                "item_list_key": "item_list",
-            },
-            "max_items": 5,
-            "seed": 42,
-            "n_epochs": 1,
-        }
+        data_source_config = make_data_source_config()
+        processor_config = make_processor_config()
 
         # Call worker
         result = prefetch_worker(

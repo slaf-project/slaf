@@ -11,7 +11,7 @@ import tempfile
 
 import numpy as np
 import pytest
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix, isspmatrix_csr
 
 from slaf.core.slaf import SLAFArray
 from slaf.data.converter import SLAFConverter
@@ -104,12 +104,14 @@ def test_obsp_accessible_after_conversion(anndata_with_obsp_varp):
 
         orig_conn = anndata_with_obsp_varp.obsp["connectivities"]
         conv_conn = adata.obsp["connectivities"]
+        assert isspmatrix_csr(conv_conn)
         assert conv_conn.shape == (10, 10)
-        np.testing.assert_array_almost_equal(conv_conn, orig_conn, decimal=5)
+        np.testing.assert_array_almost_equal(conv_conn.toarray(), orig_conn, decimal=5)
 
         orig_dist = anndata_with_obsp_varp.obsp["distances"]
         conv_dist = adata.obsp["distances"]
-        np.testing.assert_array_almost_equal(conv_dist, orig_dist, decimal=5)
+        assert isspmatrix_csr(conv_dist)
+        np.testing.assert_array_almost_equal(conv_dist.toarray(), orig_dist, decimal=5)
 
 
 def test_varp_accessible_after_conversion(anndata_with_obsp_varp):
@@ -128,8 +130,9 @@ def test_varp_accessible_after_conversion(anndata_with_obsp_varp):
         assert "correlation" in adata.varp
         orig = anndata_with_obsp_varp.varp["correlation"]
         conv = adata.varp["correlation"]
+        assert isspmatrix_csr(conv)
         assert conv.shape == (5, 5)
-        np.testing.assert_array_almost_equal(conv, orig, decimal=5)
+        np.testing.assert_array_almost_equal(conv.toarray(), orig, decimal=5)
 
 
 def test_obsp_immutable_after_conversion(anndata_with_obsp_varp):
@@ -172,14 +175,18 @@ def test_create_new_obsp_key(anndata_with_obsp_varp):
         adata.obsp["custom"] = new_mat
 
         assert "custom" in adata.obsp
-        np.testing.assert_array_almost_equal(adata.obsp["custom"], new_mat, decimal=5)
+        custom = adata.obsp["custom"]
+        assert isspmatrix_csr(custom)
+        np.testing.assert_array_almost_equal(custom.toarray(), new_mat, decimal=5)
 
         # Reload and check config + data
         slaf2 = SLAFArray(tmpdir, load_metadata=False)
         assert "custom" in slaf2.config["obsp"]["available"]
         assert "custom" in slaf2.config["obsp"]["mutable"]
         adata2 = LazyAnnData(slaf2)
-        np.testing.assert_array_almost_equal(adata2.obsp["custom"], new_mat, decimal=5)
+        np.testing.assert_array_almost_equal(
+            adata2.obsp["custom"].toarray(), new_mat, decimal=5
+        )
 
 
 def test_create_new_varp_key(anndata_with_obsp_varp):
@@ -199,11 +206,15 @@ def test_create_new_varp_key(anndata_with_obsp_varp):
         adata.varp["new_key"] = new_mat
 
         assert "new_key" in adata.varp
-        np.testing.assert_array_almost_equal(adata.varp["new_key"], new_mat, decimal=5)
+        np.testing.assert_array_almost_equal(
+            adata.varp["new_key"].toarray(), new_mat, decimal=5
+        )
 
         slaf2 = SLAFArray(tmpdir, load_metadata=False)
         adata2 = LazyAnnData(slaf2)
-        np.testing.assert_array_almost_equal(adata2.varp["new_key"], new_mat, decimal=5)
+        np.testing.assert_array_almost_equal(
+            adata2.varp["new_key"].toarray(), new_mat, decimal=5
+        )
 
 
 def test_empty_obsp_varp_when_absent():
@@ -237,3 +248,87 @@ def test_empty_obsp_varp_when_absent():
 
         assert not os.path.isdir(os.path.join(tmpdir, "cellsxcells.lance"))
         assert not os.path.isdir(os.path.join(tmpdir, "genesxgenes.lance"))
+
+
+def _write_obsp_h5ad(path, cell_prefix, adjacency, extra_obsp=None):
+    import scanpy as sc
+
+    n_cells = adjacency.shape[0]
+    x = csr_matrix(np.eye(n_cells, 3, dtype=np.float32))
+    adata = sc.AnnData(X=x)
+    adata.obs_names = [f"{cell_prefix}_{idx}" for idx in range(n_cells)]
+    adata.var_names = [f"gene_{idx}" for idx in range(3)]
+    adata.obsp["adjacency_matrix"] = csr_matrix(adjacency, dtype=np.float32)
+    for key, matrix in (extra_obsp or {}).items():
+        adata.obsp[key] = csr_matrix(matrix, dtype=np.float32)
+    adata.write_h5ad(path)
+
+
+def _convert_h5ad_directory(input_dir, output_dir):
+    converter = SLAFConverter(
+        use_optimized_dtypes=False,
+        compact_after_write=False,
+        chunked=False,
+        enable_checkpointing=False,
+    )
+    converter.convert(input_dir, output_dir)
+
+
+def test_multi_file_h5ad_conversion_preserves_obsp_block_diagonal():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_dir = os.path.join(tmpdir, "inputs")
+        output_dir = os.path.join(tmpdir, "out.slaf")
+        os.makedirs(input_dir)
+        first = np.zeros((2, 2), dtype=np.float32)
+        first[0, 1] = first[1, 0] = 1.0
+        second = np.zeros((3, 3), dtype=np.float32)
+        second[0, 2] = 0.7
+        second[2, 0] = 0.4
+        _write_obsp_h5ad(os.path.join(input_dir, "a.h5ad"), "a", first)
+        _write_obsp_h5ad(os.path.join(input_dir, "b.h5ad"), "b", second)
+
+        _convert_h5ad_directory(input_dir, output_dir)
+
+        slaf = SLAFArray(output_dir, load_metadata=False)
+        assert slaf.config["tables"]["cellsxcells"] == "cellsxcells.lance"
+        assert slaf.config["obsp"]["available"] == ["adjacency_matrix"]
+        assert slaf.config["obsp"]["dimensions"]["adjacency_matrix"] == 5
+
+        matrix = LazyAnnData(slaf).obsp["adjacency_matrix"]
+        assert isspmatrix_csr(matrix)
+        expected = np.zeros((5, 5), dtype=np.float32)
+        expected[:2, :2] = first
+        expected[2:, 2:] = second
+        np.testing.assert_array_almost_equal(matrix.toarray(), expected, decimal=5)
+
+
+def test_multi_file_h5ad_conversion_preserves_union_obsp_keys():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_dir = os.path.join(tmpdir, "inputs")
+        output_dir = os.path.join(tmpdir, "out.slaf")
+        os.makedirs(input_dir)
+        adjacency = np.asarray([[0.0, 1.0], [1.0, 0.0]], dtype=np.float32)
+        distances = adjacency * 2.0
+        _write_obsp_h5ad(
+            os.path.join(input_dir, "a.h5ad"),
+            "a",
+            adjacency,
+            extra_obsp={"distances": distances},
+        )
+        _write_obsp_h5ad(os.path.join(input_dir, "b.h5ad"), "b", adjacency)
+
+        _convert_h5ad_directory(input_dir, output_dir)
+
+        slaf = SLAFArray(output_dir, load_metadata=False)
+        assert set(slaf.config["obsp"]["available"]) == {
+            "adjacency_matrix",
+            "distances",
+        }
+        lazy = LazyAnnData(slaf)
+        expected_distances = np.zeros((4, 4), dtype=np.float32)
+        expected_distances[:2, :2] = distances
+        np.testing.assert_array_almost_equal(
+            lazy.obsp["distances"].toarray(),
+            expected_distances,
+            decimal=5,
+        )
