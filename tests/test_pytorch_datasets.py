@@ -201,6 +201,7 @@ class TestSLAFIterableDataset:
 
         batch = TokenizedPrefetchBatch(
             batch_id=0,
+            epoch=0,
             input_ids=input_ids,
             attention_mask=attention_mask,
             cell_integer_ids=[100, 101],
@@ -222,6 +223,7 @@ class TestSLAFIterableDataset:
 
         batch = TokenizedPrefetchBatch(
             batch_id=1,
+            epoch=0,
             input_ids=input_ids,
             attention_mask=attention_mask,
             cell_integer_ids=[200, 201, 202],
@@ -384,13 +386,19 @@ class TestSLAFIterableDataset:
         batch = next(iter(dataset))
         input_ids = batch["input_ids"]
         values = batch["values"]
+        attention_mask = batch["attention_mask"]
 
         assert values.shape == input_ids.shape
-        cls_positions = input_ids == tokenizer.special_tokens["CLS"]
-        sep_positions = input_ids == tokenizer.special_tokens["SEP"]
         pad_value = tokenizer.special_tokens["PAD"]
-        assert torch.all(values[cls_positions] == pad_value)
-        assert torch.all(values[sep_positions] == pad_value)
+        assert torch.all(input_ids[:, 0] == tokenizer.special_tokens["CLS"])
+        assert torch.all(values[:, 0] == pad_value)
+
+        sep_positions = attention_mask.long().sum(dim=1) - 1
+        row_indices = torch.arange(input_ids.shape[0])
+        assert torch.all(
+            input_ids[row_indices, sep_positions] == tokenizer.special_tokens["SEP"]
+        )
+        assert torch.all(values[row_indices, sep_positions] == pad_value)
 
     def test_device_transfer(self, tiny_slaf):
         """Test device transfer functionality"""
@@ -768,6 +776,7 @@ class TestPrefetchBatchProcessing:
 
         batch = TokenizedPrefetchBatch(
             batch_id=0,
+            epoch=0,
             input_ids=input_ids,
             attention_mask=attention_mask,
             cell_integer_ids=[100, 101],
