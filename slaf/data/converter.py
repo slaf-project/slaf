@@ -725,6 +725,7 @@ class SLAFConverter:
         # Determine starting file and chunk from checkpoint
         start_file_idx = 0
         start_chunk_idx = 0
+        global_expression_row_offset = 0
         if checkpoint and checkpoint.get("status") == "in_progress":
             # Handle both file-level and chunk-level checkpoints
             last_completed_chunk = checkpoint.get("last_completed_chunk", -1)
@@ -737,6 +738,12 @@ class SLAFConverter:
                 start_file_idx = checkpoint.get("last_completed_file", -1)
                 start_chunk_idx = last_completed_chunk + 1
             global_cell_offset = checkpoint.get("global_cell_offset", 0)
+            expression_path = f"{output_path}/expression.lance"
+            global_expression_row_offset = (
+                lance.dataset(expression_path).count_rows()
+                if self._path_exists(expression_path)
+                else 0
+            )
 
             # Enhanced logging for resume tracking
             logger.info("=" * 60)
@@ -820,8 +827,12 @@ class SLAFConverter:
                     obs_df["source_file"] = source_file
 
                     # Precompute cell start indices
-                    obs_df["cell_start_index"] = self._compute_cell_start_indices(
-                        reader, obs_df
+                    obs_df["cell_start_index"] = (
+                        np.asarray(
+                            self._compute_cell_start_indices(reader, obs_df),
+                            dtype=np.int64,
+                        )
+                        + global_expression_row_offset
                     )
 
                     # Convert metadata to Lance tables
@@ -933,8 +944,11 @@ class SLAFConverter:
                         }
                     )
 
-                    # Update global cell offset
+                    # Update global offsets
                     global_cell_offset += len(obs_df)
+                    global_expression_row_offset = lance.dataset(
+                        f"{output_path}/expression.lance"
+                    ).count_rows()
                     total_cells += len(obs_df)
 
                     # Save checkpoint after each file (chunk-level checkpointing is handled in _process_file_chunks_with_checkpoint)
@@ -1047,6 +1061,10 @@ class SLAFConverter:
         )
         existing_cells_table = existing_cells_dataset.to_table()
         current_cell_count = len(existing_cells_table)
+        existing_expression_dataset = lance.dataset(
+            os.path.join(existing_slaf_path, "expression.lance")
+        )
+        global_expression_row_offset = existing_expression_dataset.count_rows()
 
         # Track source file information
         source_file_info = []
@@ -1123,8 +1141,12 @@ class SLAFConverter:
                         logger.info("✓ Added source_file column to existing dataset")
 
                     # Precompute cell start indices
-                    obs_df["cell_start_index"] = self._compute_cell_start_indices(
-                        reader, obs_df
+                    obs_df["cell_start_index"] = (
+                        np.asarray(
+                            self._compute_cell_start_indices(reader, obs_df),
+                            dtype=np.int64,
+                        )
+                        + global_expression_row_offset
                     )
 
                     # Convert metadata to Lance tables
@@ -1164,8 +1186,11 @@ class SLAFConverter:
                         }
                     )
 
-                    # Update global cell offset
+                    # Update global offsets
                     global_cell_offset += len(obs_df)
+                    global_expression_row_offset = lance.dataset(
+                        os.path.join(existing_slaf_path, "expression.lance")
+                    ).count_rows()
                     total_new_cells += len(obs_df)
 
                     # Save checkpoint after each file (for append operations)
