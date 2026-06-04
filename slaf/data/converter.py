@@ -714,6 +714,7 @@ class SLAFConverter:
                 "Layers are inconsistent across files. Skipping layers.lance creation."
             )
             layer_names = []
+        obsp_keys = self._discover_multi_file_obsp_keys(input_files, input_format)
 
         # Track source file information
         source_file_info = []
@@ -724,6 +725,7 @@ class SLAFConverter:
         # Determine starting file and chunk from checkpoint
         start_file_idx = 0
         start_chunk_idx = 0
+        global_expression_row_offset = 0
         if checkpoint and checkpoint.get("status") == "in_progress":
             # Handle both file-level and chunk-level checkpoints
             last_completed_chunk = checkpoint.get("last_completed_chunk", -1)
@@ -736,6 +738,12 @@ class SLAFConverter:
                 start_file_idx = checkpoint.get("last_completed_file", -1)
                 start_chunk_idx = last_completed_chunk + 1
             global_cell_offset = checkpoint.get("global_cell_offset", 0)
+            expression_path = f"{output_path}/expression.lance"
+            global_expression_row_offset = (
+                lance.dataset(expression_path).count_rows()
+                if self._path_exists(expression_path)
+                else 0
+            )
 
             # Enhanced logging for resume tracking
             logger.info("=" * 60)
@@ -819,8 +827,12 @@ class SLAFConverter:
                     obs_df["source_file"] = source_file
 
                     # Precompute cell start indices
-                    obs_df["cell_start_index"] = self._compute_cell_start_indices(
-                        reader, obs_df
+                    obs_df["cell_start_index"] = (
+                        np.asarray(
+                            self._compute_cell_start_indices(reader, obs_df),
+                            dtype=np.int64,
+                        )
+                        + global_expression_row_offset
                     )
 
                     # Convert metadata to Lance tables
@@ -910,6 +922,18 @@ class SLAFConverter:
                             # Restore original value_type
                             reader.value_type = original_value_type
 
+                    if obsp_keys and input_format == "h5ad":
+                        self._append_multi_file_obsp(
+                            file_path=file_path,
+                            output_path=output_path,
+                            obsp_keys=obsp_keys,
+                            cell_offset=global_cell_offset,
+                            n_cells=len(obs_df),
+                            initialize_table=not self._path_exists(
+                                f"{output_path}/cellsxcells.lance"
+                            ),
+                        )
+
                     # Track source file information
                     source_file_info.append(
                         {
@@ -920,8 +944,11 @@ class SLAFConverter:
                         }
                     )
 
-                    # Update global cell offset
+                    # Update global offsets
                     global_cell_offset += len(obs_df)
+                    global_expression_row_offset = lance.dataset(
+                        f"{output_path}/expression.lance"
+                    ).count_rows()
                     total_cells += len(obs_df)
 
                     # Save checkpoint after each file (chunk-level checkpointing is handled in _process_file_chunks_with_checkpoint)
@@ -971,6 +998,7 @@ class SLAFConverter:
             None,
             None,
             layer_names=layer_names,  # Pass layer names if consistent
+            obsp_keys=obsp_keys,
         )
 
         # Clear checkpoint after successful completion
@@ -1033,6 +1061,10 @@ class SLAFConverter:
         )
         existing_cells_table = existing_cells_dataset.to_table()
         current_cell_count = len(existing_cells_table)
+        existing_expression_dataset = lance.dataset(
+            os.path.join(existing_slaf_path, "expression.lance")
+        )
+        global_expression_row_offset = existing_expression_dataset.count_rows()
 
         # Track source file information
         source_file_info = []
@@ -1109,8 +1141,12 @@ class SLAFConverter:
                         logger.info("✓ Added source_file column to existing dataset")
 
                     # Precompute cell start indices
-                    obs_df["cell_start_index"] = self._compute_cell_start_indices(
-                        reader, obs_df
+                    obs_df["cell_start_index"] = (
+                        np.asarray(
+                            self._compute_cell_start_indices(reader, obs_df),
+                            dtype=np.int64,
+                        )
+                        + global_expression_row_offset
                     )
 
                     # Convert metadata to Lance tables
@@ -1150,8 +1186,11 @@ class SLAFConverter:
                         }
                     )
 
-                    # Update global cell offset
+                    # Update global offsets
                     global_cell_offset += len(obs_df)
+                    global_expression_row_offset = lance.dataset(
+                        os.path.join(existing_slaf_path, "expression.lance")
+                    ).count_rows()
                     total_new_cells += len(obs_df)
 
                     # Save checkpoint after each file (for append operations)
@@ -3384,6 +3423,117 @@ class SLAFConverter:
         j_ids = index_to_int_id[cols]
         return i_ids, j_ids, values
 
+    def _discover_multi_file_obsp_keys(
+        self,
+        input_files: list[str],
+        input_format: str,
+    ) -> list[str]:
+        """Return valid obsp keys present across h5ad files for multi-file conversion."""
+        if input_format != "h5ad" or not SCANPY_AVAILABLE:
+            return []
+
+        obsp_keys: list[str] = []
+        seen: set[str] = set()
+        for file_path in input_files:
+            adata = sc.read_h5ad(file_path, backed="r")
+            try:
+                if not hasattr(adata, "obsp") or not adata.obsp:
+                    continue
+                n_cells = int(adata.n_obs)
+                for key, matrix in adata.obsp.items():
+                    if not hasattr(matrix, "shape") or len(matrix.shape) != 2:
+                        logger.warning(
+                            f"obsp '{key}' in {file_path} is not 2D. Skipping."
+                        )
+                        continue
+                    if matrix.shape[0] != n_cells or matrix.shape[1] != n_cells:
+                        logger.warning(
+                            f"obsp '{key}' in {file_path} shape {matrix.shape} != ({n_cells}, {n_cells}). Skipping."
+                        )
+                        continue
+                    if key not in seen:
+                        seen.add(key)
+                        obsp_keys.append(key)
+            finally:
+                adata.file.close()
+        if obsp_keys:
+            logger.info(f"Detected {len(obsp_keys)} multi-file obsp keys: {obsp_keys}")
+        return obsp_keys
+
+    def _append_multi_file_obsp(
+        self,
+        file_path: str,
+        output_path: str,
+        obsp_keys: list[str],
+        cell_offset: int,
+        n_cells: int,
+        initialize_table: bool,
+    ) -> None:
+        """Append one h5ad file's local obsp matrices into global cellsxcells.lance."""
+        adata = sc.read_h5ad(file_path, backed="r")
+        try:
+            index_to_int_id = np.arange(
+                cell_offset,
+                cell_offset + n_cells,
+                dtype=np.uint32,
+            )
+            coo_rows: dict[tuple[int, int], dict[str, float]] = {}
+
+            for key in obsp_keys:
+                if key not in adata.obsp:
+                    continue
+                matrix = adata.obsp[key]
+                if not hasattr(matrix, "shape") or len(matrix.shape) != 2:
+                    continue
+                if matrix.shape[0] != n_cells or matrix.shape[1] != n_cells:
+                    continue
+                i_ids, j_ids, values = self._matrix_to_coo_triples(
+                    matrix,
+                    index_to_int_id,
+                )
+                for idx in range(len(i_ids)):
+                    ij = (int(i_ids[idx]), int(j_ids[idx]))
+                    if ij not in coo_rows:
+                        coo_rows[ij] = dict.fromkeys(obsp_keys, 0.0)
+                    coo_rows[ij][key] = float(values[idx])
+
+            i_list: list[int] = []
+            j_list: list[int] = []
+            key_columns: dict[str, list[float]] = {key: [] for key in obsp_keys}
+            for i_id, j_id in sorted(coo_rows):
+                i_list.append(i_id)
+                j_list.append(j_id)
+                coo_row = coo_rows[(i_id, j_id)]
+                for key in obsp_keys:
+                    key_columns[key].append(coo_row.get(key, 0.0))
+
+            if not i_list:
+                if not initialize_table:
+                    return
+                i_list, j_list = [0], [0]
+                key_columns = {key: [0.0] for key in obsp_keys}
+
+            table = pa.table(
+                {
+                    "cell_integer_id_i": pa.array(i_list, type=pa.uint32()),
+                    "cell_integer_id_j": pa.array(j_list, type=pa.uint32()),
+                    **{
+                        key: pa.array(key_columns[key], type=pa.float32())
+                        for key in obsp_keys
+                    },
+                }
+            )
+            cellsxcells_path = f"{output_path}/cellsxcells.lance"
+            lance.write_dataset(
+                table,
+                cellsxcells_path,
+                mode="overwrite" if initialize_table else "append",
+                enable_v2_manifest_paths=self.enable_v2_manifest,
+                data_storage_version="2.2",
+            )
+        finally:
+            adata.file.close()
+
     def _convert_obsp(
         self,
         obsp: dict[str, Any],
@@ -4152,6 +4302,7 @@ class SLAFConverter:
         combined_cells: pa.Table | None = None,
         combined_genes: pa.Table | None = None,
         layer_names: list[str] | None = None,
+        obsp_keys: list[str] | None = None,
     ):
         """Save SLAF configuration for multi-file conversion with source file tracking"""
 
@@ -4222,6 +4373,15 @@ class SLAFConverter:
                 "available": layer_names,
                 "immutable": layer_names,  # All converted layers are immutable
                 "mutable": [],
+            }
+
+        if obsp_keys:
+            config["tables"]["cellsxcells"] = "cellsxcells.lance"
+            config["obsp"] = {
+                "available": obsp_keys,
+                "immutable": obsp_keys,
+                "mutable": [],
+                "dimensions": dict.fromkeys(obsp_keys, n_cells),
             }
 
         config_path = f"{output_path}/config.json"
