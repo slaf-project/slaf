@@ -9,7 +9,9 @@ Tests for obsp and varp support (pairwise matrices in COO storage).
 import os
 import tempfile
 
+import lance
 import numpy as np
+import pyarrow as pa
 import pytest
 from scipy.sparse import csr_matrix, isspmatrix_csr
 
@@ -65,6 +67,27 @@ def test_convert_anndata_with_obsp(anndata_with_obsp_varp):
         assert set(slaf.config["obsp"]["immutable"]) == {"connectivities", "distances"}
         assert slaf.config["obsp"]["dimensions"]["connectivities"] == 10
         assert slaf.config["tables"].get("cellsxcells") == "cellsxcells.lance"
+
+
+def test_convert_anndata_with_obsp_creates_source_cell_index(
+    anndata_with_obsp_varp,
+):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        converter = SLAFConverter(
+            use_optimized_dtypes=False,
+            compact_after_write=False,
+            chunked=False,
+            create_indices=True,
+        )
+        converter.convert_anndata(anndata_with_obsp_varp, tmpdir)
+
+        cellsxcells = lance.dataset(os.path.join(tmpdir, "cellsxcells.lance"))
+        indexed_fields = {
+            field
+            for index in cellsxcells.list_indices()
+            for field in index.get("fields", [])
+        }
+        assert "cell_integer_id_i" in indexed_fields
 
 
 def test_convert_anndata_with_varp(anndata_with_obsp_varp):
@@ -250,7 +273,7 @@ def test_empty_obsp_varp_when_absent():
         assert not os.path.isdir(os.path.join(tmpdir, "genesxgenes.lance"))
 
 
-def _write_obsp_h5ad(path, cell_prefix, adjacency, extra_obsp=None):
+def _write_obsp_h5ad(path, cell_prefix, adjacency, extra_obsp=None, obsm=None):
     import scanpy as sc
 
     n_cells = adjacency.shape[0]
@@ -261,6 +284,8 @@ def _write_obsp_h5ad(path, cell_prefix, adjacency, extra_obsp=None):
     adata.obsp["adjacency_matrix"] = csr_matrix(adjacency, dtype=np.float32)
     for key, matrix in (extra_obsp or {}).items():
         adata.obsp[key] = csr_matrix(matrix, dtype=np.float32)
+    for key, values in (obsm or {}).items():
+        adata.obsm[key] = np.asarray(values, dtype=np.float32)
     adata.write_h5ad(path)
 
 
@@ -332,3 +357,105 @@ def test_multi_file_h5ad_conversion_preserves_union_obsp_keys():
             expected_distances,
             decimal=5,
         )
+
+
+def test_multi_file_h5ad_conversion_preserves_obsm_spatial():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_dir = os.path.join(tmpdir, "inputs")
+        output_dir = os.path.join(tmpdir, "out.slaf")
+        os.makedirs(input_dir)
+        adjacency_a = np.zeros((2, 2), dtype=np.float32)
+        adjacency_b = np.zeros((3, 3), dtype=np.float32)
+        spatial_a = np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+        spatial_b = np.asarray(
+            [[5.0, 6.0], [7.0, 8.0], [9.0, 10.0]],
+            dtype=np.float32,
+        )
+        _write_obsp_h5ad(
+            os.path.join(input_dir, "a.h5ad"),
+            "a",
+            adjacency_a,
+            obsm={"spatial": spatial_a},
+        )
+        _write_obsp_h5ad(
+            os.path.join(input_dir, "b.h5ad"),
+            "b",
+            adjacency_b,
+            obsm={"spatial": spatial_b},
+        )
+
+        _convert_h5ad_directory(input_dir, output_dir)
+
+        slaf = SLAFArray(output_dir, load_metadata=False)
+        assert slaf.config["obsm"]["available"] == ["spatial"]
+        assert slaf.config["obsm"]["dimensions"]["spatial"] == 2
+        spatial_field = slaf.cells.schema.field("spatial")
+        assert isinstance(spatial_field.type, pa.FixedSizeListType)
+        assert spatial_field.type.list_size == 2
+        np.testing.assert_array_almost_equal(
+            LazyAnnData(slaf).obsm["spatial"],
+            np.vstack([spatial_a, spatial_b]),
+            decimal=5,
+        )
+
+
+def test_multi_file_h5ad_conversion_fills_missing_obsm_key_with_nan():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_dir = os.path.join(tmpdir, "inputs")
+        output_dir = os.path.join(tmpdir, "out.slaf")
+        os.makedirs(input_dir)
+        adjacency = np.zeros((2, 2), dtype=np.float32)
+        spatial_a = np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+        umap_a = np.asarray([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32)
+        spatial_b = np.asarray([[5.0, 6.0], [7.0, 8.0]], dtype=np.float32)
+        _write_obsp_h5ad(
+            os.path.join(input_dir, "a.h5ad"),
+            "a",
+            adjacency,
+            obsm={"spatial": spatial_a, "X_umap": umap_a},
+        )
+        _write_obsp_h5ad(
+            os.path.join(input_dir, "b.h5ad"),
+            "b",
+            adjacency,
+            obsm={"spatial": spatial_b},
+        )
+
+        _convert_h5ad_directory(input_dir, output_dir)
+
+        lazy = LazyAnnData(SLAFArray(output_dir, load_metadata=False))
+        assert set(lazy.obsm.keys()) == {"spatial", "X_umap"}
+        np.testing.assert_array_almost_equal(
+            lazy.obsm["spatial"],
+            np.vstack([spatial_a, spatial_b]),
+            decimal=5,
+        )
+        converted_umap = lazy.obsm["X_umap"]
+        np.testing.assert_array_almost_equal(converted_umap[:2], umap_a, decimal=5)
+        assert np.isnan(converted_umap[2:]).all()
+
+
+def test_multi_file_h5ad_conversion_skips_inconsistent_obsm_dimensions():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_dir = os.path.join(tmpdir, "inputs")
+        output_dir = os.path.join(tmpdir, "out.slaf")
+        os.makedirs(input_dir)
+        adjacency = np.zeros((2, 2), dtype=np.float32)
+        _write_obsp_h5ad(
+            os.path.join(input_dir, "a.h5ad"),
+            "a",
+            adjacency,
+            obsm={"X_pca": np.ones((2, 3), dtype=np.float32)},
+        )
+        _write_obsp_h5ad(
+            os.path.join(input_dir, "b.h5ad"),
+            "b",
+            adjacency,
+            obsm={"X_pca": np.ones((2, 4), dtype=np.float32)},
+        )
+
+        _convert_h5ad_directory(input_dir, output_dir)
+
+        slaf = SLAFArray(output_dir, load_metadata=False)
+        assert "obsm" not in slaf.config
+        assert "X_pca" not in LazyAnnData(slaf).obsm
