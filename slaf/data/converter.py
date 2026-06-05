@@ -714,6 +714,10 @@ class SLAFConverter:
                 "Layers are inconsistent across files. Skipping layers.lance creation."
             )
             layer_names = []
+        obsm_keys, obsm_dimensions = self._discover_multi_file_obsm_keys(
+            input_files,
+            input_format,
+        )
         obsp_keys = self._discover_multi_file_obsp_keys(input_files, input_format)
 
         # Track source file information
@@ -827,6 +831,13 @@ class SLAFConverter:
                     # Convert metadata to Lance tables
                     cell_metadata_table = self._create_metadata_table(
                         obs_df, "cell_id", integer_mapping=None
+                    )
+                    cell_metadata_table = self._add_multi_file_obsm_columns(
+                        file_path=file_path,
+                        cell_metadata_table=cell_metadata_table,
+                        obsm_keys=obsm_keys,
+                        obsm_dimensions=obsm_dimensions,
+                        n_cells=len(obs_df),
                     )
                     gene_metadata_table = self._create_metadata_table(
                         var_df, "gene_id", integer_mapping=None
@@ -984,6 +995,8 @@ class SLAFConverter:
             None,
             None,
             layer_names=layer_names,  # Pass layer names if consistent
+            obsm_keys=obsm_keys,
+            obsm_dimensions=obsm_dimensions,
             obsp_keys=obsp_keys,
         )
 
@@ -1579,6 +1592,10 @@ class SLAFConverter:
         if hasattr(adata, "uns") and adata.uns and len(adata.uns) > 0:
             logger.info("Converting uns metadata...")
             self._convert_uns(adata.uns, output_path)
+
+        # Create indices after all tables, including pairwise tables, are written.
+        if self.create_indices:
+            self._create_indices(output_path)
 
         # Compact dataset for optimal storage (only if enabled)
         if self.compact_after_write:
@@ -3416,15 +3433,14 @@ class SLAFConverter:
                     continue
                 n_cells = int(adata.n_obs)
                 for key, matrix in adata.obsp.items():
-                    if not hasattr(matrix, "shape") or len(matrix.shape) != 2:
-                        logger.warning(
-                            f"obsp '{key}' in {file_path} is not 2D. Skipping."
-                        )
-                        continue
-                    if matrix.shape[0] != n_cells or matrix.shape[1] != n_cells:
-                        logger.warning(
-                            f"obsp '{key}' in {file_path} shape {matrix.shape} != ({n_cells}, {n_cells}). Skipping."
-                        )
+                    if not self._valid_multi_file_2d_shape(
+                        "obsp",
+                        key,
+                        file_path,
+                        getattr(matrix, "shape", None),
+                        expected_rows=n_cells,
+                        expected_cols=n_cells,
+                    ):
                         continue
                     if key not in seen:
                         seen.add(key)
@@ -3434,6 +3450,125 @@ class SLAFConverter:
         if obsp_keys:
             logger.info(f"Detected {len(obsp_keys)} multi-file obsp keys: {obsp_keys}")
         return obsp_keys
+
+    def _valid_multi_file_2d_shape(
+        self,
+        table_type: str,
+        key: str,
+        file_path: str,
+        shape: Any,
+        *,
+        expected_rows: int,
+        expected_cols: int | None = None,
+    ) -> bool:
+        if shape is None or len(shape) != 2:
+            logger.warning(f"{table_type} '{key}' in {file_path} is not 2D. Skipping.")
+            return False
+        if int(shape[0]) != expected_rows:
+            logger.warning(
+                f"{table_type} '{key}' in {file_path} shape {shape} has {shape[0]} rows, expected {expected_rows}. Skipping."
+            )
+            return False
+        if expected_cols is not None and int(shape[1]) != expected_cols:
+            logger.warning(
+                f"{table_type} '{key}' in {file_path} shape {shape} has {shape[1]} columns, expected {expected_cols}. Skipping."
+            )
+            return False
+        return True
+
+    def _discover_multi_file_obsm_keys(
+        self,
+        input_files: list[str],
+        input_format: str,
+    ) -> tuple[list[str], dict[str, int]]:
+        """Return valid obsm keys and dimensions for multi-file h5ad conversion."""
+        if input_format != "h5ad" or not SCANPY_AVAILABLE:
+            return [], {}
+
+        obsm_keys: list[str] = []
+        dimensions: dict[str, int] = {}
+        invalid_keys: set[str] = set()
+        seen: set[str] = set()
+        for file_path in input_files:
+            adata = sc.read_h5ad(file_path, backed="r")
+            try:
+                if not hasattr(adata, "obsm") or not adata.obsm:
+                    continue
+                n_cells = int(adata.n_obs)
+                for key, embedding in adata.obsm.items():
+                    if key in invalid_keys:
+                        continue
+                    shape = getattr(embedding, "shape", None)
+                    if not self._valid_multi_file_2d_shape(
+                        "obsm",
+                        key,
+                        file_path,
+                        shape,
+                        expected_rows=n_cells,
+                    ):
+                        invalid_keys.add(key)
+                        continue
+                    if shape is None:
+                        invalid_keys.add(key)
+                        continue
+                    n_dims = int(shape[1])
+                    if key in dimensions and dimensions[key] != n_dims:
+                        logger.warning(
+                            f"obsm '{key}' has inconsistent dimensions across files ({dimensions[key]} vs {n_dims}). Skipping."
+                        )
+                        invalid_keys.add(key)
+                        continue
+                    dimensions[key] = n_dims
+                    if key not in seen:
+                        seen.add(key)
+                        obsm_keys.append(key)
+            finally:
+                adata.file.close()
+
+        obsm_keys = [key for key in obsm_keys if key not in invalid_keys]
+        dimensions = {key: dimensions[key] for key in obsm_keys}
+        if obsm_keys:
+            logger.info(f"Detected {len(obsm_keys)} multi-file obsm keys: {obsm_keys}")
+        return obsm_keys, dimensions
+
+    def _add_multi_file_obsm_columns(
+        self,
+        file_path: str,
+        cell_metadata_table: pa.Table,
+        obsm_keys: list[str],
+        obsm_dimensions: dict[str, int],
+        n_cells: int,
+    ) -> pa.Table:
+        """Add one h5ad file's local obsm vectors to its cells metadata table."""
+        if not obsm_keys:
+            return cell_metadata_table
+
+        adata = sc.read_h5ad(file_path, backed="r")
+        try:
+            for key in obsm_keys:
+                n_dims = int(obsm_dimensions[key])
+                if key in adata.obsm and self._valid_multi_file_2d_shape(
+                    "obsm",
+                    key,
+                    file_path,
+                    getattr(adata.obsm[key], "shape", None),
+                    expected_rows=n_cells,
+                ):
+                    vectors = np.asarray(adata.obsm[key], dtype=np.float32)
+                else:
+                    vectors = np.full((n_cells, n_dims), np.nan, dtype=np.float32)
+                vector_array = pa.FixedSizeListArray.from_arrays(
+                    pa.array(vectors.reshape(-1), type=pa.float32()),
+                    n_dims,
+                )
+                cell_metadata_table = cell_metadata_table.append_column(
+                    key,
+                    vector_array,
+                )
+        finally:
+            adata.file.close()
+
+        return cell_metadata_table
 
     def _append_multi_file_obsp(
         self,
@@ -3860,10 +3995,6 @@ class SLAFConverter:
                     data_storage_version="2.2",
                 )
 
-        # Create indices after all tables are written (if enabled)
-        if self.create_indices:
-            self._create_indices(output_path)
-
     def _create_indices(self, output_path: str):
         """Create optimal indices for SLAF tables with column existence checks"""
         logger.info("Creating indices for optimal query performance...")
@@ -3881,6 +4012,7 @@ class SLAFConverter:
                 "cell_integer_id",
                 "gene_integer_id",
             ],  # Only integer indices for efficiency
+            "cellsxcells": ["cell_integer_id_i"],
         }
 
         # Create indices for each table
@@ -4277,6 +4409,8 @@ class SLAFConverter:
         combined_cells: pa.Table | None = None,
         combined_genes: pa.Table | None = None,
         layer_names: list[str] | None = None,
+        obsm_keys: list[str] | None = None,
+        obsm_dimensions: dict[str, int] | None = None,
         obsp_keys: list[str] | None = None,
     ):
         """Save SLAF configuration for multi-file conversion with source file tracking"""
@@ -4348,6 +4482,14 @@ class SLAFConverter:
                 "available": layer_names,
                 "immutable": layer_names,  # All converted layers are immutable
                 "mutable": [],
+            }
+
+        if obsm_keys:
+            config["obsm"] = {
+                "available": obsm_keys,
+                "immutable": obsm_keys,
+                "mutable": [],
+                "dimensions": obsm_dimensions or {},
             }
 
         if obsp_keys:
