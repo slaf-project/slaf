@@ -934,6 +934,7 @@ class LazyPreprocessing:
         min_disp: float = 0.5,
         max_disp: float = np.inf,
         n_top_genes: int | None = None,
+        flavor: str = "seurat",
         inplace: bool = True,
     ) -> pd.DataFrame | None:
         """
@@ -951,6 +952,10 @@ class LazyPreprocessing:
             max_disp: Maximum dispersion for genes to be considered.
             n_top_genes: Number of top genes to select by dispersion.
                         If specified, overrides min_disp and max_disp criteria.
+            flavor: HVG selection method. Only "seurat" (mean/dispersion-based
+                   selection over the full expression matrix) is currently
+                   implemented. Other scanpy flavors (e.g. "seurat_v3",
+                   "cell_ranger") are not yet supported.
             inplace: Whether to modify the adata object in place. Currently not
                     fully implemented - returns None when True.
 
@@ -959,6 +964,7 @@ class LazyPreprocessing:
                                 and highly_variable column. If inplace=True, returns None.
 
         Raises:
+            NotImplementedError: If `flavor` is not "seurat".
             RuntimeError: If the SLAF array is not properly initialized.
 
         Examples:
@@ -985,6 +991,12 @@ class LazyPreprocessing:
             >>> print(f"Top genes selected: {hvg_stats['highly_variable'].sum()}")
             Top genes selected: 1000
         """
+
+        if flavor != "seurat":
+            raise NotImplementedError(
+                f"highly_variable_genes(flavor={flavor!r}) is not implemented; "
+                "only flavor='seurat' (the default) is currently supported."
+            )
 
         # Calculate gene statistics via SQL using simple aggregation (no JOINs)
         stats_sql = """
