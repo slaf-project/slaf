@@ -340,6 +340,27 @@ class TestLazyPreprocessingCorrectness:
         assert all(hvg_result["variance"] >= 0)
         assert all(hvg_result["dispersion"] >= 0)
 
+    def test_highly_variable_genes_flavor_seurat_default(self, tiny_slaf):
+        """flavor='seurat' (scanpy's default) should be accepted and behave as before"""
+        lazy_adata = LazyAnnData(tiny_slaf)
+
+        hvg_result = pp.highly_variable_genes(
+            lazy_adata, flavor="seurat", inplace=False
+        )
+
+        assert hvg_result is not None
+        assert "highly_variable" in hvg_result.columns
+
+    def test_highly_variable_genes_flavor_unsupported_raises(self, tiny_slaf):
+        """An unsupported flavor should raise a clear NotImplementedError,
+        not a TypeError about an unexpected keyword argument"""
+        lazy_adata = LazyAnnData(tiny_slaf)
+
+        with pytest.raises(NotImplementedError, match="seurat_v3"):
+            pp.highly_variable_genes(
+                lazy_adata, flavor="seurat_v3", n_top_genes=10, inplace=False
+            )
+
     def test_normalize_total_placeholder(self, tiny_slaf):
         """Test normalize_total placeholder implementation"""
         lazy_adata = LazyAnnData(tiny_slaf)
