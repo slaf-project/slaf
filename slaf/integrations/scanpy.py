@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import polars as pl
+from loguru import logger
 
 from slaf.integrations.anndata import LazyAnnData
 
@@ -464,7 +465,7 @@ class LazyPreprocessing:
         if inplace:
             # Apply filter to adata (would need proper implementation)
             # For now, just return the original adata
-            print(
+            logger.info(
                 f"Filtered out {np.sum(~cell_mask)} cells, {np.sum(cell_mask)} remaining"
             )
             return None
@@ -599,7 +600,7 @@ class LazyPreprocessing:
 
         if inplace:
             # Apply filter to adata (would need proper implementation)
-            print(
+            logger.info(
                 f"Filtered out {np.sum(~gene_mask)} genes, {np.sum(gene_mask)} remaining"
             )
             return None
@@ -706,7 +707,7 @@ class LazyPreprocessing:
                 )
 
             except Exception as e:
-                print(
+                logger.warning(
                     f"Fragment processing failed, falling back to global processing: {e}"
                 )
                 # Fall back to global processing
@@ -807,7 +808,7 @@ class LazyPreprocessing:
                 "cell_factors": normalization_dict,
             }
 
-            print(f"Applied normalize_total with target_sum={target_sum}")
+            logger.info(f"Applied normalize_total with target_sum={target_sum}")
             return None
         else:
             # Create a copy with the transformation (copy-on-write)
@@ -899,7 +900,7 @@ class LazyPreprocessing:
                 return adata._update_with_log1p_data(result_df, inplace)
 
             except Exception as e:
-                print(
+                logger.warning(
                     f"Fragment processing failed, falling back to global processing: {e}"
                 )
                 # Fall back to global processing
@@ -914,7 +915,7 @@ class LazyPreprocessing:
 
                 adata._transformations["log1p"] = {"type": "log1p", "applied": True}
 
-                print("Applied log1p transformation")
+                logger.info("Applied log1p transformation")
                 return None
             else:
                 # Create a copy with the transformation (copy-on-write)
@@ -1100,7 +1101,7 @@ class LazyPreprocessing:
 
         if inplace:
             # Update var metadata (would need implementation)
-            print(f"Identified {hvg_mask.sum()} highly variable genes")
+            logger.info(f"Identified {hvg_mask.sum()} highly variable genes")
             return None
         else:
             return gene_stats_complete

@@ -57,7 +57,7 @@ from slaf.core.slaf import SLAFArray
 from slaf.core.tabular_schema import SLAF_LANCE_COO_SCHEMA
 from slaf.ml.expression_preprocessor import ExpressionPreprocessor
 from slaf.ml.samplers import Shuffle
-from slaf.ml.tokenizers import SLAFTokenizer
+from slaf.ml.tokenizers import ScGPTTokenizer, SLAFTokenizer
 
 # Define union type for both batch types
 PrefetchBatch = Union["TokenizedPrefetchBatch", "RawPrefetchBatch"]
@@ -276,7 +276,8 @@ class TokenizedPrefetchBatch:
     """
 
     batch_id: int
-    input_ids: torch.Tensor  # Tokenized sequences
+    epoch: int
+    input_ids: torch.Tensor  # Tokenized identity sequences
     attention_mask: torch.Tensor  # Attention masks
     cell_integer_ids: list[int]  # Corresponding cell integer IDs
     values: torch.Tensor | None = None  # scGPT aligned expression/value stream
@@ -291,6 +292,7 @@ class RawPrefetchBatch:
     """Raw prefetch batch containing pre-chunked raw data for fast batch creation."""
 
     batch_id: int
+    epoch: int
     batch_dfs: list[pl.DataFrame]  # List of pre-chunked DataFrames
     cell_integer_ids: list[int]  # List of all cell IDs across all batches
     process_time: float
@@ -1002,6 +1004,7 @@ class PrefetchBatchProcessor:
                     self.batch_id += 1  # Increment batch_id for raw mode
                     return RawPrefetchBatch(
                         batch_id=self.batch_id - 1,
+                        epoch=self.current_epoch,
                         batch_dfs=shuffled_chunks,  # type: ignore[arg-type]  # List of pre-chunked DataFrames
                         cell_integer_ids=complete_df["cell_integer_id"]  # type: ignore[index]
                         .unique()
@@ -1026,10 +1029,7 @@ class PrefetchBatchProcessor:
 
                     shuffle_time = time.time() - shuffle_start
                     window_start = time.time()
-                    window_params: dict[str, Any] = {
-                        "n_expression_bins": self.n_expression_bins,
-                        "use_binned_expressions": self.use_binned_expressions,
-                    }
+                    window_params = {}
                     window_params.update(
                         self.window_kwargs
                     )  # Add any additional kwargs
@@ -1042,10 +1042,10 @@ class PrefetchBatchProcessor:
                     if tokenizer is None:
                         raise RuntimeError("Tokenizer is required for tokenized mode")
 
-                    grouped = tokenizer.window.apply(
+                    grouped = tokenizer.apply(
                         shuffled_df,
-                        SLAF_LANCE_COO_SCHEMA,
-                        tokenizer.max_genes,
+                        schema=SLAF_LANCE_COO_SCHEMA,
+                        max_items=tokenizer.max_genes,
                         **window_params,
                     )
                     window_time = time.time() - window_start
@@ -1056,13 +1056,9 @@ class PrefetchBatchProcessor:
                     if self.tokenizer is None:
                         raise RuntimeError("Tokenizer is required for tokenized mode")
 
-                    input_ids, attention_mask, values = self.tokenizer.tokenize(
-                        gene_sequences=grouped["gene_sequence"].to_list(),
-                        expr_sequences=(
-                            grouped["expr_sequence"].to_list()
-                            if "expr_sequence" in grouped.columns
-                            else None
-                        ),
+                    input_ids, attention_mask, values = self.tokenizer.tokenize_grouped(
+                        grouped,
+                        schema=SLAF_LANCE_COO_SCHEMA,
                     )
 
                     tokenize_time = time.time() - tokenize_start
@@ -1096,6 +1092,7 @@ class PrefetchBatchProcessor:
                     cell_ids_ordered = grouped["cell_integer_id"].to_list()  # type: ignore[index]
                     return TokenizedPrefetchBatch(
                         batch_id=self.batch_id - 1,
+                        epoch=self.current_epoch,
                         input_ids=input_ids,
                         attention_mask=attention_mask,
                         values=values,
@@ -1582,8 +1579,8 @@ class SLAFIterableDataset(IterableDataset):
             tokenizer, "n_expression_bins", 10
         )  # Default value for raw mode
 
-        # Set binning based on tokenizer type
-        use_binned_expressions = use_binned_expressions  # Use parameter value
+        if isinstance(tokenizer, ScGPTTokenizer):
+            tokenizer.use_binned_expressions = use_binned_expressions
 
         self.batch_processor = PrefetchBatchProcessor(
             slaf_array=slaf_array,
@@ -1780,7 +1777,7 @@ class SLAFIterableDataset(IterableDataset):
                         break
 
             # Track epoch transitions
-            current_epoch = self.batch_processor.current_epoch
+            current_epoch = data.epoch
             if current_epoch != last_epoch:
                 print_epoch_transition(
                     f"Epoch transition detected: {last_epoch} -> {current_epoch}",
