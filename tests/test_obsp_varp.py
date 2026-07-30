@@ -50,6 +50,18 @@ def anndata_with_obsp_varp():
     return adata
 
 
+@pytest.fixture
+def converted_obsp_varp_slaf(tmp_path, anndata_with_obsp_varp):
+    converter = SLAFConverter(
+        use_optimized_dtypes=False,
+        compact_after_write=False,
+        chunked=False,
+    )
+    slaf_path = tmp_path / "dataset.slaf"
+    converter.convert_anndata(anndata_with_obsp_varp, str(slaf_path))
+    return SLAFArray(slaf_path, load_metadata=False)
+
+
 def test_convert_anndata_with_obsp(anndata_with_obsp_varp):
     """Convert h5ad with obsp; cellsxcells.lance and config.obsp exist."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -135,6 +147,67 @@ def test_obsp_accessible_after_conversion(anndata_with_obsp_varp):
         conv_dist = adata.obsp["distances"]
         assert isspmatrix_csr(conv_dist)
         np.testing.assert_array_almost_equal(conv_dist.toarray(), orig_dist, decimal=5)
+
+
+def test_get_obsp_entries_filters_source_rows(converted_obsp_varp_slaf):
+    entries = converted_obsp_varp_slaf.get_obsp_entries(
+        "connectivities", [2, 0, 2]
+    ).sort(["cell_integer_id_i", "cell_integer_id_j"])
+
+    assert entries.columns == [
+        "cell_integer_id_i",
+        "cell_integer_id_j",
+        "connectivities",
+    ]
+    assert entries.select("cell_integer_id_i", "cell_integer_id_j").rows() == [
+        (0, 1),
+        (0, 2),
+        (2, 0),
+        (2, 1),
+    ]
+    np.testing.assert_allclose(
+        entries["connectivities"].to_numpy(),
+        [0.5, 0.2, 0.2, 0.3],
+    )
+
+
+def test_get_obsp_entries_supports_contiguous_and_empty_selectors(
+    converted_obsp_varp_slaf,
+):
+    explicit = converted_obsp_varp_slaf.get_obsp_entries("distances", [0, 1]).sort(
+        ["cell_integer_id_i", "cell_integer_id_j"]
+    )
+    contiguous = converted_obsp_varp_slaf.get_obsp_entries(
+        "distances", slice(0, 2)
+    ).sort(["cell_integer_id_i", "cell_integer_id_j"])
+    empty = converted_obsp_varp_slaf.get_obsp_entries("distances", [])
+
+    assert explicit.equals(contiguous)
+    assert empty.is_empty()
+    assert empty.columns == [
+        "cell_integer_id_i",
+        "cell_integer_id_j",
+        "distances",
+    ]
+
+
+def test_get_obsp_entries_validates_key_schema_and_row_ids(
+    converted_obsp_varp_slaf,
+):
+    with pytest.raises(KeyError, match="missing"):
+        converted_obsp_varp_slaf.get_obsp_entries("missing", [0])
+    with pytest.raises(ValueError, match="outside"):
+        converted_obsp_varp_slaf.get_obsp_entries("connectivities", [10])
+    with pytest.raises(TypeError, match="integers"):
+        converted_obsp_varp_slaf.get_obsp_entries("connectivities", [0.5])
+
+    converted_obsp_varp_slaf.cellsxcells = None
+    with pytest.raises(ValueError, match="does not contain obsp"):
+        converted_obsp_varp_slaf.get_obsp_entries("connectivities", [0])
+
+    converted_obsp_varp_slaf.cellsxcells = converted_obsp_varp_slaf.cells
+    with pytest.raises(ValueError, match="required columns"):
+        converted_obsp_varp_slaf.get_obsp_entries("connectivities", [0])
 
 
 def test_varp_accessible_after_conversion(anndata_with_obsp_varp):
