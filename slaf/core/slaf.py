@@ -1,7 +1,8 @@
 import json
 import os
 import threading
-from typing import Any
+from collections.abc import Sequence
+from typing import Any, cast
 
 import lance
 import numpy as np
@@ -966,6 +967,87 @@ class SLAFArray:
             Error: Column 'invalid_column' not found in gene metadata
         """
         return self._filter("genes", **filters)
+
+    def get_obsp_entries(
+        self,
+        key: str,
+        row_ids: int | slice | Sequence[int] | np.ndarray,
+    ) -> pl.DataFrame:
+        """Return nonzero COO entries for selected ``obsp`` source rows.
+
+        Args:
+            key: Name of the pairwise observation matrix to query.
+            row_ids: Integer cell IDs selecting source rows. A scalar, slice,
+                range, sequence, or one-dimensional NumPy array is accepted.
+
+        Returns:
+            A Polars dataframe containing ``cell_integer_id_i``,
+            ``cell_integer_id_j``, and the requested value column.
+
+        Raises:
+            ValueError: If the dataset has no ``obsp`` table, its schema is
+                malformed, or a row ID is outside the cell bounds.
+            KeyError: If ``key`` is not present in the ``obsp`` table.
+            TypeError: If ``row_ids`` is not a supported integer selector.
+        """
+        cellsxcells = self.cellsxcells
+        if cellsxcells is None:
+            raise ValueError("SLAF dataset does not contain obsp data")
+
+        source_column = "cell_integer_id_i"
+        target_column = "cell_integer_id_j"
+        missing_columns = {source_column, target_column} - set(cellsxcells.schema.names)
+        if missing_columns:
+            raise ValueError(
+                "SLAF obsp table is missing required columns: "
+                f"{sorted(missing_columns)}"
+            )
+        if key not in cellsxcells.schema.names:
+            raise KeyError(f"obsp key '{key}' not found")
+
+        if isinstance(row_ids, int | np.integer):
+            ids = np.asarray([row_ids], dtype=np.int64)
+        elif isinstance(row_ids, slice):
+            start, stop, step = row_ids.indices(int(self.shape[0]))
+            ids = np.arange(start, stop, step, dtype=np.int64)
+        else:
+            try:
+                ids = np.asarray(row_ids)
+            except (TypeError, ValueError) as error:
+                raise TypeError("row_ids must be an integer selector") from error
+            if ids.ndim != 1:
+                raise TypeError("row_ids must be one-dimensional")
+            if ids.size and not np.issubdtype(ids.dtype, np.integer):
+                raise TypeError("row_ids must contain integers")
+            ids = ids.astype(np.int64, copy=False)
+
+        if ids.size:
+            ids = ids.copy()
+            ids[ids < 0] += int(self.shape[0])
+            if np.any((ids < 0) | (ids >= int(self.shape[0]))):
+                raise ValueError("obsp row IDs are outside SLAF cell bounds")
+            ids = np.unique(ids)
+
+        columns = [source_column, target_column, key]
+        if ids.size == 0:
+            return cast(
+                pl.DataFrame,
+                pl.from_arrow(cellsxcells.head(0, columns=columns)),
+            )
+
+        if ids[-1] - ids[0] + 1 == ids.size:
+            row_filter = (
+                f"{source_column} >= {ids[0]} AND {source_column} < {ids[-1] + 1}"
+            )
+        else:
+            values = ",".join(str(int(value)) for value in ids)
+            row_filter = f"{source_column} IN ({values})"
+
+        entries = cast(
+            pl.DataFrame,
+            pl.from_arrow(cellsxcells.to_table(columns=columns, filter=row_filter)),
+        )
+        return entries.filter(pl.col(key).is_not_null() & (pl.col(key) != 0))
 
     def _filter(self, table_name: str, **filters: Any) -> pl.DataFrame:
         """
