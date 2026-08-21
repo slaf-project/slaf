@@ -517,68 +517,45 @@ class RowIndexMapper:
         Returns:
             List of row indices covering all expression records for the cells
         """
-        start_indices = self.slaf_array._cell_start_index
-
-        # Find original row positions for the requested cell_integer_ids (vectorized)
-        # Create a mapping from cell_integer_id to original row position
-        cell_id_to_position = (
-            self.slaf_array.obs.with_row_index()
-            .select(["cell_integer_id", "index"])
-            .to_dict(as_series=False)
-        )
-
-        # Convert to numpy arrays for fast vectorized operations
-        all_cell_ids = np.array(cell_id_to_position["cell_integer_id"])
-        all_positions = np.array(cell_id_to_position["index"])
-
-        # Find positions for requested cell IDs (vectorized)
-        requested_cell_ids = np.array(cell_integer_ids)
-
-        # Use numpy's searchsorted for O(log n) lookup
-        # First, sort the original data for binary search
-        sort_idx = np.argsort(all_cell_ids)
-        sorted_cell_ids = all_cell_ids[sort_idx]
-        sorted_positions = all_positions[sort_idx]
-
-        # Find positions for requested cell IDs
-        found_positions = []
-        for cell_id in requested_cell_ids:
-            # Binary search for the cell_id
-            idx = np.searchsorted(sorted_cell_ids, cell_id)
-            if idx < len(sorted_cell_ids) and sorted_cell_ids[idx] == cell_id:
-                found_positions.append(sorted_positions[idx])
-            else:
-                raise ValueError(f"Cell integer ID {cell_id} not found in dataset")
-
-        # Convert to numpy array for vectorized operations
-        cell_positions = np.array(found_positions)
-
-        # Get start and end indices for all cells at once (vectorized)
-        start_idx_array = start_indices.gather(pl.Series(cell_positions)).to_numpy()
-        end_idx_array = start_indices.gather(pl.Series(cell_positions + 1)).to_numpy()
-
-        # Calculate row ranges for all cells at once (vectorized)
-        # Use numpy's broadcast operations to create all ranges efficiently
-        if len(start_idx_array) == 0:
-            return []
-
-        # Calculate the length of each range
-        range_lengths = end_idx_array - start_idx_array
-
-        # Create a single array with all the ranges using numpy's broadcast operations
-        total_length = np.sum(range_lengths)
-        if total_length == 0:
-            return []
-
-        # Use list comprehension for maximum efficiency
-        # This is faster than explicit for loops and more Pythonic
-        ranges = [
-            np.arange(start, end)
-            for start, end in zip(start_idx_array, end_idx_array, strict=False)
-        ]
+        intervals = self.get_cell_row_intervals(cell_integer_ids)
+        ranges = [np.arange(start, end) for start, end in intervals if end > start]
         result = np.concatenate(ranges) if ranges else np.array([], dtype=np.int64)
 
         return result.tolist()
+
+    def get_cell_row_intervals(
+        self,
+        cell_integer_ids: list[int] | np.ndarray,
+    ) -> np.ndarray:
+        """Return expression row intervals for dense integer cell IDs.
+
+        Args:
+            cell_integer_ids: Cell IDs whose expression intervals are requested.
+
+        Returns:
+            An ``int64`` array with ``[start, stop)`` expression row intervals.
+
+        Raises:
+            TypeError: If cell IDs are not a one-dimensional integer selector.
+            ValueError: If a cell ID is outside the dataset bounds.
+        """
+        ids = np.asarray(cell_integer_ids)
+        if ids.ndim != 1 or (ids.size and not np.issubdtype(ids.dtype, np.integer)):
+            raise TypeError(
+                "cell_integer_ids must be a one-dimensional integer selector"
+            )
+        ids = ids.astype(np.int64, copy=False)
+        if ids.size and np.any((ids < 0) | (ids >= self._cell_count)):
+            invalid_id = int(ids[(ids < 0) | (ids >= self._cell_count)][0])
+            raise ValueError(f"Cell integer ID {invalid_id} not found in dataset")
+        if ids.size == 0:
+            return np.empty((0, 2), dtype=np.int64)
+
+        starts = self.slaf_array._cell_start_index.to_numpy()
+        return np.column_stack((starts[ids], starts[ids + 1])).astype(
+            np.int64,
+            copy=False,
+        )
 
     def get_cell_row_ranges_by_selector(self, cell_selector) -> list[int]:
         """

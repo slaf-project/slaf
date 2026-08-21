@@ -76,6 +76,25 @@ class TestRowIndexMapper:
         expected = [0, 1] + [5]  # Cell 0: [0,1], Cell 2: [5]
         assert sorted(row_indices) == sorted(expected)
 
+    def test_get_cell_row_intervals_uses_dense_cell_positions(self, mock_slaf_array):
+        """Cell IDs directly select cumulative expression offsets."""
+        mapper = RowIndexMapper(mock_slaf_array)
+
+        intervals = mapper.get_cell_row_intervals(np.array([0, 2, 4]))
+
+        np.testing.assert_array_equal(intervals, [[0, 2], [5, 6], [10, 12]])
+
+    def test_get_cell_row_intervals_validates_selector(self, mock_slaf_array):
+        """Interval lookup rejects invalid selector shapes, types, and IDs."""
+        mapper = RowIndexMapper(mock_slaf_array)
+
+        with pytest.raises(TypeError, match="one-dimensional integer selector"):
+            mapper.get_cell_row_intervals(np.array([[0, 1]]))
+        with pytest.raises(TypeError, match="one-dimensional integer selector"):
+            mapper.get_cell_row_intervals(np.array([0.0, 1.0]))
+        with pytest.raises(ValueError, match="Cell integer ID 5 not found"):
+            mapper.get_cell_row_intervals(np.array([5]))
+
     def test_get_cell_row_ranges_by_selector_none(self, mock_slaf_array):
         """Test getting row ranges for None selector (all cells)."""
         mapper = RowIndexMapper(mock_slaf_array)
