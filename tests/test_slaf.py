@@ -3,6 +3,7 @@ import os
 import threading
 import time
 
+import numpy as np
 import polars as pl
 import pytest
 
@@ -89,6 +90,103 @@ class TestSLAFArray:
         # Test status methods
         assert isinstance(small_slaf.is_metadata_ready(), bool)
         assert isinstance(small_slaf.is_metadata_loading(), bool)
+
+    def test_integer_cell_expression_access(self, small_slaf):
+        selected = small_slaf.get_expression_for_cell_ids([3, 1, 3])
+        ranged = small_slaf.get_expression_for_cell_range(1, 4)
+        coalesced_ids = np.asarray([0, 1, 2, 3, 4, 5, 6, 7, 9])
+        coalesced = small_slaf.get_expression_for_cell_ids(coalesced_ids)
+        coalesced_expected = small_slaf.get_expression_for_cell_range(0, 10).filter(
+            pl.col("cell_integer_id").is_in(coalesced_ids),
+        )
+
+        assert set(selected.columns) == {
+            "cell_integer_id",
+            "gene_integer_id",
+            "value",
+        }
+        assert set(selected["cell_integer_id"].unique()) <= {1, 3}
+        assert set(ranged["cell_integer_id"].unique()) <= {1, 2, 3}
+        assert selected.sort(selected.columns).equals(
+            ranged.filter(pl.col("cell_integer_id").is_in([1, 3])).sort(
+                ranged.columns,
+            ),
+        )
+        assert coalesced.sort(coalesced.columns).equals(
+            coalesced_expected.sort(coalesced_expected.columns),
+        )
+
+        empty = small_slaf.get_expression_for_cell_ids([])
+        assert empty.is_empty()
+        with pytest.raises(ValueError, match="outside SLAF cell bounds"):
+            small_slaf.get_expression_for_cell_ids([-1])
+
+    def test_contiguous_cell_expression_uses_one_range(self, small_slaf, monkeypatch):
+        calls = []
+        original = small_slaf._read_expression_ranges
+
+        def track_ranges(ranges, *, cell_ids, filter_overfetch):
+            calls.append((ranges, cell_ids, filter_overfetch))
+            return original(
+                ranges,
+                cell_ids=cell_ids,
+                filter_overfetch=filter_overfetch,
+            )
+
+        monkeypatch.setattr(small_slaf, "_read_expression_ranges", track_ranges)
+
+        expression = small_slaf.get_expression_for_cell_range(1, 4)
+
+        assert len(calls) == 1
+        assert len(calls[0][0]) == 1
+        assert calls[0][2] is False
+        assert set(expression["cell_integer_id"].unique()) <= {1, 2, 3}
+
+    def test_coalesce_expression_intervals_bounds_overfetch_and_range_size(self):
+        intervals = np.asarray([[0, 4], [6, 10], [10, 14]], dtype=np.int64)
+
+        ranges, overfetch = SLAFArray._coalesce_expression_intervals(intervals)
+        capped_ranges, capped_overfetch = SLAFArray._coalesce_expression_intervals(
+            intervals,
+            max_overfetch_ratio=2.0,
+            max_range_rows=9,
+        )
+
+        assert ranges == [(0, 14)]
+        assert overfetch is True
+        assert capped_ranges == [(0, 4), (6, 14)]
+        assert capped_overfetch is False
+
+    @pytest.mark.parametrize(
+        ("cell_ids", "cell_start_index", "expression_rows", "message"),
+        [
+            (
+                np.asarray([0, 2]),
+                np.asarray([0, 1, 2]),
+                2,
+                "cell_integer_id must contain dense IDs",
+            ),
+            (
+                np.asarray([0, 1]),
+                np.asarray([0, 2, 1]),
+                1,
+                "cell_start_index must be a complete, nondecreasing index",
+            ),
+        ],
+    )
+    def test_cell_row_index_validation(
+        self,
+        cell_ids,
+        cell_start_index,
+        expression_rows,
+        message,
+    ):
+        with pytest.raises(ValueError, match=message):
+            SLAFArray._validate_cell_row_index(
+                cell_ids,
+                cell_start_index,
+                expression_row_count=expression_rows,
+            )
 
     def test_immediate_capabilities(self, small_slaf):
         """Test that immediate capabilities work without metadata loading"""

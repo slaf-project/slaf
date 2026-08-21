@@ -16,6 +16,32 @@ from slaf.data.utils import discover_input_files, validate_input_files
 from slaf.integrations import ensure_h5ad_writable
 
 
+def _write_start_index_h5ad(path, rows: list[list[float]]) -> None:
+    adata = sc.AnnData(
+        X=sparse.csr_matrix(np.asarray(rows, dtype=np.float32)),
+        obs=pd.DataFrame(index=[f"{path.stem}_cell_{idx}" for idx in range(len(rows))]),
+        var=pd.DataFrame(index=[f"gene_{idx}" for idx in range(len(rows[0]))]),
+    )
+    ensure_h5ad_writable(adata)
+    adata.write_h5ad(path)
+
+
+def _cell_start_indices(output_path) -> list[int]:
+    cells = lance.dataset(str(output_path / "cells.lance")).to_table().to_pandas()
+    return cells.sort_values("cell_integer_id")["cell_start_index"].tolist()
+
+
+def _start_index_converter() -> SLAFConverter:
+    return SLAFConverter(
+        chunked=True,
+        chunk_size=1,
+        create_indices=False,
+        optimize_storage=True,
+        use_optimized_dtypes=True,
+        enable_checkpointing=False,
+    )
+
+
 class TestMultiFileConversion:
     """Test multi-file conversion functionality."""
 
@@ -195,6 +221,34 @@ class TestMultiFileConversion:
         expected_ids = set(range(len(cell_integer_ids)))
         actual_ids = set(cell_integer_ids)
         assert actual_ids == expected_ids, f"Expected {expected_ids}, got {actual_ids}"
+
+    def test_cell_start_index_is_global_across_files_and_append(self, tmp_path):
+        """cell_start_index should map global cell IDs to global expression rows."""
+        first_rows = [[1.0, 2.0, 0.0, 0.0], [3.0, 0.0, 0.0, 0.0]]
+        second_rows = [[4.0, 0.0, 5.0, 0.0], [0.0, 6.0, 0.0, 7.0]]
+
+        input_dir = tmp_path / "inputs"
+        input_dir.mkdir()
+        _write_start_index_h5ad(input_dir / "a.h5ad", first_rows)
+        _write_start_index_h5ad(input_dir / "b.h5ad", second_rows)
+
+        output_path = tmp_path / "global_start_index.slaf"
+        _start_index_converter().convert(str(input_dir), str(output_path))
+
+        assert _cell_start_indices(output_path) == [0, 2, 3, 5]
+
+        append_dir = tmp_path / "append_inputs"
+        append_dir.mkdir()
+        base_path = tmp_path / "base.h5ad"
+        _write_start_index_h5ad(base_path, first_rows)
+        _write_start_index_h5ad(append_dir / "append.h5ad", second_rows)
+
+        output_path = tmp_path / "append_start_index.slaf"
+        converter = _start_index_converter()
+        converter.convert(str(base_path), str(output_path))
+        converter.append(str(append_dir), str(output_path))
+
+        assert _cell_start_indices(output_path) == [0, 2, 3, 5]
 
     def test_source_file_tracking(self, synthetic_data_dir, tmp_path):
         """Test that source_file column is added to cells table."""

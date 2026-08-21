@@ -2831,7 +2831,7 @@ class LazyCooViewBase(LazyDictionaryViewMixin):
         )
         return df[self._entity_id_col].to_numpy()
 
-    def __getitem__(self, key: str) -> np.ndarray:
+    def __getitem__(self, key: str) -> scipy.sparse.csr_matrix:
         if key not in self.keys():
             raise KeyError(f"{self._view_name} key '{key}' not found")
         table = getattr(self._slaf_array, self._table_attr, None)
@@ -2855,15 +2855,30 @@ class LazyCooViewBase(LazyDictionaryViewMixin):
         else:
             n = self._n_entities
             id_to_idx = {i: i for i in range(n)}
-        mat = np.zeros((n, n), dtype=np.float32)
+        rows: list[int] = []
+        cols: list[int] = []
+        values: list[float] = []
         for row in df.iter_rows(named=True):
             ri, rj = row[self._id_col_i], row[self._id_col_j]
             if ri is None or rj is None:
                 continue
-            i = id_to_idx[int(ri)]
-            j = id_to_idx[int(rj)]
-            mat[i, j] = float(row[key] if row[key] is not None else 0.0)
-        return mat
+            value = row[key]
+            if value is None or float(value) == 0.0:
+                continue
+            rows.append(id_to_idx[int(ri)])
+            cols.append(id_to_idx[int(rj)])
+            values.append(float(value))
+        return scipy.sparse.coo_matrix(
+            (
+                np.asarray(values, dtype=np.float32),
+                (
+                    np.asarray(rows, dtype=np.int64),
+                    np.asarray(cols, dtype=np.int64),
+                ),
+            ),
+            shape=(n, n),
+            dtype=np.float32,
+        ).tocsr()
 
     def __setitem__(self, key: str, value: np.ndarray) -> None:
         value = np.asarray(value, dtype=np.float32)
@@ -3023,7 +3038,7 @@ class LazyObspView(LazyCooViewBase):
     """
     Dictionary-like view of obsp (pairwise obs matrices) in COO storage.
 
-    Each key maps to a square (n_cells, n_cells) dense matrix. Data is stored
+    Each key maps to a square (n_cells, n_cells) CSR matrix. Data is stored
     as COO in cellsxcells.lance. Selector support: returns (len(selector), len(selector)).
     """
 
@@ -3463,7 +3478,7 @@ class LazyAnnData(LazySparseMixin):
         Pairwise obs annotations (e.g. connectivities, distances).
 
         Dictionary-like view over obsp matrices stored as COO in cellsxcells.lance.
-        Each key returns a square (n_cells, n_cells) numpy array.
+        Each key returns a square (n_cells, n_cells) CSR sparse matrix.
         """
         if not hasattr(self, "_obsp"):
             self._obsp = LazyObspView(self)

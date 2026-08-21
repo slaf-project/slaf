@@ -1,12 +1,18 @@
 import json
 import os
 import threading
-from typing import Any
+from collections.abc import Sequence
+from typing import Any, cast
 
 import lance
 import numpy as np
 import polars as pl
 from loguru import logger
+
+_CELL_EXPRESSION_MAX_OVERFETCH_RATIO = 1.5
+_CELL_EXPRESSION_MAX_RANGE_ROWS = 4_000_000
+_CELL_EXPRESSION_TAKE_CELL_THRESHOLD = 8
+_CELL_EXPRESSION_MAX_RANGE_READS = 64
 
 # Import smart-open for cloud storage compatibility
 try:
@@ -642,15 +648,16 @@ class SLAFArray:
         self._obs_columns = list(self._obs.columns)
         self._var_columns = list(self._var.columns)
 
+        expression_row_count = self.expression.count_rows()
+
         # Build cell start indices for efficient row access (zero-copy Polars)
         if "cell_start_index" in self._obs.columns:
             # Use precomputed cell_start_index column
             logger.info("Using precomputed cell_start_index from cells table")
             # The cell_start_index column contains n_cells values (cumulative sums with leading 0)
             # We need to append the total expression count for boundary checking
-            total_expression_count = self.expression.count_rows()
             self._cell_start_index = pl.concat(
-                [self._obs["cell_start_index"], pl.Series([total_expression_count])]
+                [self._obs["cell_start_index"], pl.Series([expression_row_count])]
             )
         elif "n_genes" in self._obs.columns:
             # Use existing n_genes column
@@ -658,12 +665,14 @@ class SLAFArray:
             # Ensure dtype consistency: cast to Int64
             cumsum = cumsum.cast(pl.Int64)
             self._cell_start_index = pl.concat([pl.Series([0], dtype=pl.Int64), cumsum])
+
         elif "gene_count" in self._obs.columns:
             # Use existing gene_count column
             cumsum = self._obs["gene_count"].cum_sum()
             # Ensure dtype consistency: cast to Int64
             cumsum = cumsum.cast(pl.Int64)
             self._cell_start_index = pl.concat([pl.Series([0], dtype=pl.Int64), cumsum])
+
         else:
             # Calculate n_genes per cell from expression data
             logger.info(
@@ -701,6 +710,12 @@ class SLAFArray:
             cumsum = cumsum.cast(pl.Int64)
             self._cell_start_index = pl.concat([pl.Series([0], dtype=pl.Int64), cumsum])
 
+        self._validate_cell_row_index(
+            self._obs["cell_integer_id"].to_numpy(),
+            self._cell_start_index.to_numpy(),
+            expression_row_count=expression_row_count,
+        )
+
         # Restore dtypes for obs using polars
         obs_dtypes = self.config.get("obs_dtypes", {})
         for col, dtype_info in obs_dtypes.items():
@@ -731,6 +746,37 @@ class SLAFArray:
 
         # Infer categorical columns if not in config
         self._infer_categorical_columns()
+
+    @staticmethod
+    def _validate_cell_row_index(
+        cell_ids: np.ndarray,
+        cell_start_index: np.ndarray,
+        *,
+        expression_row_count: int,
+    ) -> None:
+        """Validate dense cell IDs and their cumulative expression offsets."""
+        n_cells = cell_ids.size
+        dense_cell_ids = n_cells == 0 or (
+            cell_ids[0] == 0
+            and cell_ids[-1] == n_cells - 1
+            and np.all(cell_ids[1:] > cell_ids[:-1])
+        )
+        if not dense_cell_ids:
+            raise ValueError(
+                "Invalid SLAF cell metadata: cell_integer_id must contain dense "
+                "IDs from 0 to n_cells - 1",
+            )
+        valid_start_index = (
+            cell_start_index.size == n_cells + 1
+            and cell_start_index[0] == 0
+            and cell_start_index[-1] == expression_row_count
+            and np.all(cell_start_index[1:] >= cell_start_index[:-1])
+        )
+        if not valid_start_index:
+            raise ValueError(
+                "Invalid SLAF cell metadata: cell_start_index must be a complete, "
+                "nondecreasing index over the expression table",
+            )
 
     def _map_pandas_to_polars_dtype(self, pandas_dtype: str) -> type[pl.DataType]:
         """Map pandas dtype to polars dtype"""
@@ -967,6 +1013,87 @@ class SLAFArray:
         """
         return self._filter("genes", **filters)
 
+    def get_obsp_entries(
+        self,
+        key: str,
+        row_ids: int | slice | Sequence[int] | np.ndarray,
+    ) -> pl.DataFrame:
+        """Return nonzero COO entries for selected ``obsp`` source rows.
+
+        Args:
+            key: Name of the pairwise observation matrix to query.
+            row_ids: Integer cell IDs selecting source rows. A scalar, slice,
+                range, sequence, or one-dimensional NumPy array is accepted.
+
+        Returns:
+            A Polars dataframe containing ``cell_integer_id_i``,
+            ``cell_integer_id_j``, and the requested value column.
+
+        Raises:
+            ValueError: If the dataset has no ``obsp`` table, its schema is
+                malformed, or a row ID is outside the cell bounds.
+            KeyError: If ``key`` is not present in the ``obsp`` table.
+            TypeError: If ``row_ids`` is not a supported integer selector.
+        """
+        cellsxcells = self.cellsxcells
+        if cellsxcells is None:
+            raise ValueError("SLAF dataset does not contain obsp data")
+
+        source_column = "cell_integer_id_i"
+        target_column = "cell_integer_id_j"
+        missing_columns = {source_column, target_column} - set(cellsxcells.schema.names)
+        if missing_columns:
+            raise ValueError(
+                "SLAF obsp table is missing required columns: "
+                f"{sorted(missing_columns)}"
+            )
+        if key not in cellsxcells.schema.names:
+            raise KeyError(f"obsp key '{key}' not found")
+
+        if isinstance(row_ids, int | np.integer):
+            ids = np.asarray([row_ids], dtype=np.int64)
+        elif isinstance(row_ids, slice):
+            start, stop, step = row_ids.indices(int(self.shape[0]))
+            ids = np.arange(start, stop, step, dtype=np.int64)
+        else:
+            try:
+                ids = np.asarray(row_ids)
+            except (TypeError, ValueError) as error:
+                raise TypeError("row_ids must be an integer selector") from error
+            if ids.ndim != 1:
+                raise TypeError("row_ids must be one-dimensional")
+            if ids.size and not np.issubdtype(ids.dtype, np.integer):
+                raise TypeError("row_ids must contain integers")
+            ids = ids.astype(np.int64, copy=False)
+
+        if ids.size:
+            ids = ids.copy()
+            ids[ids < 0] += int(self.shape[0])
+            if np.any((ids < 0) | (ids >= int(self.shape[0]))):
+                raise ValueError("obsp row IDs are outside SLAF cell bounds")
+            ids = np.unique(ids)
+
+        columns = [source_column, target_column, key]
+        if ids.size == 0:
+            return cast(
+                pl.DataFrame,
+                pl.from_arrow(cellsxcells.head(0, columns=columns)),
+            )
+
+        if ids[-1] - ids[0] + 1 == ids.size:
+            row_filter = (
+                f"{source_column} >= {ids[0]} AND {source_column} < {ids[-1] + 1}"
+            )
+        else:
+            values = ",".join(str(int(value)) for value in ids)
+            row_filter = f"{source_column} IN ({values})"
+
+        entries = cast(
+            pl.DataFrame,
+            pl.from_arrow(cellsxcells.to_table(columns=columns, filter=row_filter)),
+        )
+        return entries.filter(pl.col(key).is_not_null() & (pl.col(key) != 0))
+
     def _filter(self, table_name: str, **filters: Any) -> pl.DataFrame:
         """
         Generic filtering method that uses polars for metadata operations.
@@ -1143,15 +1270,175 @@ class SLAFArray:
         if not integer_ids:
             return pl.DataFrame({"cell_id": [], "gene_id": [], "value": []})
 
-        # Get row indices using RowIndexMapper
-        row_indices = self.row_mapper.get_cell_row_ranges(integer_ids)
-
-        # Load data with Lance take()
-        expression_data = self.expression.take(row_indices)
-
-        # Convert PyArrow Table to Polars DataFrame and join with metadata
-        expression_df = pl.from_arrow(expression_data)
+        expression_df = self.get_expression_for_cell_ids(integer_ids)
         return self._join_with_metadata(expression_df)
+
+    @staticmethod
+    def _coalesce_expression_intervals(
+        intervals: np.ndarray,
+        *,
+        max_overfetch_ratio: float = _CELL_EXPRESSION_MAX_OVERFETCH_RATIO,
+        max_range_rows: int = _CELL_EXPRESSION_MAX_RANGE_ROWS,
+    ) -> tuple[list[tuple[int, int]], bool]:
+        """Coalesce expression intervals while bounding unnecessary reads."""
+        nonempty = intervals[intervals[:, 1] > intervals[:, 0]]
+        if nonempty.size == 0:
+            return [], False
+
+        ranges: list[tuple[int, int]] = []
+        range_start, range_end = (int(value) for value in nonempty[0])
+        selected_rows = range_end - range_start
+        total_selected_rows = selected_rows
+        for start_value, end_value in nonempty[1:]:
+            start, end = int(start_value), int(end_value)
+            interval_rows = end - start
+            total_selected_rows += interval_rows
+            candidate_end = max(range_end, end)
+            candidate_selected_rows = selected_rows + interval_rows
+            candidate_span = candidate_end - range_start
+            if (
+                candidate_span <= max_range_rows
+                and candidate_span <= max_overfetch_ratio * candidate_selected_rows
+            ):
+                range_end = candidate_end
+                selected_rows = candidate_selected_rows
+            else:
+                ranges.append((range_start, range_end))
+                range_start, range_end = start, end
+                selected_rows = interval_rows
+        ranges.append((range_start, range_end))
+        rows_read = sum(stop - start for start, stop in ranges)
+        return ranges, rows_read > total_selected_rows
+
+    def _read_expression_ranges(
+        self,
+        ranges: Sequence[tuple[int, int]],
+        *,
+        cell_ids: np.ndarray,
+        filter_overfetch: bool,
+    ) -> pl.DataFrame:
+        """Read expression ranges and remove coalesced gap rows when needed."""
+        import pyarrow as pa
+
+        columns = ["cell_integer_id", "gene_integer_id", "value"]
+        tables = [
+            self.expression.to_table(
+                columns=columns,
+                offset=start,
+                limit=stop - start,
+            )
+            for start, stop in ranges
+            if stop > start
+        ]
+        if not tables:
+            return cast(
+                pl.DataFrame,
+                pl.from_arrow(self.expression.head(0, columns=columns)),
+            )
+        table = tables[0] if len(tables) == 1 else pa.concat_tables(tables)
+        expression = cast(pl.DataFrame, pl.from_arrow(table)).select(columns)
+        if filter_overfetch:
+            expression = expression.filter(pl.col("cell_integer_id").is_in(cell_ids))
+        return expression
+
+    def get_expression_for_cell_ids(
+        self,
+        cell_ids: Sequence[int] | np.ndarray,
+    ) -> pl.DataFrame:
+        """Return integer-keyed COO expression rows for selected cells.
+
+        Args:
+            cell_ids: One-dimensional integer cell IDs. Duplicate IDs are
+                fetched once; input order does not affect the result.
+
+        Returns:
+            A Polars dataframe containing ``cell_integer_id``,
+            ``gene_integer_id``, and ``value``.
+
+        Raises:
+            TypeError: If ``cell_ids`` is not a one-dimensional integer selector.
+            ValueError: If a cell ID is outside the dataset bounds.
+        """
+        ids = np.asarray(cell_ids)
+        if ids.ndim != 1 or (ids.size and not np.issubdtype(ids.dtype, np.integer)):
+            raise TypeError("cell_ids must be a one-dimensional integer selector")
+        ids = np.unique(ids.astype(np.int64, copy=False))
+        if ids.size and np.any((ids < 0) | (ids >= int(self.shape[0]))):
+            raise ValueError("cell IDs are outside SLAF cell bounds")
+        columns = ["cell_integer_id", "gene_integer_id", "value"]
+        if ids.size == 0:
+            return cast(
+                pl.DataFrame,
+                pl.from_arrow(self.expression.head(0, columns=columns)),
+            )
+        self.wait_for_metadata()
+        intervals = self.row_mapper.get_cell_row_intervals(ids)
+        ranges, filter_overfetch = self._coalesce_expression_intervals(intervals)
+        if not ranges:
+            return cast(
+                pl.DataFrame,
+                pl.from_arrow(self.expression.head(0, columns=columns)),
+            )
+        if len(ranges) == 1 or (
+            ids.size > _CELL_EXPRESSION_TAKE_CELL_THRESHOLD
+            and len(ranges) <= _CELL_EXPRESSION_MAX_RANGE_READS
+        ):
+            return self._read_expression_ranges(
+                ranges,
+                cell_ids=ids,
+                filter_overfetch=filter_overfetch,
+            )
+
+        import pyarrow as pa
+
+        row_arrays = [
+            np.arange(start, stop, dtype=np.int64)
+            for start, stop in intervals
+            if stop > start
+        ]
+        row_indices = (
+            np.concatenate(row_arrays) if row_arrays else np.empty(0, dtype=np.int64)
+        )
+        return cast(
+            pl.DataFrame,
+            pl.from_arrow(
+                self.expression.take(pa.array(row_indices), columns=columns),
+            ),
+        ).select(columns)
+
+    def get_expression_for_cell_range(
+        self,
+        start: int,
+        stop: int,
+    ) -> pl.DataFrame:
+        """Return integer-keyed COO expression rows for a cell-ID range.
+
+        Args:
+            start: First cell integer ID to include.
+            stop: First cell integer ID to exclude.
+
+        Returns:
+            A Polars dataframe containing ``cell_integer_id``,
+            ``gene_integer_id``, and ``value``.
+
+        Raises:
+            ValueError: If the half-open range is invalid or out of bounds.
+        """
+        if start < 0 or stop < start or stop > int(self.shape[0]):
+            raise ValueError("cell range is outside SLAF cell bounds")
+        self.wait_for_metadata()
+        if start == stop:
+            return self._read_expression_ranges(
+                [],
+                cell_ids=np.empty(0, dtype=np.int64),
+                filter_overfetch=False,
+            )
+        cell_start_index = self._cell_start_index.to_numpy()
+        return self._read_expression_ranges(
+            [(int(cell_start_index[start]), int(cell_start_index[stop]))],
+            cell_ids=np.empty(0, dtype=np.int64),
+            filter_overfetch=False,
+        )
 
     def get_gene_expression(self, gene_ids: str | list[str]) -> pl.DataFrame:
         """
